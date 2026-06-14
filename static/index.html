@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MarketPulse — Live Crypto & Stock Signals</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◈</span>
+      <span class="brand-name">Market<strong>Pulse</strong></span>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab is-active" data-view="crypto">Crypto</button>
+      <button class="tab" data-view="stocks">Stocks</button>
+      <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
+      <button class="tab" data-view="proof">◆ Proof</button>
+    </nav>
+
+    <div class="topbar-right">
+      <span class="clock" id="clock">—</span>
+      <label class="auto">
+        <input type="checkbox" id="autoRefresh" checked /> Auto
+      </label>
+      <button class="refresh" id="refreshBtn" title="Refresh now">⟳</button>
+    </div>
+  </header>
+
+  <section class="breadth" id="breadth">
+    <div class="breadth-item"><span class="bg-dot buy"></span><b id="cntBuy">0</b> Buy</div>
+    <div class="breadth-item"><span class="bg-dot neutral"></span><b id="cntNeutral">0</b> Neutral</div>
+    <div class="breadth-item"><span class="bg-dot sell"></span><b id="cntSell">0</b> Sell</div>
+    <div class="breadth-spacer"></div>
+    <div class="breadth-status" id="status">Loading live market data…</div>
+  </section>
+
+  <section class="controls">
+    <form id="addForm" class="add-form" autocomplete="off">
+      <input id="addInput" class="add-input" placeholder="Add ticker (AAPL) or coin id (solana)…" />
+      <button class="add-btn" type="submit">+ Add</button>
+    </form>
+    <div class="legend">
+      <span class="badge strong-buy">STRONG BUY</span>
+      <span class="badge buy">BUY</span>
+      <span class="badge neutral">NEUTRAL</span>
+      <span class="badge sell">SELL</span>
+      <span class="badge strong-sell">STRONG SELL</span>
+    </div>
+  </section>
+
+  <main class="grid" id="grid"></main>
+
+  <!-- Proof Mode: backtest the live signal engine over real history -->
+  <section class="proof" id="proofPanel" hidden>
+    <div class="proof-head">
+      <div>
+        <h2>Proof Mode</h2>
+        <p>Run the <em>exact</em> live signal engine backward over ~2 years of real
+          history. See every STRONG BUY / STRONG SELL it fired and what price did next.
+          <b>Descriptive history — not a prediction or a return promise.</b></p>
+      </div>
+      <form class="proof-form" id="proofForm" autocomplete="off">
+        <select id="proofKind">
+          <option value="stock">Stock</option>
+          <option value="crypto">Crypto</option>
+        </select>
+        <input id="proofSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
+        <button class="add-btn" type="submit">Run proof</button>
+      </form>
+    </div>
+
+    <div class="proof-stats" id="proofStats"></div>
+    <div class="proof-chart-wrap"><svg id="proofChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
+    <div class="proof-events" id="proofEvents"></div>
+  </section>
+
+  <footer class="foot">
+    <span>Signals are RSI + MACD + trend. <b>Educational tool — not financial advice.</b></span>
+    <span class="foot-brand">A Quantum Melanin Media tool</span>
+  </footer>
+
+  <!-- Alert dialog -->
+  <div class="modal-wrap" id="alertModal" hidden>
+    <div class="modal">
+      <h3 id="alertTitle">Set price alert</h3>
+      <p class="modal-sub" id="alertSub"></p>
+      <div class="modal-row">
+        <select id="alertDir">
+          <option value="above">rises above</option>
+          <option value="below">drops below</option>
+        </select>
+        <input id="alertPrice" type="number" step="any" placeholder="price" />
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" id="alertCancel">Cancel</button>
+        <button class="primary" id="alertSave">Save alert</button>
+      </div>
+      <div class="modal-existing" id="alertExisting"></div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
