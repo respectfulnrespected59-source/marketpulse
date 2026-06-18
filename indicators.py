@@ -211,3 +211,125 @@ def score_signals(closes: list[float], htf_factor: int = 5) -> dict:
         "htf": htf,
         "reasons": reasons,
     }
+
+
+# ----------------------------------------------------------------- MA stack + VWAP
+def ma_stack(closes: list[float], periods=(5, 14, 21)) -> dict | None:
+    """Short-term moving-average stack for trend/entry reads. Returns the 5/14/21
+    MAs plus a stack verdict: 'bull' (price>MA5>MA14>MA21), 'bear' (the inverse),
+    else 'mixed'. Stacked + price leading = a clean trend; tangled = chop."""
+    if not closes:
+        return None
+    price = closes[-1]
+    m5 = sma(closes, 5) if len(closes) >= 5 else None
+    m14 = sma(closes, 14) if len(closes) >= 14 else None
+    m21 = sma(closes, 21) if len(closes) >= 21 else None
+    stack = "mixed"
+    if None not in (m5, m14, m21):
+        if price > m5 > m14 > m21:
+            stack = "bull"
+        elif price < m5 < m14 < m21:
+            stack = "bear"
+    return {
+        "ma5": round(m5, 2) if m5 is not None else None,
+        "ma14": round(m14, 2) if m14 is not None else None,
+        "ma21": round(m21, 2) if m21 is not None else None,
+        "stack": stack,
+        "above_ma5": (price > m5) if m5 is not None else None,
+    }
+
+
+def session_vwap(highs, lows, closes, volumes) -> float | None:
+    """Volume-weighted average price over the provided (intraday) bars.
+    Typical price = (H+L+C)/3, weighted by volume. This is the real session
+    VWAP traders watch — it needs intraday bars, not daily ones. None if no vol."""
+    num = den = 0.0
+    for h, l, c, v in zip(highs, lows, closes, volumes):
+        if None in (h, l, c, v) or v <= 0:
+            continue
+        num += ((h + l + c) / 3) * v
+        den += v
+    return round(num / den, 2) if den > 0 else None
+
+
+# ----------------------------------------------------------------- TTM Squeeze
+# John Carter's squeeze: when Bollinger Bands contract INSIDE the Keltner
+# Channels, volatility is coiling and a breakout is pending. A momentum
+# histogram (linear regression of price vs its range midline) hints the lean.
+# The squeeze itself is DIRECTION-AGNOSTIC — "on" means energy building, not up.
+
+def _linreg_value(ys: list[float]) -> float:
+    """Value of the least-squares fit line at the most recent point."""
+    n = len(ys)
+    xs = list(range(n))
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    den = sum((x - mx) ** 2 for x in xs) or 1e-9
+    slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / den
+    return (my - slope * mx) + slope * (n - 1)
+
+
+def _true_ranges(highs, lows, closes) -> list[float]:
+    trs = []
+    for i in range(len(closes)):
+        if i == 0:
+            trs.append(highs[i] - lows[i])
+        else:
+            pc = closes[i - 1]
+            trs.append(max(highs[i] - lows[i], abs(highs[i] - pc), abs(lows[i] - pc)))
+    return trs
+
+
+def _squeeze_on_at(highs, lows, closes, end, length, bb_mult, kc_mult) -> bool:
+    win = closes[end - length:end]
+    basis = sum(win) / length
+    dev = bb_mult * _stdev(win)
+    rng = sum(_true_ranges(highs[:end], lows[:end], closes[:end])[-length:]) / length
+    return (basis - dev) > (basis - kc_mult * rng) and (basis + dev) < (basis + kc_mult * rng)
+
+
+def resample_ohlc(highs, lows, closes, factor: int = 2):
+    """Aggregate finer OHLC bars into coarser ones (weekly->bi-weekly = factor 2),
+    anchored to the newest bar so the latest coarse bar includes fresh data."""
+    H, L, C = [], [], []
+    i = len(closes)
+    while i > 0:
+        lo = max(0, i - factor)
+        H.insert(0, max(highs[lo:i]))
+        L.insert(0, min(lows[lo:i]))
+        C.insert(0, closes[i - 1])
+        i -= factor
+    return H, L, C
+
+
+def ttm_squeeze(highs, lows, closes, length: int = 20,
+                bb_mult: float = 2.0, kc_mult: float = 1.5) -> dict | None:
+    """Return {state, bars, mom, accel} or None if there isn't enough history.
+
+    state : 'on' (coiling), 'fired' (released last bar), or 'off' (expanded)
+    bars  : how many consecutive bars the squeeze has been on
+    mom   : 'bull' | 'bear'   accel: 'rising' | 'falling' | 'fading'
+    """
+    n = len(closes)
+    if n < 2 * length + 2:
+        return None
+    on_now = _squeeze_on_at(highs, lows, closes, n, length, bb_mult, kc_mult)
+    on_prev = _squeeze_on_at(highs, lows, closes, n - 1, length, bb_mult, kc_mult)
+    bars_on, k = 0, n
+    while k > length and _squeeze_on_at(highs, lows, closes, k, length, bb_mult, kc_mult):
+        bars_on += 1
+        k -= 1
+    moms = []
+    for i in range(length, n + 1):
+        cwin = closes[i - length:i]
+        hh = max(highs[i - length:i])
+        ll = min(lows[i - length:i])
+        moms.append(closes[i - 1] - ((hh + ll) / 2 + sum(cwin) / length) / 2)
+    val = _linreg_value(moms[-length:])
+    prev = _linreg_value(moms[-length - 1:-1])
+    if val >= 0:
+        mom, accel = "bull", ("rising" if val > prev else "fading")
+    else:
+        mom, accel = "bear", ("falling" if val < prev else "fading")
+    state = "on" if on_now else ("fired" if on_prev else "off")
+    return {"state": state, "bars": bars_on, "mom": mom, "accel": accel}

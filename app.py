@@ -24,6 +24,7 @@ import datetime
 import backtest
 import config
 import indicators
+import options
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -35,8 +36,16 @@ DEFAULT_CRYPTO = [
     "dogecoin", "avalanche-2", "chainlink", "polkadot", "tron", "litecoin",
 ]
 DEFAULT_STOCKS = [
-    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL",
-    "META", "AMD", "NFLX", "SPY", "QQQ", "COIN",
+    "TSLA", "SNDK", "NVDA", "MU", "WDC", "MRVL",
+]
+
+# Liquid, mostly lower-priced optionable names the probe scanner sweeps to find
+# setups whose probe actually fits a small pot (the watchlist runs rich).
+SCAN_UNIVERSE = [
+    "F", "SOFI", "PLTR", "INTC", "T", "BAC", "CSCO", "PFE",
+    "SNAP", "HOOD", "NIO", "AAL", "WBD", "CMCSA", "UBER",
+    # volatile low-dollar movers — best odds of a cheap, usable probe
+    "PLUG", "LCID", "RIVN", "MARA", "RIOT", "CHPT", "AFRM", "DKNG",
 ]
 
 _cache: dict[str, tuple[float, object]] = {}
@@ -97,6 +106,85 @@ def fetch_crypto(ids: list[str]) -> list[dict]:
 
 # ---------------------------------------------------------------- stocks
 
+def _weekly_squeeze(symbol: str) -> dict | None:
+    """Weekly + bi-weekly TTM squeeze for a stock (separate weekly OHLC pull).
+    Returns {"weekly": {...}|None, "biweekly": {...}|None} or None on failure —
+    a squeeze hiccup must never blank out a card."""
+    try:
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               "?range=5y&interval=1wk")
+        q = _get_json(url)["chart"]["result"][0]["indicators"]["quote"][0]
+        highs, lows, closes = [], [], []
+        for h, l, c in zip(q["high"], q["low"], q["close"]):
+            if None not in (h, l, c):
+                highs.append(h); lows.append(l); closes.append(c)
+        weekly = indicators.ttm_squeeze(highs, lows, closes)
+        bh, bl, bc = indicators.resample_ohlc(highs, lows, closes, 2)
+        biweekly = indicators.ttm_squeeze(bh, bl, bc)
+        return {"weekly": weekly, "biweekly": biweekly}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _session_vwap(symbol: str) -> float | None:
+    """True intraday session VWAP from 5-minute bars (most recent session)."""
+    try:
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               "?range=1d&interval=5m")
+        q = _get_json(url)["chart"]["result"][0]["indicators"]["quote"][0]
+        return indicators.session_vwap(q.get("high", []), q.get("low", []),
+                                       q.get("close", []), q.get("volume", []))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _decision_guides(symbol: str, closes: list[float]) -> dict | None:
+    """5/14/21 MA stack (daily) + intraday session VWAP, with price position."""
+    stack = indicators.ma_stack(closes)
+    if not stack:
+        return None
+    vwap = _session_vwap(symbol)
+    price = closes[-1]
+    return {**stack, "vwap": vwap,
+            "vs_vwap": None if vwap is None else ("above" if price >= vwap else "below")}
+
+
+def _quick_signal(symbol: str) -> dict | None:
+    """Lightweight daily signal for the options strategy helper (label-driven)."""
+    try:
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               "?range=1y&interval=1d")
+        closes = [c for c in _get_json(url)["chart"]["result"][0]
+                  ["indicators"]["quote"][0]["close"] if c is not None]
+        return indicators.score_signals(closes) if len(closes) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _scan_one(symbol: str, pot: float) -> dict | None:
+    """Run the probe sizer on one symbol for the scanner (chain + lean + plan)."""
+    try:
+        ch = options.chain(symbol)
+        if ch.get("error"):
+            return None
+        sig = _quick_signal(symbol)
+        label = sig.get("label") if sig else "NEUTRAL"
+        direction = ("call" if label in ("BUY", "STRONG BUY")
+                     else "put" if label in ("SELL", "STRONG SELL") else None)
+        ch["lean"] = {"label": label, "direction": direction}
+        pp = options.probe_plan(ch, pot)
+        if not pp:
+            return None
+        pr = pp.get("probe") or {}
+        return {"symbol": symbol, "spot": ch.get("spot"), "label": label,
+                "direction": direction, "qualifies": pp.get("qualifies"),
+                "probe_cost": pr.get("cost"), "strike": pr.get("strike"),
+                "move_pct": pr.get("move_pct"), "delta": pr.get("delta"),
+                "min_pot": pp.get("min_pot")}
+    except Exception:  # noqa: BLE001 — one bad symbol shouldn't kill the scan
+        return None
+
+
 def fetch_one_stock(symbol: str) -> dict | None:
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -121,6 +209,8 @@ def fetch_one_stock(symbol: str) -> dict | None:
             "change": change,
             "spark": [round(c, 2) for c in closes[-48:]],
             "signal": sig,
+            "squeeze": _weekly_squeeze(symbol),
+            "guides": _decision_guides(symbol, closes),
         }
     except Exception as exc:  # noqa: BLE001 — one bad symbol shouldn't kill the grid
         return {"kind": "stock", "symbol": symbol.upper(), "error": str(exc)}
@@ -171,7 +261,9 @@ def run_proof(kind: str, symbol: str) -> dict:
     dates, closes = fetch_history(kind, symbol)
     if len(closes) < backtest.WARMUP + max(backtest.HORIZONS) + 2:
         return {"symbol": symbol.upper(), "kind": kind, "error": "not enough history"}
-    out = backtest.backtest_signals(dates, closes)
+    out = backtest.backtest_signals(dates, closes, kind=kind)
+    out["strategy"] = backtest.simulate_strategy(dates, closes, kind=kind)
+    out["walkforward"] = backtest.walk_forward(dates, closes, kind=kind)
     out["symbol"] = symbol.upper()
     out["kind"] = kind
     out["series"] = {"dates": dates, "closes": [round(c, 4) for c in closes]}
@@ -232,6 +324,96 @@ class Handler(BaseHTTPRequestHandler):
                 cached = _cached(key)
                 return self._json(cached if cached is not None
                                   else _store(key, run_proof(kind, symbol)))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
+        if path == "/api/options":
+            try:
+                symbol = (params.get("symbol", [""])[0]).strip()
+                if not symbol:
+                    return self._json({"error": "symbol required"}, code=400)
+                expiry = params.get("expiry", [None])[0]
+                try:
+                    pot = max(50, min(1_000_000, int(float(params.get("pot", ["300"])[0]))))
+                except (TypeError, ValueError):
+                    pot = 300
+                key = f"opt:{symbol.lower()}:{expiry or 'near'}:{pot}"
+                cached = _cached(key)
+                if cached is not None:
+                    return self._json(cached)
+                ch = options.chain(symbol, expiry)
+                # Signal-driven debit-spread suggestion: bullish lean -> call debit,
+                # bearish -> put debit, neutral -> no directional spread.
+                sig = _quick_signal(symbol)
+                if sig and not ch.get("error"):
+                    label = sig.get("label")
+                    direction = ("call" if label in ("BUY", "STRONG BUY")
+                                 else "put" if label in ("SELL", "STRONG SELL")
+                                 else None)
+                    ch["lean"] = {"label": label, "direction": direction}
+                    if direction:
+                        ch["spread"] = options.suggest_spread(ch, direction)
+                    # Squeeze-aware "either-way": a coiled TTM squeeze means a
+                    # breakout is loading. If direction is unresolved (neutral
+                    # signal or weekly vs bi-weekly momentum disagree), a long
+                    # strangle plays the move either way.
+                    sq = _weekly_squeeze(symbol) or {}
+                    wk, bw = sq.get("weekly"), sq.get("biweekly")
+                    coiled = bool((wk and wk["state"] == "on") or (bw and bw["state"] == "on"))
+                    moms = [x["mom"] for x in (wk, bw) if x]
+                    conflict = len(set(moms)) > 1
+                    ch["squeeze"] = {"weekly": wk, "biweekly": bw,
+                                     "coiled": coiled, "conflict": conflict}
+                    if coiled:
+                        ch["strangle"] = options.suggest_strangle(ch)
+                        ch["either_way"] = bool(label == "NEUTRAL" or conflict)
+                    # Plain-English "how to read this" decision walkthrough.
+                    ch["read"] = options.decision_read(ch, sig)
+                    # "Which way the data leans" nudge (a read, not an order).
+                    ch["nudge"] = options.direction_nudge(ch)
+                    # $-pot Probe→Read→Escalate sizer scaled to the stock's price.
+                    ch["probe_plan"] = options.probe_plan(ch, pot)
+                return self._json(_store(key, ch))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
+        if path == "/api/probe-scan":
+            try:
+                try:
+                    pot = max(50, min(1_000_000, int(float(params.get("pot", ["300"])[0]))))
+                except (TypeError, ValueError):
+                    pot = 300
+                key = f"probescan:{pot}"
+                cached = _cached(key)
+                if cached is not None:
+                    return self._json(cached)
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    rows = [r for r in pool.map(lambda s: _scan_one(s, pot), SCAN_UNIVERSE) if r]
+                qualifiers = sorted(
+                    (r for r in rows if r.get("qualifies") and r.get("probe_cost")),
+                    key=lambda r: r["probe_cost"])
+                near = sorted(
+                    (r for r in rows if r.get("qualifies") is False and r.get("min_pot")),
+                    key=lambda r: r["min_pot"])[:6]
+                # Crypto: no options chain, but a $X probe = $X of the coin
+                # (fractional, always "affordable"). A coin "qualifies" when it
+                # has a clear directional signal to probe (spot, not options).
+                crypto = []
+                try:
+                    for r in fetch_crypto(DEFAULT_CRYPTO):
+                        s = r.get("signal") or {}
+                        sc = s.get("score", 0)
+                        if sc and not r.get("error"):
+                            crypto.append({"symbol": r["symbol"], "price": r["price"],
+                                           "label": s.get("label"), "score": sc,
+                                           "dir": "long" if sc > 0 else "short"})
+                    crypto.sort(key=lambda c: -abs(c["score"]))
+                    crypto = crypto[:8]
+                except Exception:  # noqa: BLE001
+                    crypto = []
+                out = {"pot": pot, "budget": round(pot * 0.20), "scanned": len(rows),
+                       "qualifiers": qualifiers, "near": near, "crypto": crypto}
+                return self._json(_store(key, out))
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, code=502)
 

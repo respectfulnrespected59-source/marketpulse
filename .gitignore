@@ -6,13 +6,42 @@ venv/
 
 # Marketing build artifacts (regenerable; large media)
 marketing/_work/
+marketing/_work*/
+marketing/_chk/
+marketing/_fit/
 marketing/vo/
+marketing/vo*/
 marketing/broll/
+marketing/broll*/
+marketing/anim/
+marketing/closeups/
+marketing/walkthrough/
+marketing/notebooklm/downloads/
 marketing/*.mp4
+marketing/*.png
+marketing/*.jpg
+marketing/*.jpeg
 marketing/thumbnail.png
+
+# Generated reports (dated, regenerable)
+reports/
+
+# Binary media (regenerable / large)
+*.m4a
+*.wav
+*.mp3
+*.pdf
+*.pptx
 
 # Distributable zips
 *.zip
+
+# Agent secrets + runtime state (NEVER commit keys, ledger, or audit log)
+.env
+*.env
+!agent/.env.example
+agent/data/
+agent/HALT
 
 # OS
 .DS_Store

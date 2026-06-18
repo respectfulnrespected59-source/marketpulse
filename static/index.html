@@ -18,7 +18,9 @@
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-view="crypto">Crypto</button>
       <button class="tab" data-view="stocks">Stocks</button>
+      <button class="tab" data-view="options">⛓ Options</button>
       <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
+      <button class="tab" data-view="pot">🫙 Pot</button>
       <button class="tab" data-view="proof">◆ Proof</button>
     </nav>
 
@@ -77,6 +79,97 @@
     <div class="proof-stats" id="proofStats"></div>
     <div class="proof-chart-wrap"><svg id="proofChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
     <div class="proof-events" id="proofEvents"></div>
+  </section>
+
+  <!-- Options: live chain + IV + Greeks (CBOE delayed) -->
+  <section class="options" id="optionsPanel" hidden>
+    <div class="opt-head">
+      <div>
+        <h2>Options Chain · IV · Greeks</h2>
+        <p>Live chain + market <b>implied volatility</b>; <b>Greeks</b> (Δ Γ Θ V) from
+          CBOE, Black-Scholes-backfilled. Delayed ~15m. <b>Educational — not advice.
+          Check earnings & use defined risk.</b></p>
+      </div>
+      <form class="opt-form" id="optForm" autocomplete="off">
+        <input id="optSymbol" class="add-input" placeholder="TSLA" value="TSLA" />
+        <select id="optExpiry" class="opt-expiry"></select>
+        <label class="opt-potwrap" title="Your total risk pot ($) — the probe is sized to 20% of it">
+          pot $<input id="optPot" class="opt-pot" type="number" min="50" step="50" value="300" />
+        </label>
+        <button class="add-btn" type="submit">Load chain</button>
+        <button class="add-btn ghost" type="button" id="optScanBtn">🔍 Scan my pot</button>
+      </form>
+    </div>
+    <div class="opt-hint" id="optHint"></div>
+    <div class="opt-scan" id="optScan"></div>
+    <div class="opt-nudge" id="optNudge"></div>
+    <div class="opt-strategy" id="optStrategy"></div>
+    <div class="opt-probe" id="optProbe"></div>
+    <div class="opt-read" id="optRead"></div>
+    <details class="opt-glossary">
+      <summary>📖 How to read everything on this screen (glossary)</summary>
+      <div class="gloss-grid">
+        <div><b>Signal labels</b> — STRONG BUY → SELL is a composite of RSI + MACD + trend.
+          It's a <i>lean</i>, not a guarantee. Green = bullish tilt, red = bearish.</div>
+        <div><b>RSI</b> — momentum 0–100. &lt;30 oversold (stretched down), &gt;70 overbought
+          (stretched up). Mid-range = no extreme.</div>
+        <div><b>TTM squeeze (W / 2W)</b> — Bollinger inside Keltner = volatility coiling, a
+          breakout loading. <b>ON</b> = winding up (amber); the arrow is the momentum lean, not a
+          guarantee of direction. Weekly ≈ days, bi-weekly ≈ weeks.</div>
+        <div><b>MA 5/14/21</b> — short moving averages. "stacked ▲" = price &gt; 5 &gt; 14 &gt; 21
+          (clean uptrend); "stacked ▼" = the opposite; "mixed" = chop.</div>
+        <div><b>VWAP</b> — volume-weighted average price for the session; the line buyers &amp;
+          sellers defend. Above = intraday strength, below = weakness.</div>
+        <div><b>Options chain</b> — every strike's CALLS (left) &amp; PUTS (right). ATM row (nearest
+          to price) is highlighted; shaded rows are in-the-money.</div>
+        <div><b>Bid/Ask $/ct</b> — the real dollars to trade <i>one contract</i>. A contract controls
+          100 shares, so a "$1.79" premium = <b>$179</b> to buy. <b>Bid</b> = what you'd sell for,
+          <b>Ask</b> = what you'd pay. (Hover a row to see the per-share quote.)</div>
+        <div><b>IV%</b> — implied volatility = how big a move the market is pricing in. High IV =
+          expensive options (favor spreads/selling); low IV = cheap (favor buying).</div>
+        <div><b>Greeks</b> — <b>Δ delta</b>: move per $1 of stock (≈ odds of finishing ITM).
+          <b>Γ gamma</b>: how fast delta changes. <b>Θ theta</b>: $ lost per day to time decay.
+          <b>V vega</b>: sensitivity to IV. <b>OI</b>: open contracts = liquidity.</div>
+        <div><b>Debit spread</b> — buy one option, sell a further-OTM one to cut cost. Defined risk:
+          max loss = the debit, max gain = the width minus the debit.</div>
+        <div><b>Strangle</b> — buy an OTM call AND an OTM put. Wins on a big move <i>either way</i>;
+          loses if it sits. Cost = two premiums, so it needs a real move to pay.</div>
+      </div>
+    </details>
+    <div class="opt-tables" id="optTables"></div>
+  </section>
+
+  <!-- Pot Tracker: log probes, watch the pot grow (Probe → Read → Escalate) -->
+  <section class="pot" id="potPanel" hidden>
+    <div class="pot-head">
+      <div>
+        <h2>🫙 Pot Tracker</h2>
+        <p>Log every probe. The method only works if you can SEE it: tiny defined-risk probes,
+          escalate the winners, never revenge-size. Most probes lose — survival is the edge.
+          <b>Educational — not advice. Stays in your browser.</b></p>
+      </div>
+      <div class="pot-now">
+        <div class="pot-now-val" id="potNow">$300</div>
+        <div class="pot-now-lbl">pot now</div>
+      </div>
+    </div>
+    <div class="pot-stats" id="potStats"></div>
+    <form class="pot-form" id="potForm" autocomplete="off">
+      <input id="potSym" class="add-input" placeholder="SYMBOL" />
+      <select id="potDir" class="opt-expiry">
+        <option value="call">CALL</option>
+        <option value="put">PUT</option>
+        <option value="long">LONG (crypto/spot)</option>
+      </select>
+      <input id="potCost" class="opt-pot" type="number" step="1" placeholder="cost $" />
+      <button class="add-btn" type="submit">+ Log probe</button>
+    </form>
+    <div class="pot-warn" id="potWarn"></div>
+    <div class="pot-list" id="potList"></div>
+    <div class="pot-foot">
+      <label class="opt-potwrap">start $<input id="potStart" class="opt-pot" type="number" value="300" /></label>
+      <button class="add-btn ghost" id="potReset" type="button">Reset pot</button>
+    </div>
   </section>
 
   <footer class="foot">
