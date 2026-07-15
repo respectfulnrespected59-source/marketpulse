@@ -13,7 +13,7 @@ const store = {
 };
 
 const state = {
-  view: "stocks",
+  view: "home",
   cryptoIds: store.get("mp_crypto_ids", null),   // null => use server defaults
   stockSyms: store.get("mp_stock_syms", null),
   watch: new Set(store.get("mp_watch", [])),      // "CRYPTO:BTC"
@@ -349,12 +349,14 @@ function setView(v) {
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("is-active", t.dataset.view === v));
 
+  const isHome = v === "home";
   const isProof = v === "proof";
   const isOpt = v === "options";
   const isPot = v === "pot";
   const isDca = v === "dca";
   const isLive = v === "live";
-  const isPanel = isProof || isOpt || isPot || isDca || isLive;
+  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive;
+  $("#homePanel").hidden = !isHome;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
   $("#potPanel").hidden = !isPot;
@@ -364,6 +366,7 @@ function setView(v) {
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
   if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
+  if (isHome) { renderHome(); return; }
   if (isLive) {
     ensureLiveQf();
     renderLive();
@@ -774,6 +777,122 @@ let liveTimer = null, liveClock = null;
 
 function getLive() { return store.get("mp_livetrack", null); }
 function saveLive(p) { store.set("mp_livetrack", p); }
+
+/* =============== Sprint 3: Cockpit home + saved DCA plans + backup =========== */
+function getDcaPlans() { return store.get("mp_dca_plans", []); }
+function saveDcaPlans(a) { store.set("mp_dca_plans", a); }
+const PER_YEAR = { weekly: 52, biweekly: 26, monthly: 12 };
+
+function renderHome() {
+  // Pot card
+  const s = potCompute(getPot());
+  $("#homePot").innerHTML =
+    `<div class="hc-head">🫙 Pot <a class="hc-link" data-goto="pot">open →</a></div>` +
+    `<div class="hc-big ${s.realized > 0 ? "up" : s.realized < 0 ? "down" : ""}">${potMoney(s.equity)}</div>` +
+    `<div class="hc-sub">realized ${potMoney(s.realized)} · ${s.open} open ($${s.openCost} at risk)</div>` +
+    `<div class="hc-sub">win ${s.winRate == null ? "—" : s.winRate + "%"} · next probe ≤ <b>$${s.budget}</b></div>`;
+
+  // Live play card
+  const p = getLive();
+  if (!p) {
+    $("#homeLive").innerHTML =
+      `<div class="hc-head">🔴 Live play <a class="hc-link" data-goto="live">open →</a></div>` +
+      `<div class="hc-empty">No active play. Pin one to track it live.</div>`;
+  } else {
+    const price = p.current ?? p.entry;
+    const r = livePnl(p, price);
+    const cls = r.netUsd > 0 ? "up" : r.netUsd < 0 ? "down" : "";
+    const side = (LIVE_SIDE[p.side] || LIVE_SIDE.long).label;
+    $("#homeLive").innerHTML =
+      `<div class="hc-head">🔴 Live play <a class="hc-link" data-goto="live">open →</a></div>` +
+      `<div class="hc-big ${cls}">${esc(p.sym)} ${r.netUsd >= 0 ? "+" : "-"}$${Math.abs(r.netUsd).toFixed(2)}</div>` +
+      `<div class="hc-sub">${esc(side)} · $${p.stake} stake · ${esc(p.status)}</div>` +
+      `<div class="hc-sub">entry ${fmtPrice(p.entry)} → ${fmtPrice(price)} (${r.netPct >= 0 ? "+" : ""}${r.netPct.toFixed(2)}%)</div>`;
+  }
+  renderHomePlans();
+}
+
+function renderHomePlans() {
+  const plans = getDcaPlans();
+  const box = $("#homePlansList");
+  if (!plans.length) {
+    box.innerHTML = `<div class="hc-empty">No saved plans yet. Build a DCA plan and hit 💾 Save plan.</div>`;
+    return;
+  }
+  box.innerHTML = plans.map((pl) => {
+    const ann = Math.round(pl.monthly * (PER_YEAR[pl.cadence] || 12));
+    return `<div class="plan-row">
+      <div class="plan-main"><b>${esc(pl.name)}</b>
+        <span class="plan-meta">${esc(pl.symbol)} · $${Math.round(pl.monthly)} ${esc(pl.cadence)} · $${ann.toLocaleString()}/yr</span></div>
+      <div class="plan-acts">
+        <button class="plan-load" data-id="${esc(pl.id)}" type="button">Load</button>
+        <button class="plan-del" data-id="${esc(pl.id)}" type="button" title="delete">🗑</button></div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".plan-load").forEach((b) => b.addEventListener("click", () => loadDcaPlan(b.dataset.id)));
+  box.querySelectorAll(".plan-del").forEach((b) => b.addEventListener("click", () => delDcaPlan(b.dataset.id)));
+}
+
+function saveDcaPlan() {
+  const symbol = ($("#dcaSymbol").value.trim() || "NVDA").toUpperCase();
+  const kind = $("#dcaKind").value;
+  const monthly = dcaMonthlyQf ? dcaMonthlyQf.getAmount() : 200;
+  const cadence = $("#dcaCadence").value;
+  const years = parseFloat($("#dcaYears").value) || 10;
+  const name = prompt("Name this plan:", `${symbol} ${cadence} $${Math.round(monthly)}`);
+  if (name == null) return;
+  const plans = getDcaPlans();
+  plans.push({ id: "dp" + Date.now(), name: (name.trim() || symbol), symbol, kind,
+               monthly, cadence, years, created: new Date().toISOString().slice(0, 10) });
+  saveDcaPlans(plans);
+  renderHomePlans();
+}
+
+function loadDcaPlan(id) {
+  const pl = getDcaPlans().find((x) => x.id === id);
+  if (!pl) return;
+  setView("dca");                       // mounts the DCA QuickFill widget
+  $("#dcaSymbol").value = pl.symbol;
+  $("#dcaKind").value = pl.kind;
+  $("#dcaCadence").value = pl.cadence;
+  $("#dcaYears").value = pl.years;
+  if (dcaMonthlyQf) dcaMonthlyQf.setAmount(pl.monthly);
+  dcaLoaded = true;
+  loadDca();
+}
+
+function delDcaPlan(id) {
+  if (!confirm("Delete this plan?")) return;
+  saveDcaPlans(getDcaPlans().filter((x) => x.id !== id));
+  renderHomePlans();
+}
+
+// Back up / restore everything in localStorage (the client-side safety net).
+const BACKUP_KEYS = ["mp_pot", "mp_livetrack", "mp_dca_plans", "mp_watch",
+                     "mp_alerts", "mp_stock_syms", "mp_crypto_ids"];
+function exportData() {
+  const data = {};
+  BACKUP_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v != null) data[k] = v; });
+  const payload = { app: "MarketPulse", exported: new Date().toISOString(), data };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "marketpulse-backup.json"; a.click();
+  URL.revokeObjectURL(url);
+}
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const data = parsed.data || parsed;
+      if (!confirm("Import REPLACES your current pot, plays & plans. Continue?")) return;
+      BACKUP_KEYS.forEach((k) => { if (data[k] != null) localStorage.setItem(k, data[k]); });
+      location.reload();
+    } catch (e) { alert("Couldn't read that backup file — is it a MarketPulse export?"); }
+  };
+  reader.readAsText(file);
+}
 
 // Robinhood-style quick-fill stake control (mounted lazily on first Live view).
 let liveStakeQf = null;
@@ -1463,7 +1582,20 @@ async function init() {
   });
   $("#proofForm").addEventListener("submit", (e) => { e.preventDefault(); runProof(); });
   $("#dcaForm").addEventListener("submit", (e) => { e.preventDefault(); dcaLoaded = true; loadDca(); });
+  $("#dcaSavePlan").addEventListener("click", saveDcaPlan);
   $("#liveForm").addEventListener("submit", (e) => { e.preventDefault(); pinLive(); });
+
+  // Cockpit / Home wiring
+  $("#homeNewPlan").addEventListener("click", () => setView("dca"));
+  $("#homeExport").addEventListener("click", exportData);
+  $("#homeImport").addEventListener("click", () => $("#homeImportFile").click());
+  $("#homeImportFile").addEventListener("change", (e) => {
+    if (e.target.files && e.target.files[0]) importData(e.target.files[0]);
+  });
+  $("#homePanel").addEventListener("click", (e) => {
+    const link = e.target.closest("[data-goto]");
+    if (link) setView(link.dataset.goto);
+  });
   $("#optForm").addEventListener("submit", (e) => { e.preventDefault(); optionsLoaded = true; loadOptions(); });
   $("#optExpiry").addEventListener("change", (e) => loadOptions(e.target.value));
   $("#optPot").addEventListener("change", () => loadOptions($("#optExpiry").value || undefined));
@@ -1482,11 +1614,12 @@ async function init() {
   startAuto();
 
   // Deep-link support for PWA home-screen shortcuts (e.g. /?view=dca).
-  const VIEWS = ["crypto", "stocks", "options", "watchlist", "pot", "dca", "live", "proof"];
+  const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "dca", "live", "proof"];
   const wanted = new URLSearchParams(location.search).get("view");
-  if (wanted && VIEWS.includes(wanted)) setView(wanted);
-
-  loadView();
+  const initial = (wanted && VIEWS.includes(wanted)) ? wanted : state.view;
+  // Activate the initial view. Home is a panel, so it needs setView to hide the
+  // grid + render the cockpit; setView also drives loadView() for grid views.
+  setView(initial);
 }
 
 init();

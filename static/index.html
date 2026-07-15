@@ -30,8 +30,9 @@
     </div>
 
     <nav class="tabs" id="tabs">
+      <button class="tab is-active" data-view="home">🏠 Home</button>
       <button class="tab" data-view="crypto">Crypto</button>
-      <button class="tab is-active" data-view="stocks">Stocks</button>
+      <button class="tab" data-view="stocks">Stocks</button>
       <button class="tab" data-view="options">⛓ Options</button>
       <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
       <button class="tab" data-view="pot">🫙 Pot</button>
@@ -48,6 +49,33 @@
       <button class="refresh" id="refreshBtn" title="Refresh now">⟳</button>
     </div>
   </header>
+
+  <!-- Cockpit / Home: everything at a glance (all local, always loads) -->
+  <section class="home" id="homePanel" hidden>
+    <div class="home-head">
+      <h2>🏠 Your Cockpit</h2>
+      <p>Everything in one place — your pot, your live play, your DCA plans.
+        All saved in this browser. <b>Educational — not advice.</b></p>
+    </div>
+    <div class="home-grid">
+      <div class="home-card" id="homePot"></div>
+      <div class="home-card" id="homeLive"></div>
+    </div>
+    <div class="home-plans">
+      <div class="home-plans-head">
+        <h3>🌱 Saved DCA plans</h3>
+        <button class="add-btn ghost" id="homeNewPlan" type="button">+ New plan</button>
+      </div>
+      <div id="homePlansList"></div>
+    </div>
+    <div class="home-backup">
+      <span class="home-backup-lbl">💾 Back up your data</span>
+      <button class="add-btn ghost" id="homeExport" type="button">Export</button>
+      <button class="add-btn ghost" id="homeImport" type="button">Import</button>
+      <input id="homeImportFile" type="file" accept="application/json" hidden />
+      <span class="home-backup-note">Your pot, plays & plans live only in this browser — export to keep them safe.</span>
+    </div>
+  </section>
 
   <section class="breadth" id="breadth">
     <div class="breadth-item"><span class="bg-dot buy"></span><b id="cntBuy">0</b> Buy</div>
@@ -261,7 +289,10 @@
         </div>
         <div class="qf-label">Per-period contribution</div>
         <div id="dcaMonthlyQf"></div>
-        <button class="add-btn" type="submit">Build plan</button>
+        <div class="dca-form-actions">
+          <button class="add-btn" type="submit">Build plan</button>
+          <button class="add-btn ghost" id="dcaSavePlan" type="button">💾 Save plan</button>
+        </div>
       </form>
     </div>
     <div class="dca-nudge" id="dcaNudge"></div>
