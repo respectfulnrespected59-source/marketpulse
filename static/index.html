@@ -2,8 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MarketPulse — Live Crypto & Stock Signals</title>
+
+  <!-- PWA / installable home-screen app -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#0a0d12" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MarketPulse" />
+  <meta name="application-name" content="MarketPulse" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -284,6 +298,71 @@
 
   <div class="toast-wrap" id="toasts"></div>
 
+  <!-- Install-as-app affordance -->
+  <button class="install-fab" id="installBtn" hidden>⬇ Install app</button>
+  <div class="ios-install" id="iosInstall" hidden>
+    <button class="ios-close" id="iosClose" aria-label="Dismiss">×</button>
+    <b>Add MarketPulse to your Home Screen</b>
+    <span>Tap the Share icon <span class="ios-share">⎋</span> below, then <b>“Add to Home Screen”</b>.</span>
+  </div>
+
   <script src="app.js"></script>
+  <script>
+  /* PWA: register the service worker + drive the install affordance.
+     Android/desktop use the beforeinstallprompt event; iOS Safari has no
+     such event, so we show a manual "Share -> Add to Home Screen" hint. */
+  (function () {
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js").catch(function () {});
+      });
+    }
+
+    var isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true;
+    if (isStandalone) return; // already installed — no prompts
+
+    var installBtn = document.getElementById("installBtn");
+    var iosBanner = document.getElementById("iosInstall");
+    var iosClose = document.getElementById("iosClose");
+    var deferred = null;
+
+    window.addEventListener("beforeinstallprompt", function (e) {
+      e.preventDefault();
+      deferred = e;
+      if (installBtn) installBtn.hidden = false;
+    });
+
+    if (installBtn) {
+      installBtn.addEventListener("click", function () {
+        if (!deferred) return;
+        deferred.prompt();
+        deferred.userChoice.finally(function () {
+          deferred = null;
+          installBtn.hidden = true;
+        });
+      });
+    }
+
+    window.addEventListener("appinstalled", function () {
+      if (installBtn) installBtn.hidden = true;
+    });
+
+    // iOS Safari path (no beforeinstallprompt): show the manual hint once.
+    var ua = window.navigator.userAgent;
+    var isIOS = /iphone|ipad|ipod/i.test(ua);
+    var isSafari = /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
+    if (isIOS && isSafari && iosBanner && !localStorage.getItem("mp_ios_install_seen")) {
+      setTimeout(function () { iosBanner.hidden = false; }, 2500);
+    }
+    if (iosClose) {
+      iosClose.addEventListener("click", function () {
+        iosBanner.hidden = true;
+        localStorage.setItem("mp_ios_install_seen", "1");
+      });
+    }
+  })();
+  </script>
 </body>
 </html>

@@ -1,0 +1,23 @@
+{
+  "name": "MarketPulse — Honest DCA & Options",
+  "short_name": "MarketPulse",
+  "description": "Honest dollar-cost-averaging and options intelligence. Read the market, size your risk, grow a pot. Educational, not advice.",
+  "id": "/",
+  "start_url": "/?src=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a0d12",
+  "theme_color": "#0a0d12",
+  "categories": ["finance", "productivity", "education"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "DCA Wizard", "short_name": "DCA", "url": "/?view=dca&src=pwa" },
+    { "name": "Options", "short_name": "Options", "url": "/?view=options&src=pwa" },
+    { "name": "Live Tracker", "short_name": "Live", "url": "/?view=live&src=pwa" }
+  ]
+}
