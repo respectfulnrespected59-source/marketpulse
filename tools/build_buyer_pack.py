@@ -25,6 +25,7 @@ ALLOWLIST = [
     "indicators.py",
     "options.py",
     "backtest.py",
+    "dca.py",
     "config.py",
     "daily_plays.py",
     "run.bat",
@@ -48,6 +49,7 @@ ALLOWLIST = [
     "tests/test_indicators.py",
     "tests/test_options.py",
     "tests/test_guardrails.py",
+    "tests/test_dca.py",
 ]
 
 # Belt-and-suspenders: refuse to ship anything that smells like a secret/state.
