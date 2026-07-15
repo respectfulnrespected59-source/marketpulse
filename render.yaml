@@ -1,0 +1,18 @@
+# Render Blueprint — one-click deploy of the MarketPulse dashboard.
+# Pure Python standard library (no third-party deps); Render injects $PORT and
+# we set HOST=0.0.0.0 so the service is reachable publicly.
+services:
+  - type: web
+    name: marketpulse
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: "python -m compileall app.py indicators.py options.py backtest.py dca.py config.py"
+    startCommand: "python app.py"
+    healthCheckPath: /api/universe
+    autoDeploy: true
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: "3.11.9"

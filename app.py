@@ -528,8 +528,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(STATIC, exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"\n  MarketPulse running -> http://127.0.0.1:{PORT}\n  (Ctrl+C to stop)\n")
+    # Local runs stay on loopback (safe for the downloadable buyer tool). A host
+    # like Render sets HOST=0.0.0.0 so the service is reachable publicly.
+    host = os.environ.get("HOST", "127.0.0.1")
+    server = ThreadingHTTPServer((host, PORT), Handler)
+    shown = "127.0.0.1" if host == "127.0.0.1" else host
+    print(f"\n  MarketPulse running -> http://{shown}:{PORT}\n  (Ctrl+C to stop)\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,3 @@
+# MarketPulse runs on the Python standard library only — no third-party deps.
+# This file exists so hosting platforms' Python builders don't trip on a missing
+# requirements file. Intentionally empty (installs nothing).
