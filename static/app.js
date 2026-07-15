@@ -363,10 +363,12 @@ function setView(v) {
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
-  if (!isLive) stopLivePoll();  // don't poll prices while off the Live tab
+  if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
   if (isLive) {
     ensureLiveQf();
     renderLive();
+    loadLiveTradeChart();
+    startChartPoll();
     const lp = getLive();
     if (lp && lp.status === "open") startLivePoll();
     return;
@@ -771,7 +773,10 @@ function ensureLiveQf() {
     },
   });
   ["#liveSymbol", "#liveKind", "#liveSide"].forEach((sel) =>
-    $(sel).addEventListener("change", () => liveStakeQf && liveStakeQf.refreshConversion()));
+    $(sel).addEventListener("change", () => {
+      if (liveStakeQf) liveStakeQf.refreshConversion();
+      loadLiveTradeChart();
+    }));
 }
 
 function livePnl(p, current) {
@@ -819,6 +824,7 @@ async function pinLive() {
     };
     saveLive(play);
     renderLive();
+    loadLiveTradeChart();   // draw the gold entry line immediately
     startLivePoll();
   } catch (err) {
     $("#liveBoard").innerHTML = `<div class="proof-empty">Couldn’t pin ${esc(sym)}: ${esc(err.message)}</div>`;
@@ -947,6 +953,65 @@ function renderLiveChart(p, winCls) {
     `<line x1="${pad}" y1="${entryY}" x2="${W - pad}" y2="${entryY}" stroke="var(--gold)" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"><title>entry ${p.entry}</title></line>` +
     `<polyline points="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>` +
     `<circle cx="${X(pts.length - 1)}" cy="${Y(prices[prices.length - 1])}" r="4" fill="${col}"/>`;
+}
+
+/* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
+let liveChartTimer = null;
+
+function stopChartPoll() {
+  if (liveChartTimer) { clearInterval(liveChartTimer); liveChartTimer = null; }
+}
+function startChartPoll() {
+  stopChartPoll();
+  liveChartTimer = setInterval(loadLiveTradeChart, 20000);
+}
+
+async function loadLiveTradeChart() {
+  const raw = $("#liveSymbol").value.trim();
+  const kind = $("#liveKind").value;
+  if (!raw) return;
+  const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
+  try {
+    const d = await (await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}`)).json();
+    renderLiveTradeChart(d, kind);
+  } catch (e) { /* keep the prior chart on a transient error */ }
+}
+
+function renderLiveTradeChart(d, kind) {
+  const svg = $("#liveTradeChart");
+  const ohlc = (d && d.ohlc) || [];
+  $("#ltcSym").textContent = (d && d.symbol) || "—";
+  $("#ltcKind").textContent = kind === "crypto" ? "Crypto · 1h" : "Stock · 15m";
+  if (ohlc.length < 2) {
+    svg.innerHTML = "";
+    $("#ltcLast").textContent = "—";
+    $("#ltcChg").textContent = "";
+    $("#ltcFoot").textContent = kind === "crypto"
+      ? "No intraday candles for this coin (try BTC, ETH, SOL…)."
+      : "No intraday candles right now — market may be closed.";
+    return;
+  }
+  const W = 1000, H = 300, pad = 12;
+  const c = candlesSVG(ohlc, W, H, pad);
+  const clampY = (v) => Math.max(pad, Math.min(H - pad, c.Y(v)));
+  const last = ohlc[ohlc.length - 1][3];
+  let overlay =
+    `<line x1="${pad}" y1="${clampY(last).toFixed(1)}" x2="${W - pad}" y2="${clampY(last).toFixed(1)}"
+      stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 3" opacity="0.55"/>`;
+  const p = getLive();
+  if (p && p.sym && d.symbol && p.sym.toUpperCase() === String(d.symbol).toUpperCase()) {
+    overlay += `<line x1="${pad}" y1="${clampY(p.entry).toFixed(1)}" x2="${W - pad}" y2="${clampY(p.entry).toFixed(1)}"
+      stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="6 4"><title>your entry ${p.entry}</title></line>`;
+  }
+  svg.innerHTML = c.markup + overlay;
+
+  const first = ohlc[0][3];
+  const chg = first ? (last - first) / first * 100 : 0;
+  $("#ltcLast").textContent = fmtPrice(last);
+  const chgEl = $("#ltcChg");
+  chgEl.textContent = (chg >= 0 ? "▲ " : "▼ ") + Math.abs(chg).toFixed(2) + "%";
+  chgEl.className = "ltc-chg " + (chg >= 0 ? "up" : "down");
+  $("#ltcFoot").textContent = "Live candles · gold line = your entry · refreshes ~20s · educational, not advice";
 }
 
 /* ----------------------------------------------------- dca wizard */

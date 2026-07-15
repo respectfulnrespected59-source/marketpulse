@@ -217,6 +217,16 @@
         <button class="add-btn" type="submit">🔴 Pin entry</button>
       </form>
     </div>
+
+    <div class="live-chart-card" id="liveTradeCard">
+      <div class="ltc-head">
+        <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span></div>
+        <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span></div>
+      </div>
+      <div class="ltc-chart-wrap"><svg id="liveTradeChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg></div>
+      <div class="ltc-foot" id="ltcFoot">Live candles · gold line = your entry · refreshes ~20s · educational, not advice</div>
+    </div>
+
     <div class="live-board" id="liveBoard"></div>
   </section>
 
