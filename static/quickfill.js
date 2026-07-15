@@ -50,6 +50,10 @@
     var getContext = opts.getContext || function () { return {}; };
     var priceFetcher = opts.priceFetcher || null;
     var onChange = opts.onChange || function () {};
+    // Optional custom conversion readout: convert(amount, ctx, lastPrice) -> HTML.
+    // When provided it replaces the built-in price->shares/units line, so the
+    // same widget can show "% of pot" or "$/yr" instead.
+    var convertFn = opts.convert || null;
     var lastPrice = null;
 
     container.classList.add("qf");
@@ -85,6 +89,7 @@
 
     function renderConversion() {
       var ctx = getContext() || {};
+      if (convertFn) { convert.innerHTML = convertFn(amount, ctx, lastPrice); return; }
       if (lastPrice == null || !ctx.symbol) { convert.textContent = ""; return; }
       var price = lastPrice;
       var sym = escHtml((ctx.symbol || "").toUpperCase());

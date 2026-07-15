@@ -818,3 +818,14 @@ body {
 }
 #liveTradeChart { width: 100%; height: 100%; display: block; }
 .ltc-foot { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.45; }
+.qf-over { color: var(--sell); font-weight: 600; }
+
+/* live chart timeframe toggle */
+.ltc-tf { display: inline-flex; gap: 4px; margin-left: 10px; }
+.ltc-tf button {
+  padding: 3px 9px; font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 7px; cursor: pointer; transition: all var(--duration-fast, 150ms) var(--ease);
+}
+.ltc-tf button:hover { color: var(--text); border-color: var(--text-faint); }
+.ltc-tf button.is-active { color: #0a0d12; background: var(--gold); border-color: var(--gold); }

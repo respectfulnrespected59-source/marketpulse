@@ -170,11 +170,20 @@ def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
     return [[float(r[3]), float(r[2]), float(r[1]), float(r[4])] for r in rows]
 
 
-def fetch_intraday(kind: str, symbol: str) -> dict:
-    """Recent intraday OHLC candles for the live trading chart. Stocks use
-    Yahoo 15-min bars over 5 days; crypto uses Coinbase hourly candles. Short-
+# Timeframe presets for the live chart. "day" = tight intraday; "wide" = zoom
+# out. Stocks map to Yahoo range/interval; crypto to a Coinbase granularity.
+INTRADAY_TF = {
+    "stock": {"day": ("1d", "5m"), "wide": ("5d", "15m")},
+    "crypto": {"day": 300, "wide": 3600},   # 5-min (~1 day) vs hourly (~12 days)
+}
+
+
+def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
+    """Recent intraday OHLC candles for the live trading chart, at a chosen
+    timeframe. Stocks use Yahoo bars; crypto uses Coinbase candles. Short-
     cached so a live poll can refresh without hammering upstream."""
-    key = f"intraday:{kind}:{symbol.lower()}"
+    tf = tf if tf in ("day", "wide") else "wide"
+    key = f"intraday:{kind}:{symbol.lower()}:{tf}"
     hit = _cache.get(key)
     if hit and (time.time() - hit[0]) < QUOTE_TTL:
         return hit[1]
@@ -183,20 +192,21 @@ def fetch_intraday(kind: str, symbol: str) -> dict:
         prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
         if prod:
             try:
-                ohlc = _coinbase_ohlc(prod, 3600)  # hourly (~12 days)
+                ohlc = _coinbase_ohlc(prod, INTRADAY_TF["crypto"][tf])
             except Exception:  # noqa: BLE001
                 ohlc = []
     else:
         try:
+            rng, interval = INTRADAY_TF["stock"][tf]
             url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                   "?range=5d&interval=15m")
+                   f"?range={rng}&interval={interval}")
             q = _get_json(url)["chart"]["result"][0]["indicators"]["quote"][0]
             for o, h, l, c in zip(q["open"], q["high"], q["low"], q["close"]):
                 if None not in (o, h, l, c):
                     ohlc.append([round(o, 4), round(h, 4), round(l, 4), round(c, 4)])
         except Exception:  # noqa: BLE001
             ohlc = []
-    out = {"symbol": symbol.upper(), "kind": kind, "ohlc": ohlc,
+    out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc,
            "last": ohlc[-1][3] if ohlc else None, "ts": int(time.time())}
     _cache[key] = (time.time(), out)
     return out
@@ -559,9 +569,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 symbol = (params.get("symbol", [""])[0]).strip()
                 kind = (params.get("kind", ["stock"])[0]).lower()
+                tf = (params.get("tf", ["wide"])[0]).lower()
                 if not symbol:
                     return self._json({"error": "symbol required"}, code=400)
-                return self._json(fetch_intraday(kind, symbol))
+                return self._json(fetch_intraday(kind, symbol, tf))
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, code=502)
 
