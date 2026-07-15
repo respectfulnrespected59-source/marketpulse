@@ -382,10 +382,11 @@ function setView(v) {
     return;
   }
   if (isDca) {
+    ensureDcaQf();
     if (!dcaLoaded) { dcaLoaded = true; loadDca(); }
     return;
   }
-  if (isPot) { renderPot(); return; }
+  if (isPot) { ensurePotQf(); renderPot(); return; }
 
   $("#addInput").placeholder = v === "stocks"
     ? "Add stock ticker (e.g. NVDA)…"
@@ -642,6 +643,25 @@ const potMoney = (v) => (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleS
 function getPot() { return store.get("mp_pot", { start: 300, probes: [] }); }
 function savePot(p) { store.set("mp_pot", p); }
 
+// QuickFill for the probe cost — its readout shows % of pot + a budget warning.
+let potCostQf = null;
+function ensurePotQf() {
+  if (potCostQf || typeof QuickFill === "undefined") return;
+  const el = $("#potCostQf");
+  if (!el) return;
+  potCostQf = QuickFill.mount(el, {
+    amount: 50, chips: [25, 50, 100, 200], step: 5, min: 1,
+    convert: (amt) => {
+      const s = potCompute(getPot());
+      const pct = s.equity ? (amt / s.equity * 100) : 0;
+      const over = amt > s.budget;
+      return `<span class="${over ? "qf-over" : ""}">$${Math.round(amt)} = ${pct.toFixed(1)}% of your ` +
+        `$${Math.round(s.equity)} pot` +
+        (over ? ` · over your $${s.budget} probe budget` : ` · budget $${s.budget}`) + `</span>`;
+    },
+  });
+}
+
 function potCompute(p) {
   let openCost = 0, closedCost = 0, rets = 0, closed = 0, wins = 0;
   for (const x of p.probes) {
@@ -697,11 +717,12 @@ function renderPot() {
       closeProbe(id, parseFloat(el.querySelector(".pr-ret").value) || 0));
     el.querySelector(".pr-loss")?.addEventListener("click", () => closeProbe(id, 0));
   });
+  if (potCostQf) potCostQf.refreshConversion();   // pot equity changed -> update % readout
 }
 
 function logProbe() {
   const sym = $("#potSym").value.trim().toUpperCase();
-  const cost = Math.round(parseFloat($("#potCost").value));
+  const cost = Math.round(potCostQf ? potCostQf.getAmount() : 0);
   if (!sym || !(cost > 0)) return;
   const p = getPot();
   const s = potCompute(p);
@@ -711,8 +732,8 @@ function logProbe() {
   p.probes.push({ id: "p" + Date.now(), date: new Date().toISOString().slice(0, 10),
                   sym, dir: $("#potDir").value, cost, status: "open", ret: 0 });
   savePot(p);
-  $("#potSym").value = ""; $("#potCost").value = "";
-  renderPot();
+  $("#potSym").value = "";
+  renderPot();   // re-renders + refreshes the QuickFill % readout
 }
 
 function closeProbe(id, ret) {
@@ -957,6 +978,23 @@ function renderLiveChart(p, winCls) {
 
 /* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
 let liveChartTimer = null;
+let liveTf = "wide";   // "day" = tight intraday, "wide" = zoomed out
+const TF_LABELS = { stock: { day: "1D", wide: "5D" }, crypto: { day: "1D", wide: "1W" } };
+
+function renderTfButtons(kind) {
+  const box = $("#ltcTf");
+  if (!box) return;
+  const labels = TF_LABELS[kind === "crypto" ? "crypto" : "stock"];
+  box.innerHTML = ["day", "wide"].map((tf) =>
+    `<button type="button" data-tf="${tf}" class="${tf === liveTf ? "is-active" : ""}">${labels[tf]}</button>`
+  ).join("");
+  box.querySelectorAll("button").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (liveTf === b.dataset.tf) return;
+      liveTf = b.dataset.tf;
+      loadLiveTradeChart();
+    }));
+}
 
 function stopChartPoll() {
   if (liveChartTimer) { clearInterval(liveChartTimer); liveChartTimer = null; }
@@ -972,7 +1010,7 @@ async function loadLiveTradeChart() {
   if (!raw) return;
   const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
   try {
-    const d = await (await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}`)).json();
+    const d = await (await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`)).json();
     renderLiveTradeChart(d, kind);
   } catch (e) { /* keep the prior chart on a transient error */ }
 }
@@ -981,7 +1019,11 @@ function renderLiveTradeChart(d, kind) {
   const svg = $("#liveTradeChart");
   const ohlc = (d && d.ohlc) || [];
   $("#ltcSym").textContent = (d && d.symbol) || "—";
-  $("#ltcKind").textContent = kind === "crypto" ? "Crypto · 1h" : "Stock · 15m";
+  const grain = kind === "crypto"
+    ? (liveTf === "day" ? "5m" : "1h")
+    : (liveTf === "day" ? "5m" : "15m");
+  $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + grain;
+  renderTfButtons(kind);
   if (ohlc.length < 2) {
     svg.innerHTML = "";
     $("#ltcLast").textContent = "—";
@@ -1020,10 +1062,28 @@ let dcaLoaded = false;
 
 const DCA_LABEL = { plain: "Plain DCA", tilt: "Signal-Tilt DCA", lump: "Lump Sum" };
 
+// QuickFill for the DCA per-period contribution — readout shows annualized $.
+let dcaMonthlyQf = null;
+function ensureDcaQf() {
+  if (dcaMonthlyQf || typeof QuickFill === "undefined") return;
+  const el = $("#dcaMonthlyQf");
+  if (!el) return;
+  dcaMonthlyQf = QuickFill.mount(el, {
+    amount: 200, chips: [50, 100, 200, 500, 1000], step: 25, min: 10,
+    convert: (amt) => {
+      const cad = $("#dcaCadence").value;
+      const perYr = cad === "weekly" ? 52 : cad === "biweekly" ? 26 : 12;
+      const annual = Math.round(amt * perYr);
+      return `$${Math.round(amt)} ${cad} = <b>$${annual.toLocaleString()}/yr</b> invested`;
+    },
+  });
+  $("#dcaCadence").addEventListener("change", () => dcaMonthlyQf && dcaMonthlyQf.refreshConversion());
+}
+
 async function loadDca() {
   const symbol = ($("#dcaSymbol").value.trim() || "NVDA");
   const kind = $("#dcaKind").value;
-  const monthly = parseFloat($("#dcaMonthly").value) || 200;
+  const monthly = dcaMonthlyQf ? dcaMonthlyQf.getAmount() : 200;
   const cadence = $("#dcaCadence").value;
   const years = parseFloat($("#dcaYears").value) || 10;
   $("#dcaCards").innerHTML = `<div class="proof-empty">Backtesting ${esc(symbol)} DCA over ~2 years, after costs…</div>`;

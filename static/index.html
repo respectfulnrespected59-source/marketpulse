@@ -171,13 +171,16 @@
     </div>
     <div class="pot-stats" id="potStats"></div>
     <form class="pot-form" id="potForm" autocomplete="off">
-      <input id="potSym" class="add-input" placeholder="SYMBOL" />
-      <select id="potDir" class="opt-expiry">
-        <option value="call">CALL</option>
-        <option value="put">PUT</option>
-        <option value="long">LONG (crypto/spot)</option>
-      </select>
-      <input id="potCost" class="opt-pot" type="number" step="1" placeholder="cost $" />
+      <div class="live-form-top">
+        <input id="potSym" class="add-input" placeholder="SYMBOL" />
+        <select id="potDir" class="opt-expiry">
+          <option value="call">CALL</option>
+          <option value="put">PUT</option>
+          <option value="long">LONG (crypto/spot)</option>
+        </select>
+      </div>
+      <div class="qf-label">Probe cost</div>
+      <div id="potCostQf"></div>
       <button class="add-btn" type="submit">+ Log probe</button>
     </form>
     <div class="pot-warn" id="potWarn"></div>
@@ -220,7 +223,7 @@
 
     <div class="live-chart-card" id="liveTradeCard">
       <div class="ltc-head">
-        <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span></div>
+        <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span><span class="ltc-tf" id="ltcTf"></span></div>
         <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span></div>
       </div>
       <div class="ltc-chart-wrap"><svg id="liveTradeChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg></div>
@@ -243,18 +246,21 @@
           plainly instead of hiding it.</b></p>
       </div>
       <form class="dca-form" id="dcaForm" autocomplete="off">
-        <input id="dcaSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
-        <select id="dcaKind" class="opt-expiry">
-          <option value="stock">Stock</option>
-          <option value="crypto">Crypto</option>
-        </select>
-        <label class="opt-potwrap" title="How much you'd put in per month">$/mo<input id="dcaMonthly" class="opt-pot" type="number" min="10" step="any" value="200" /></label>
-        <select id="dcaCadence" class="opt-expiry">
-          <option value="weekly">Weekly</option>
-          <option value="biweekly">Bi-weekly</option>
-          <option value="monthly" selected>Monthly</option>
-        </select>
-        <label class="opt-potwrap" title="Years to project the compounding forward">yrs<input id="dcaYears" class="opt-pot" type="number" min="1" max="40" step="1" value="10" /></label>
+        <div class="live-form-top">
+          <input id="dcaSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
+          <select id="dcaKind" class="opt-expiry">
+            <option value="stock">Stock</option>
+            <option value="crypto">Crypto</option>
+          </select>
+          <select id="dcaCadence" class="opt-expiry">
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Bi-weekly</option>
+            <option value="monthly" selected>Monthly</option>
+          </select>
+          <label class="opt-potwrap" title="Years to project the compounding forward">yrs<input id="dcaYears" class="opt-pot" type="number" min="1" max="40" step="1" value="10" /></label>
+        </div>
+        <div class="qf-label">Per-period contribution</div>
+        <div id="dcaMonthlyQf"></div>
         <button class="add-btn" type="submit">Build plan</button>
       </form>
     </div>
