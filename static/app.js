@@ -326,9 +326,11 @@ function openUpgrade() {
 }
 
 function applyGating() {
-  // Hide Proof tab in the free build.
+  // Hide Proof + DCA tabs in the free build (both are Pro features).
   const proofTab = document.querySelector('.tab[data-view="proof"]');
   if (proofTab) proofTab.style.display = features.proof ? "" : "none";
+  const dcaTab = document.querySelector('.tab[data-view="dca"]');
+  if (dcaTab) dcaTab.style.display = features.proof ? "" : "none";
   // Upgrade banner for the free build.
   if (!features.proof || !features.alerts) {
     const bar = document.createElement("div");
@@ -350,19 +352,34 @@ function setView(v) {
   const isProof = v === "proof";
   const isOpt = v === "options";
   const isPot = v === "pot";
-  const isPanel = isProof || isOpt || isPot;
+  const isDca = v === "dca";
+  const isLive = v === "live";
+  const isPanel = isProof || isOpt || isPot || isDca || isLive;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
   $("#potPanel").hidden = !isPot;
+  $("#dcaPanel").hidden = !isDca;
+  $("#livePanel").hidden = !isLive;
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
+  if (!isLive) stopLivePoll();  // don't poll prices while off the Live tab
+  if (isLive) {
+    renderLive();
+    const lp = getLive();
+    if (lp && lp.status === "open") startLivePoll();
+    return;
+  }
   if (isProof) {
     if (!proofLoaded) { proofLoaded = true; runProof(); }
     return;
   }
   if (isOpt) {
     if (!optionsLoaded) { optionsLoaded = true; loadOptions(); }
+    return;
+  }
+  if (isDca) {
+    if (!dcaLoaded) { dcaLoaded = true; loadDca(); }
     return;
   }
   if (isPot) { renderPot(); return; }
@@ -717,6 +734,365 @@ function resetPot() {
   renderPot();
 }
 
+/* ----------------------------------------------------- live tracker */
+
+// Same honest cost model as backtest.py (per-side bps): stocks 0 comm / 5bps
+// slip, crypto 25bps comm / 20bps slip. Round-trip cost is subtracted from the
+// directional move so the P&L is what you'd realistically KEEP, not a fantasy.
+const LIVE_BPS = { stock: { comm: 0, slip: 0.0005 }, crypto: { comm: 0.0025, slip: 0.0020 } };
+const LIVE_SIDE = {
+  long: { label: "LONG / DCA", cls: "bull" },
+  call: { label: "CALL lean ▲", cls: "bull" },
+  put: { label: "PUT lean ▼", cls: "bear" },
+};
+
+let liveTimer = null, liveClock = null;
+
+function getLive() { return store.get("mp_livetrack", null); }
+function saveLive(p) { store.set("mp_livetrack", p); }
+
+function livePnl(p, current) {
+  const c = LIVE_BPS[p.kind === "crypto" ? "crypto" : "stock"];
+  const movePct = (current - p.entry) / p.entry * 100;       // raw price move
+  const dir = p.side === "put" ? -1 : 1;                     // bearish profits on a drop
+  const dirRaw = movePct * dir;
+  const costPct = 2 * (c.comm + c.slip) * 100;               // honest round-trip cost
+  const netPct = dirRaw - costPct;
+  return { movePct, dirRaw, costPct, netPct, netUsd: p.stake * netPct / 100 };
+}
+
+function fmtElapsed(fromSec, toSec) {
+  let s = Math.max(0, Math.floor(toSec - fromSec));
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  if (d) return `${d}d ${h}h ${m}m`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m ${s}s`;
+}
+
+async function fetchQuote(sym, kind) {
+  const d = await (await fetch(`/api/quote?symbol=${encodeURIComponent(sym)}&kind=${kind}`)).json();
+  if (d.error || d.price == null) throw new Error(d.error || "no price");
+  return d;
+}
+
+async function pinLive() {
+  const sym = ($("#liveSymbol").value.trim() || "NVDA").toUpperCase();
+  const kind = $("#liveKind").value;
+  const side = $("#liveSide").value;
+  const stake = parseFloat($("#liveStake").value) || 300;
+  $("#liveBoard").innerHTML = `<div class="proof-empty">Pulling live price for ${esc(sym)}…</div>`;
+  try {
+    const q = await fetchQuote(kind === "crypto" ? $("#liveSymbol").value.trim().toLowerCase() : sym, kind);
+    const now = Math.floor(Date.now() / 1000);
+    const sig = q.signal || { label: "NEUTRAL", css: "neutral", reasons: [] };
+    const play = {
+      sym, kind, side, stake, entry: q.price, entryTs: now,
+      pinnedAt: new Date().toISOString(),
+      entrySignal: { label: sig.label, css: sig.css, rsi: sig.rsi, reasons: (sig.reasons || []).slice(0, 6) },
+      points: [{ t: now, price: q.price }],
+      current: q.price, currentTs: now, status: "open", exit: null, closedAt: null,
+    };
+    saveLive(play);
+    renderLive();
+    startLivePoll();
+  } catch (err) {
+    $("#liveBoard").innerHTML = `<div class="proof-empty">Couldn’t pin ${esc(sym)}: ${esc(err.message)}</div>`;
+  }
+}
+
+async function pollLive() {
+  const p = getLive();
+  if (!p || p.status !== "open") { stopLivePoll(); return; }
+  try {
+    const symQ = p.kind === "crypto" ? p.sym.toLowerCase() : p.sym;
+    const q = await fetchQuote(symQ, p.kind);
+    const now = Math.floor(Date.now() / 1000);
+    p.current = q.price; p.currentTs = now;
+    p.points.push({ t: now, price: q.price });
+    if (p.points.length > 500) p.points = p.points.slice(-500);
+    saveLive(p);
+    if (state.view === "live") renderLive();
+  } catch (err) { /* keep last good value; try again next tick */ }
+}
+
+function startLivePoll() {
+  stopLivePoll();
+  liveTimer = setInterval(pollLive, 20000);       // real prices ~every 20s
+  liveClock = setInterval(tickLiveElapsed, 1000); // smooth elapsed counter
+}
+function stopLivePoll() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  if (liveClock) { clearInterval(liveClock); liveClock = null; }
+}
+
+function tickLiveElapsed() {
+  const p = getLive();
+  const el = $("#liveElapsed");
+  if (!p || !el) return;
+  const end = p.status === "open" ? Math.floor(Date.now() / 1000) : (p.closedAt || p.currentTs);
+  el.textContent = fmtElapsed(p.entryTs, end);
+}
+
+function closeLive() {
+  const p = getLive();
+  if (!p || p.status !== "open") return;
+  p.status = "closed"; p.exit = p.current; p.closedAt = Math.floor(Date.now() / 1000);
+  saveLive(p); stopLivePoll(); renderLive();
+}
+
+function resetLive() {
+  if (getLive() && !confirm("Clear this live play?")) return;
+  localStorage.removeItem("mp_livetrack");
+  stopLivePoll();
+  renderLive();
+}
+
+function renderLive() {
+  const board = $("#liveBoard");
+  const p = getLive();
+  if (!p) {
+    board.innerHTML = `<div class="live-empty">No live play yet. Set a symbol, side & stake above, then
+      <b>Pin entry</b> to lock a timestamped receipt and watch real prices decide it.</div>`;
+    return;
+  }
+  const price = p.current ?? p.entry;
+  const r = livePnl(p, price);
+  const winCls = r.netUsd > 0 ? "win" : r.netUsd < 0 ? "lose" : "flat";
+  const status = p.status === "open"
+    ? (r.netUsd > 0 ? "🟢 WINNING (live)" : r.netUsd < 0 ? "🔴 LOSING (live)" : "⚪ FLAT (live)")
+    : (r.netUsd > 0 ? "🟢 CLOSED · WIN" : r.netUsd < 0 ? "🔴 CLOSED · LOSS" : "⚪ CLOSED · FLAT");
+  const side = LIVE_SIDE[p.side] || LIVE_SIDE.long;
+  const moveArrow = r.movePct >= 0 ? "▲" : "▼";
+  const dirCls = r.netUsd >= 0 ? "up" : "down";
+  const pinnedLocal = new Date(p.pinnedAt).toLocaleString();
+  const sig = p.entrySignal || {};
+
+  board.innerHTML = `<div class="live-card ${winCls}">
+    <div class="live-wm">LIVE MARKET TRACK · real prices · simulated fill (honest slippage) · no real order placed · not advice</div>
+    <div class="live-top">
+      <div class="live-asset">${esc(p.sym)} <span class="live-side ${side.cls}">${side.label}</span></div>
+      <div class="live-status ${winCls}">${status}</div>
+    </div>
+    <div class="live-nums">
+      <div class="ln"><span>Entry</span><b>${fmtPrice(p.entry)}</b><i>${esc(pinnedLocal)}</i></div>
+      <div class="ln"><span>${p.status === "open" ? "Live price" : "Exit price"}</span>
+        <b class="${dirCls}">${fmtPrice(price)}</b><i>${moveArrow} ${Math.abs(r.movePct).toFixed(2)}%</i></div>
+      <div class="ln big"><span>Net P&amp;L on $${p.stake}</span>
+        <b class="${dirCls}">${r.netUsd >= 0 ? "+" : "-"}$${Math.abs(r.netUsd).toFixed(2)}</b>
+        <i>${r.netPct >= 0 ? "+" : ""}${r.netPct.toFixed(2)}% after ${r.costPct.toFixed(2)}% costs</i></div>
+      <div class="ln"><span>Elapsed</span><b id="liveElapsed">${fmtElapsed(p.entryTs, p.status === "open" ? Math.floor(Date.now() / 1000) : p.closedAt)}</b>
+        <i>${p.status}</i></div>
+    </div>
+    <div class="live-read">📖 The READ at entry:
+      <span class="badge ${esc(sig.css || "neutral")}">${esc(sig.label || "—")}</span>
+      ${sig.rsi != null ? "RSI " + sig.rsi + " · " : ""}${esc((sig.reasons || []).join(" · "))}</div>
+    <div class="proof-chart-wrap"><svg id="liveChart" class="proof-chart" viewBox="0 0 1000 220" preserveAspectRatio="none"></svg></div>
+    <div class="live-actions">
+      ${p.status === "open" ? `<button class="add-btn" id="liveClose" type="button">Close &amp; snapshot</button>` : ""}
+      <button class="add-btn ghost" id="liveReset" type="button">New play</button>
+      <span class="live-note">${p.side === "long" ? "Literal long stake." : "Modeled as a directional $ stake — a real option adds leverage + theta, so treat this as the READ being right, not an exact option payoff."}
+        Prices refresh ~20s (crypto can lag ~1m). ${p.status === "open" ? "Recording? This updates live." : ""}</span>
+    </div>
+  </div>`;
+
+  renderLiveChart(p, winCls);
+  $("#liveClose")?.addEventListener("click", closeLive);
+  $("#liveReset")?.addEventListener("click", resetLive);
+}
+
+function renderLiveChart(p, winCls) {
+  const svg = $("#liveChart");
+  const pts = p.points || [];
+  const W = 1000, H = 220, pad = 10;
+  if (pts.length < 2) {
+    // one dot at entry until the next poll lands
+    const y = H / 2;
+    svg.innerHTML = `<line x1="${pad}" y1="${y}" x2="${W - pad}" y2="${y}" stroke="#3a4757" stroke-dasharray="4 4"/>
+      <circle cx="${pad}" cy="${y}" r="4" fill="var(--gold)"/>`;
+    return;
+  }
+  const prices = pts.map((q) => q.price);
+  const min = Math.min(...prices, p.entry), max = Math.max(...prices, p.entry), span = max - min || 1;
+  const X = (i) => pad + (i / (pts.length - 1)) * (W - pad * 2);
+  const Y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
+  const line = pts.map((q, i) => `${X(i).toFixed(1)},${Y(q.price).toFixed(1)}`).join(" ");
+  const entryY = Y(p.entry).toFixed(1);
+  const col = winCls === "win" ? "var(--buy)" : winCls === "lose" ? "var(--sell)" : "#8a99ab";
+  svg.innerHTML =
+    `<line x1="${pad}" y1="${entryY}" x2="${W - pad}" y2="${entryY}" stroke="var(--gold)" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"><title>entry ${p.entry}</title></line>` +
+    `<polyline points="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>` +
+    `<circle cx="${X(pts.length - 1)}" cy="${Y(prices[prices.length - 1])}" r="4" fill="${col}"/>`;
+}
+
+/* ----------------------------------------------------- dca wizard */
+
+let dcaLoaded = false;
+
+const DCA_LABEL = { plain: "Plain DCA", tilt: "Signal-Tilt DCA", lump: "Lump Sum" };
+
+async function loadDca() {
+  const symbol = ($("#dcaSymbol").value.trim() || "NVDA");
+  const kind = $("#dcaKind").value;
+  const monthly = parseFloat($("#dcaMonthly").value) || 200;
+  const cadence = $("#dcaCadence").value;
+  const years = parseFloat($("#dcaYears").value) || 10;
+  $("#dcaCards").innerHTML = `<div class="proof-empty">Backtesting ${esc(symbol)} DCA over ~2 years, after costs…</div>`;
+  ["dcaNudge", "dcaPlan", "dcaVerdict", "dcaProj"].forEach((id) => { $("#" + id).innerHTML = ""; });
+  $("#dcaChart").innerHTML = "";
+  try {
+    const qs = new URLSearchParams({ symbol, kind, monthly, cadence, years });
+    const d = await (await fetch(`/api/dca?${qs}`)).json();
+    if (d.error) {
+      $("#dcaCards").innerHTML = `<div class="proof-empty">Couldn’t build ${esc(symbol)}: ${esc(d.error)}</div>`;
+      return;
+    }
+    renderDca(d);
+  } catch (err) {
+    $("#dcaCards").innerHTML = `<div class="proof-empty">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function dcaCard(key, x, win) {
+  const rc = (x.return_pct ?? 0) >= 0 ? "up" : "down";
+  const ret = x.return_pct == null ? "—" : `${x.return_pct > 0 ? "+" : ""}${x.return_pct}%`;
+  return `<div class="dca-card ${win ? "win" : ""}">
+    <div class="dc-name">${DCA_LABEL[key]}${win ? ` <span class="dc-crown">▲ won</span>` : ""}</div>
+    <div class="dc-val ${rc}">${ret}</div>
+    <div class="dc-sub">${potMoney(x.invested)} in → <b>${potMoney(x.final_value)}</b></div>
+    <div class="dc-meta">avg cost ${fmtPrice(x.avg_cost)} · ${x.periods} buy${x.periods === 1 ? "" : "s"} · worst paper dip ${x.max_paper_dd_pct}%</div>
+  </div>`;
+}
+
+function renderDca(d) {
+  const b = d.backtest, v = d.verdict, p = d.plan, rg = d.regime, n = d.nudge;
+
+  const ncls = n.tilt > 1.05 ? "bullish" : n.tilt < 0.95 ? "bearish" : "stand-aside";
+  $("#dcaNudge").innerHTML = `<div class="nudge ${ncls}">
+    <span class="nudge-ic">${n.icon || ""}</span>
+    <span class="nudge-body"><b>${esc(n.headline)}</b> ${esc(n.text)}</span></div>`;
+
+  $("#dcaPlan").innerHTML = `<div class="dca-planbar">
+    <span><b>${potMoney(p.per_period)}</b> every ${esc(p.cadence)}</span>
+    <span>${p.periods_per_year}×/yr</span>
+    <span>backtest window: ${p.window_periods} buys · ${potMoney(p.window_budget)} deployed</span></div>`;
+
+  const win = v.winner_by_return;
+  $("#dcaCards").innerHTML =
+    dcaCard("plain", b.plain, win === "plain") +
+    dcaCard("tilt", b.tilt, win === "tilt") +
+    dcaCard("lump", b.lump, win === "lump");
+
+  const tiltTxt = v.tilt_vs_plain_pct == null ? "—"
+    : `${v.tilt_vs_plain_pct > 0 ? "+" : ""}${v.tilt_vs_plain_pct} pts`;
+  $("#dcaVerdict").innerHTML = `<div class="dca-vbox">
+    <div class="dv-head">📊 Regime: <b>${rg.tag.toUpperCase()}</b>
+      (${rg.move_pct > 0 ? "+" : ""}${rg.move_pct}% over window) · winner per-dollar:
+      <b>${DCA_LABEL[win]}</b></div>
+    <div class="dv-note">${esc(v.regime_note)}</div>
+    <div class="dv-tilt ${v.tilt_helped ? "good" : "bad"}">Signal-tilt vs plain DCA:
+      <b>${tiltTxt}</b> — ${v.tilt_helped
+        ? "the tilt added value on this asset & window."
+        : "the tilt did NOT beat plain DCA here (the engine’s “cheap” kept moving the same way)."}</div>
+    <div class="dv-truth">${esc(v.honest_truth)}</div>
+    <div class="dv-truth sub">${esc(v.same_dollars_note)}</div>
+  </div>`;
+
+  renderMoneyMap(d.series, b);
+  renderDcaChart(d.series, b.tilt.contributions);
+  renderProjGrowth(d.projection);
+
+  const pj = d.projection, sc = pj.scenarios;
+  const pcard = (cls, label, o) => `<div class="pj-card ${cls}">
+    <div class="pj-name">${label} <i>${o.annual_rate_pct}%/yr</i></div>
+    <div class="pj-val">${potMoney(o.future_value)}</div>
+    <div class="pj-sub">+${potMoney(o.growth)} growth</div></div>`;
+  $("#dcaProj").innerHTML = `<div class="pj-head">🌱 Keep it up ${pj.years} yr —
+      ${potMoney(pj.per_period)}/period × ${pj.periods} = <b>${potMoney(pj.contributed)}</b> contributed</div>
+    <div class="pj-cards">${pcard("bear", "Bear", sc.bear)}${pcard("base", "Base", sc.base)}${pcard("bull", "Bull", sc.bull)}</div>
+    <div class="pj-disc">${esc(pj.disclaimer)}</div>`;
+}
+
+function renderDcaChart(series, contribs) {
+  const svg = $("#dcaChart");
+  const closes = series.closes, W = 1000, H = 280, pad = 8;
+  if (!closes || closes.length < 2) { svg.innerHTML = ""; return; }
+  const min = Math.min(...closes), max = Math.max(...closes), span = max - min || 1;
+  const X = (i) => pad + (i / (closes.length - 1)) * (W - pad * 2);
+  const Y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
+  const line = closes.map((c, i) => `${X(i).toFixed(1)},${Y(c).toFixed(1)}`).join(" ");
+  const dm = new Map(series.dates.map((dt, i) => [dt, i]));
+  // Each dot = a tilt buy. Bigger + greener = the engine leaned IN (cheaper);
+  // smaller + red = it eased off (richer). Amber = a flat ~1.0x buy.
+  const dots = (contribs || []).map((c) => {
+    const i = dm.get(c.date);
+    if (i == null) return "";
+    const col = c.tilt > 1.05 ? "var(--buy)" : c.tilt < 0.95 ? "var(--sell)" : "#c9a227";
+    const r = (3 + (c.tilt - 0.5) * 2.4).toFixed(1);
+    return `<circle cx="${X(i).toFixed(1)}" cy="${Y(c.price).toFixed(1)}" r="${r}"
+      fill="${col}" fill-opacity="0.85" stroke="#0a0d12" stroke-width="1">
+      <title>${c.date} · $${c.amount} (${c.tilt}× tilt) @ ${fmtPrice(c.price)}</title></circle>`;
+  }).join("");
+  svg.innerHTML = `<polyline points="${line}" fill="none" stroke="#3a4757" stroke-width="1.4"/>${dots}`;
+}
+
+// "Where your money SITS" — cost paid in (gray area) vs each strategy's holdings
+// value over the window. A value line above the gray = profit; below = underwater.
+const DCA_COLORS = { invested: "#7d8b9c", plain: "var(--buy)", tilt: "var(--gold)", lump: "#5b8def" };
+
+function renderMoneyMap(series, b) {
+  const svg = $("#dcaGrowth");
+  const invested = b.plain.invested_curve || [];
+  const curves = { plain: b.plain.value_curve || [], tilt: b.tilt.value_curve || [], lump: b.lump.value_curve || [] };
+  const n = curves.plain.length;
+  if (!n) { svg.innerHTML = ""; $("#dcaGrowthLegend").innerHTML = ""; return; }
+  const W = 1000, H = 280, pad = 8;
+  const all = [...invested, ...curves.plain, ...curves.tilt, ...curves.lump];
+  const max = Math.max(...all, 1), span = max || 1;
+  const X = (i) => pad + (i / (n - 1)) * (W - pad * 2);
+  const Y = (v) => pad + (1 - v / span) * (H - pad * 2);
+  const pts = (arr) => arr.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+  const investedArea = `${pad},${H} ${pts(invested)} ${W - pad},${H}`;
+  const poly = (arr, color, w) =>
+    `<polyline points="${pts(arr)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linejoin="round"/>`;
+  // Gray "money in" fill first, then value lines on top (tilt gold drawn last).
+  svg.innerHTML =
+    `<polygon points="${investedArea}" fill="#3a4757" fill-opacity="0.28"/>` +
+    poly(invested, DCA_COLORS.invested, 1.4) +
+    poly(curves.lump, DCA_COLORS.lump, 1.6) +
+    poly(curves.plain, DCA_COLORS.plain, 1.6) +
+    poly(curves.tilt, DCA_COLORS.tilt, 2);
+  const chip = (c, t) => `<span class="lg"><i style="background:${c}"></i>${t}</span>`;
+  $("#dcaGrowthLegend").innerHTML =
+    chip(DCA_COLORS.invested, "money in") + chip(DCA_COLORS.plain, "Plain") +
+    chip(DCA_COLORS.tilt, "Tilt") + chip(DCA_COLORS.lump, "Lump");
+}
+
+// "Where it's GOING" — forward projection: money contributed (gray area) vs the
+// compounding value, with a bear→bull band and the base case as the gold line.
+function renderProjGrowth(pj) {
+  const svg = $("#dcaProjChart");
+  const c = pj.curve || [];
+  if (c.length < 2) { svg.innerHTML = ""; return; }
+  const W = 1000, H = 280, pad = 8;
+  const max = Math.max(...c.map((p) => p.bull), 1), span = max || 1;
+  const X = (i) => pad + (i / (c.length - 1)) * (W - pad * 2);
+  const Y = (v) => pad + (1 - v / span) * (H - pad * 2);
+  const line = (key) => c.map((p, i) => `${X(i).toFixed(1)},${Y(p[key]).toFixed(1)}`).join(" ");
+  const contribArea = `${pad},${H} ${line("contributed")} ${W - pad},${H}`;
+  const bandTop = c.map((p, i) => `${X(i).toFixed(1)},${Y(p.bull).toFixed(1)}`).join(" ");
+  const bandBot = c.map((p, i) => ({ i, p })).reverse()
+    .map(({ i, p }) => `${X(i).toFixed(1)},${Y(p.bear).toFixed(1)}`).join(" ");
+  svg.innerHTML =
+    `<polygon points="${bandTop} ${bandBot}" fill="var(--buy)" fill-opacity="0.10"/>` +
+    `<polygon points="${contribArea}" fill="#3a4757" fill-opacity="0.32"/>` +
+    `<polyline points="${line("bear")}" fill="none" stroke="var(--sell)" stroke-width="1" stroke-dasharray="4 4" opacity="0.75"/>` +
+    `<polyline points="${line("bull")}" fill="none" stroke="var(--buy)" stroke-width="1" stroke-dasharray="4 4" opacity="0.75"/>` +
+    `<polyline points="${line("contributed")}" fill="none" stroke="#7d8b9c" stroke-width="1.4"/>` +
+    `<polyline points="${line("base")}" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+}
+
 /* ----------------------------------------------------- proof mode */
 
 async function runProof() {
@@ -868,6 +1244,26 @@ async function init() {
     if (u.upgrade) upgradeUrl = u.upgrade;
   } catch (e) { /* keep defaults */ }
   applyGating();
+
+  // Quick-load presets — swap the Stocks watchlist to a curated universe.
+  const loadPreset = (list) => {
+    state.stockSyms = [...list];
+    store.set("mp_stock_syms", state.stockSyms);
+    setView("stocks");
+  };
+  const addPreset = (list, label, title) => {
+    if (!list || !list.length) return;
+    const btn = document.createElement("button");
+    btn.className = "add-btn ghost";
+    btn.type = "button";
+    btn.textContent = label;
+    btn.title = title;
+    btn.addEventListener("click", () => loadPreset(list));
+    document.querySelector(".add-form").appendChild(btn);
+  };
+  addPreset(defaults.ai, "🤖 AI names", "Load the AI Come-Up universe (apply the method — not a buy list)");
+  addPreset(defaults.africa, "🌍 Africa (JSE)", "Load Johannesburg Stock Exchange tickers");
+
   $("#tabs").addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
     if (btn) setView(btn.dataset.view);
@@ -880,6 +1276,8 @@ async function init() {
     $("#addInput").value = "";
   });
   $("#proofForm").addEventListener("submit", (e) => { e.preventDefault(); runProof(); });
+  $("#dcaForm").addEventListener("submit", (e) => { e.preventDefault(); dcaLoaded = true; loadDca(); });
+  $("#liveForm").addEventListener("submit", (e) => { e.preventDefault(); pinLive(); });
   $("#optForm").addEventListener("submit", (e) => { e.preventDefault(); optionsLoaded = true; loadOptions(); });
   $("#optExpiry").addEventListener("change", (e) => loadOptions(e.target.value));
   $("#optPot").addEventListener("change", () => loadOptions($("#optExpiry").value || undefined));

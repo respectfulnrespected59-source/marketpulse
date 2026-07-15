@@ -21,6 +21,8 @@
       <button class="tab" data-view="options">⛓ Options</button>
       <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
       <button class="tab" data-view="pot">🫙 Pot</button>
+      <button class="tab" data-view="dca">🌱 DCA</button>
+      <button class="tab" data-view="live">🔴 Live</button>
       <button class="tab" data-view="proof">◆ Proof</button>
     </nav>
 
@@ -170,6 +172,89 @@
       <label class="opt-potwrap">start $<input id="potStart" class="opt-pot" type="number" value="300" /></label>
       <button class="add-btn ghost" id="potReset" type="button">Reset pot</button>
     </div>
+  </section>
+
+  <!-- Live Tracker: pin a real timestamped entry, watch real prices prove it -->
+  <section class="live" id="livePanel" hidden>
+    <div class="live-head">
+      <div>
+        <h2>🔴 Live Tracker</h2>
+        <p>Pin a real entry with a locked timestamp, then watch <b>real market
+          prices</b> prove or disprove the call in real time — the honest receipt.
+          Fills use the same honest slippage as Proof Mode.
+          <b>Paper-honest: real prices, no real order is placed, so it moves the
+          market zero. Educational — not advice.</b></p>
+      </div>
+      <form class="live-form" id="liveForm" autocomplete="off">
+        <input id="liveSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
+        <select id="liveKind" class="opt-expiry">
+          <option value="stock">Stock</option>
+          <option value="crypto">Crypto</option>
+        </select>
+        <select id="liveSide" class="opt-expiry">
+          <option value="long">LONG / DCA buy</option>
+          <option value="call">CALL lean (bullish)</option>
+          <option value="put">PUT lean (bearish)</option>
+        </select>
+        <label class="opt-potwrap" title="Dollars you're modeling on this play">stake $<input id="liveStake" class="opt-pot" type="number" min="10" step="any" value="300" /></label>
+        <button class="add-btn" type="submit">🔴 Pin entry</button>
+      </form>
+    </div>
+    <div class="live-board" id="liveBoard"></div>
+  </section>
+
+  <!-- DCA Wizard: the honest GROW engine — plain vs lump vs signal-tilt -->
+  <section class="dca" id="dcaPanel" hidden>
+    <div class="dca-head">
+      <div>
+        <h2>🌱 DCA Wizard</h2>
+        <p>The honest <b>GROW</b> engine. One budget, three ways: steady <b>DCA</b>,
+          all-in <b>Lump Sum</b>, and MarketPulse's <b>Signal-Tilt</b> (buy a little more
+          when the engine reads the asset as cheap, a little less when rich — but always
+          buying). Backtested on ~2 years of real history, after fees &amp; slippage.
+          <b>Educational — not advice. Lump sum wins most rising windows; we show that
+          plainly instead of hiding it.</b></p>
+      </div>
+      <form class="dca-form" id="dcaForm" autocomplete="off">
+        <input id="dcaSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
+        <select id="dcaKind" class="opt-expiry">
+          <option value="stock">Stock</option>
+          <option value="crypto">Crypto</option>
+        </select>
+        <label class="opt-potwrap" title="How much you'd put in per month">$/mo<input id="dcaMonthly" class="opt-pot" type="number" min="10" step="any" value="200" /></label>
+        <select id="dcaCadence" class="opt-expiry">
+          <option value="weekly">Weekly</option>
+          <option value="biweekly">Bi-weekly</option>
+          <option value="monthly" selected>Monthly</option>
+        </select>
+        <label class="opt-potwrap" title="Years to project the compounding forward">yrs<input id="dcaYears" class="opt-pot" type="number" min="1" max="40" step="1" value="10" /></label>
+        <button class="add-btn" type="submit">Build plan</button>
+      </form>
+    </div>
+    <div class="dca-nudge" id="dcaNudge"></div>
+    <div class="dca-plan" id="dcaPlan"></div>
+    <div class="dca-cards" id="dcaCards"></div>
+    <div class="dca-verdict" id="dcaVerdict"></div>
+
+    <div class="dca-charts">
+      <div class="dca-chart-block">
+        <div class="dca-cap">💰 Where your money SITS — dollars paid <b>in</b> vs what they grew <b>to</b>.
+          A line above the gray = in profit; below = underwater. <span class="dca-legend" id="dcaGrowthLegend"></span></div>
+        <div class="proof-chart-wrap"><svg id="dcaGrowth" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
+      </div>
+      <div class="dca-chart-block">
+        <div class="dca-cap">🎯 Where you BOUGHT — every dot is a tilt buy on the price line.
+          Bigger &amp; greener = the engine leaned <b>in</b> (cheaper); smaller &amp; red = it eased <b>off</b>.</div>
+        <div class="proof-chart-wrap"><svg id="dcaChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
+      </div>
+      <div class="dca-chart-block">
+        <div class="dca-cap">🌱 Where it's GOING — money you'd put <b>in</b> (gray) vs projected value.
+          Gold = base case; the band is bear → bull. An assumption, not a forecast.</div>
+        <div class="proof-chart-wrap"><svg id="dcaProjChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
+      </div>
+    </div>
+
+    <div class="dca-proj" id="dcaProj"></div>
   </section>
 
   <footer class="foot">

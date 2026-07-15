@@ -23,6 +23,7 @@ import datetime
 
 import backtest
 import config
+import dca
 import indicators
 import options
 
@@ -46,6 +47,23 @@ SCAN_UNIVERSE = [
     "SNAP", "HOOD", "NIO", "AAL", "WBD", "CMCSA", "UBER",
     # volatile low-dollar movers — best odds of a cheap, usable probe
     "PLUG", "LCID", "RIVN", "MARA", "RIOT", "CHPT", "AFRM", "DKNG",
+]
+
+# Johannesburg Stock Exchange (JSE) via Yahoo's `.JO` suffix — real African
+# market data, free, no login (mystocks.africa's dashboard is auth-gated with no
+# public API). Quotes are in ZA cents (e.g. MTN.JO 22955 = R229.55); the signal
+# engine works on the raw series regardless.
+AFRICA_STOCKS = [
+    "NPN.JO", "MTN.JO", "SOL.JO", "SBK.JO", "FSR.JO", "AGL.JO",
+    "SHP.JO", "CPI.JO", "VOD.JO", "NED.JO", "GFI.JO", "CFR.JO",
+]
+
+# AI Come-Up universe — liquid AI / semi / compute names, deliberately mixing
+# pricey leaders with low-dollar movers so a small-pot PROBE actually fits. This
+# is the sandbox to APPLY the method to — NOT a buy list or a set of picks.
+AI_STOCKS = [
+    "NVDA", "AMD", "MU", "MRVL", "AVGO", "TSM", "ARM", "SMCI",
+    "PLTR", "SOUN", "BBAI", "AI", "IONQ", "RGTI",
 ]
 
 _cache: dict[str, tuple[float, object]] = {}
@@ -226,6 +244,35 @@ def fetch_stocks(symbols: list[str]) -> list[dict]:
     return _store(key, rows)
 
 
+# ---------------------------------------------------------------- live quote
+
+QUOTE_TTL = 15  # seconds — fresher than the grid cache for the Live Tracker
+
+
+def live_quote(kind: str, symbol: str) -> dict:
+    """A single symbol's fresh price + the app's live READ (signal), for the
+    Live Tracker. Short-cached so a recording can poll without hammering the
+    upstream free APIs. Honest note: crypto price can lag ~1 min (upstream
+    cache); this is a swing/DCA tracker, not a tick-by-tick day-trading feed."""
+    key = f"quote:{kind}:{symbol.lower()}"
+    hit = _cache.get(key)
+    if hit and (time.time() - hit[0]) < QUOTE_TTL:
+        return hit[1]
+    if kind == "crypto":
+        rows = fetch_crypto([symbol.lower()])
+        row = rows[0] if rows else {"error": "no data"}
+    else:
+        row = fetch_one_stock(symbol) or {"error": "no data"}
+    out = {
+        "symbol": symbol.upper(), "kind": kind,
+        "price": row.get("price"), "change": row.get("change"),
+        "signal": row.get("signal"), "error": row.get("error"),
+        "ts": int(time.time()),
+    }
+    _cache[key] = (time.time(), out)
+    return out
+
+
 # ---------------------------------------------------------------- history / proof
 
 def fetch_history(kind: str, symbol: str):
@@ -327,6 +374,47 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, code=502)
 
+        if path == "/api/quote":
+            try:
+                symbol = (params.get("symbol", [""])[0]).strip()
+                kind = (params.get("kind", ["stock"])[0]).lower()
+                if not symbol:
+                    return self._json({"error": "symbol required"}, code=400)
+                return self._json(live_quote(kind, symbol))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
+        if path == "/api/dca":
+            if not config.features()["proof"]:
+                return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                   "error": "The DCA Wizard is a Pro feature."}, code=402)
+            try:
+                symbol = (params.get("symbol", [""])[0]).strip()
+                kind = (params.get("kind", ["stock"])[0]).lower()
+                if not symbol:
+                    return self._json({"error": "symbol required"}, code=400)
+                try:
+                    monthly = max(1.0, min(1_000_000.0, float(params.get("monthly", ["200"])[0])))
+                except (TypeError, ValueError):
+                    monthly = 200.0
+                cadence = (params.get("cadence", ["monthly"])[0]).lower()
+                try:
+                    years = max(1.0, min(40.0, float(params.get("years", ["10"])[0])))
+                except (TypeError, ValueError):
+                    years = 10.0
+                key = f"dca:{kind}:{symbol.lower()}:{monthly}:{cadence}:{years}"
+                cached = _cached(key)
+                if cached is not None:
+                    return self._json(cached)
+                dates, closes = fetch_history(kind, symbol)
+                if len(closes) < backtest.WARMUP + 2:
+                    return self._json({"symbol": symbol.upper(), "kind": kind,
+                                       "error": "not enough history"})
+                report = dca.dca_report(dates, closes, kind, symbol, monthly, cadence, years)
+                return self._json(_store(key, report))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
         if path == "/api/options":
             try:
                 symbol = (params.get("symbol", [""])[0]).strip()
@@ -420,6 +508,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/universe":
             return self._json({
                 "crypto": DEFAULT_CRYPTO, "stocks": DEFAULT_STOCKS,
+                "africa": AFRICA_STOCKS, "ai": AI_STOCKS,
                 "tier": config.TIER, "features": config.features(),
                 "upgrade": config.UPGRADE_URL, "freeCap": config.FREE_SYMBOL_CAP,
             })
@@ -439,8 +528,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(STATIC, exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"\n  MarketPulse running -> http://127.0.0.1:{PORT}\n  (Ctrl+C to stop)\n")
+    # Local runs stay on loopback (safe for the downloadable buyer tool). A host
+    # like Render sets HOST=0.0.0.0 so the service is reachable publicly.
+    host = os.environ.get("HOST", "127.0.0.1")
+    server = ThreadingHTTPServer((host, PORT), Handler)
+    shown = "127.0.0.1" if host == "127.0.0.1" else host
+    print(f"\n  MarketPulse running -> http://{shown}:{PORT}\n  (Ctrl+C to stop)\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
