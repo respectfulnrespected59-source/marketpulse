@@ -185,7 +185,7 @@ function sparkline(values, up) {
       <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
     </linearGradient></defs>
     <polygon points="${area}" fill="url(#${gid})"/>
-    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="1.5"
+    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2.2"
       stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
 }
@@ -1034,7 +1034,7 @@ function renderDcaChart(series, contribs) {
       fill="${col}" fill-opacity="0.85" stroke="#0a0d12" stroke-width="1">
       <title>${c.date} · $${c.amount} (${c.tilt}× tilt) @ ${fmtPrice(c.price)}</title></circle>`;
   }).join("");
-  svg.innerHTML = `<polyline points="${line}" fill="none" stroke="#3a4757" stroke-width="1.4"/>${dots}`;
+  svg.innerHTML = `<polyline points="${line}" fill="none" stroke="#4aa3ff" stroke-width="1.9" stroke-linejoin="round"/>${dots}`;
 }
 
 // "Where your money SITS" — cost paid in (gray area) vs each strategy's holdings
@@ -1059,10 +1059,10 @@ function renderMoneyMap(series, b) {
   // Gray "money in" fill first, then value lines on top (tilt gold drawn last).
   svg.innerHTML =
     `<polygon points="${investedArea}" fill="#3a4757" fill-opacity="0.28"/>` +
-    poly(invested, DCA_COLORS.invested, 1.4) +
-    poly(curves.lump, DCA_COLORS.lump, 1.6) +
-    poly(curves.plain, DCA_COLORS.plain, 1.6) +
-    poly(curves.tilt, DCA_COLORS.tilt, 2);
+    poly(invested, DCA_COLORS.invested, 1.9) +
+    poly(curves.lump, DCA_COLORS.lump, 2.2) +
+    poly(curves.plain, DCA_COLORS.plain, 2.4) +
+    poly(curves.tilt, DCA_COLORS.tilt, 2.8);
   const chip = (c, t) => `<span class="lg"><i style="background:${c}"></i>${t}</span>`;
   $("#dcaGrowthLegend").innerHTML =
     chip(DCA_COLORS.invested, "money in") + chip(DCA_COLORS.plain, "Plain") +
@@ -1087,10 +1087,10 @@ function renderProjGrowth(pj) {
   svg.innerHTML =
     `<polygon points="${bandTop} ${bandBot}" fill="var(--buy)" fill-opacity="0.10"/>` +
     `<polygon points="${contribArea}" fill="#3a4757" fill-opacity="0.32"/>` +
-    `<polyline points="${line("bear")}" fill="none" stroke="var(--sell)" stroke-width="1" stroke-dasharray="4 4" opacity="0.75"/>` +
-    `<polyline points="${line("bull")}" fill="none" stroke="var(--buy)" stroke-width="1" stroke-dasharray="4 4" opacity="0.75"/>` +
-    `<polyline points="${line("contributed")}" fill="none" stroke="#7d8b9c" stroke-width="1.4"/>` +
-    `<polyline points="${line("base")}" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+    `<polyline points="${line("bear")}" fill="none" stroke="var(--sell)" stroke-width="1.6" stroke-dasharray="5 4" opacity="0.9"/>` +
+    `<polyline points="${line("bull")}" fill="none" stroke="var(--buy)" stroke-width="1.6" stroke-dasharray="5 4" opacity="0.9"/>` +
+    `<polyline points="${line("contributed")}" fill="none" stroke="#9fb0c2" stroke-width="1.9"/>` +
+    `<polyline points="${line("base")}" fill="none" stroke="var(--gold)" stroke-width="2.6"/>`;
 }
 
 /* ----------------------------------------------------- proof mode */
@@ -1208,23 +1208,61 @@ function renderProof(d) {
     + (rows || `<div class="proof-empty">No strong signals in this window.</div>`);
 }
 
+/* Reusable candlestick SVG. ohlc = [[open,high,low,close], ...].
+   Bright green up / red down bodies + wicks, auto-scaled. Returns markup. */
+function candlesSVG(ohlc, W, H, pad) {
+  const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
+  const min = Math.min(...lows), max = Math.max(...highs), span = max - min || 1;
+  const n = ohlc.length;
+  const X = (i) => pad + (n === 1 ? 0.5 : i / (n - 1)) * (W - pad * 2);
+  const Y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
+  const slot = (W - pad * 2) / n;
+  const bw = Math.max(1, Math.min(slot * 0.7, 9));      // candle body width
+  const wick = Math.max(0.6, Math.min(bw * 0.28, 2));   // wick thickness
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const [o, h, l, c] = ohlc[i];
+    const up = c >= o;
+    const col = up ? "var(--buy)" : "var(--sell)";
+    const x = X(i);
+    const yH = Y(h), yL = Y(l);
+    const yO = Y(o), yC = Y(c);
+    const top = Math.min(yO, yC), bot = Math.max(yO, yC);
+    const bodyH = Math.max(1, bot - top);
+    out += `<line x1="${x.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="${wick.toFixed(2)}"/>`;
+    out += `<rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${col}" rx="0.5"/>`;
+  }
+  return { markup: out, X, Y };
+}
+
 function renderProofChart(series, events) {
   const svg = $("#proofChart");
-  const closes = series.closes, W = 1000, H = 280, pad = 8;
+  const closes = series.closes, W = 1000, H = 280, pad = 10;
   if (!closes || closes.length < 2) { svg.innerHTML = ""; return; }
-  const min = Math.min(...closes), max = Math.max(...closes), span = max - min || 1;
-  const X = (i) => pad + (i / (closes.length - 1)) * (W - pad * 2);
-  const Y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
-  const line = closes.map((c, i) => `${X(i).toFixed(1)},${Y(c).toFixed(1)}`).join(" ");
+
+  let X, Y, base;
+  if (series.ohlc && series.ohlc.length === closes.length) {
+    // Real candlesticks (stocks) — bright green up / red down.
+    const c = candlesSVG(series.ohlc, W, H, pad);
+    X = c.X; Y = c.Y; base = c.markup;
+  } else {
+    // Bright price line (crypto / no-OHLC) — no more dim gray.
+    const min = Math.min(...closes), max = Math.max(...closes), span = max - min || 1;
+    X = (i) => pad + (i / (closes.length - 1)) * (W - pad * 2);
+    Y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
+    const line = closes.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+    base = `<polyline points="${line}" fill="none" stroke="#4aa3ff" stroke-width="2.2" stroke-linejoin="round"/>`;
+  }
+
   const marks = events.map((e) => {
     const x = X(e.idx), y = Y(e.price);
-    const col = e.dir === "buy" ? "var(--buy)" : "var(--sell)";
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${col}"
-      stroke="#0a0d12" stroke-width="1.5"><title>${e.date} ${e.type}</title></circle>`;
+    const buy = e.dir === "buy";
+    const col = buy ? "var(--buy)" : "var(--sell)";
+    // hollow ring so it reads clearly on top of candles
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5" fill="none"
+      stroke="${col}" stroke-width="2.5"><title>${e.date} ${e.type}</title></circle>`;
   }).join("");
-  svg.innerHTML = `
-    <polyline points="${line}" fill="none" stroke="#3a4757" stroke-width="1.4"/>
-    ${marks}`;
+  svg.innerHTML = base + marks;
 }
 
 function startAuto() {
@@ -1294,6 +1332,12 @@ async function init() {
   tickClock();
   setInterval(tickClock, 1000);
   startAuto();
+
+  // Deep-link support for PWA home-screen shortcuts (e.g. /?view=dca).
+  const VIEWS = ["crypto", "stocks", "options", "watchlist", "pot", "dca", "live", "proof"];
+  const wanted = new URLSearchParams(location.search).get("view");
+  if (wanted && VIEWS.includes(wanted)) setView(wanted);
+
   loadView();
 }
 

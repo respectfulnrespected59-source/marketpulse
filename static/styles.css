@@ -684,3 +684,69 @@ body {
   .dca-cards, .pj-cards { grid-template-columns: 1fr; }
   .live-nums { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---- Install-as-app (PWA) affordances ---- */
+.install-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 16px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--bg);
+  background: linear-gradient(180deg, #e6c073, var(--gold));
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 10px 26px -8px rgba(217, 176, 97, 0.55);
+  cursor: pointer;
+  transition: transform var(--duration-fast, 150ms) var(--ease),
+              box-shadow var(--duration-fast, 150ms) var(--ease);
+}
+.install-fab:hover { transform: translateY(-2px); box-shadow: 0 14px 32px -8px rgba(217, 176, 97, 0.7); }
+.install-fab:active { transform: translateY(0); }
+.install-fab[hidden] { display: none; }
+
+.ios-install {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 40px 14px 16px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.ios-install[hidden] { display: none; }
+.ios-install b { font-size: 13.5px; }
+.ios-install span { font-size: 12.5px; color: var(--text-dim); }
+.ios-install .ios-share {
+  display: inline-block;
+  color: var(--gold);
+  font-weight: 700;
+  transform: translateY(1px);
+}
+.ios-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.ios-close:hover { color: var(--text); }

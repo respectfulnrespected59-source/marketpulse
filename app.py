@@ -304,6 +304,33 @@ def fetch_history(kind: str, symbol: str):
     return _store(key, (dates, closes))
 
 
+def _stock_ohlc_map(symbol: str) -> dict:
+    """{'YYYY-MM-DD': (open, high, low, close)} from the same Yahoo 2y/1d
+    feed fetch_history uses, so candles align 1:1 with the signal series.
+    Crypto has no honest intraday OHLC here, so it is intentionally absent
+    (the Proof chart falls back to a bright line for crypto)."""
+    key = f"ohlc:{symbol.lower()}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    out: dict = {}
+    try:
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               "?range=2y&interval=1d")
+        result = _get_json(url)["chart"]["result"][0]
+        stamps = result["timestamp"]
+        q = result["indicators"]["quote"][0]
+        opens, highs, lows, closes = q["open"], q["high"], q["low"], q["close"]
+        for ts, o, h, l, c in zip(stamps, opens, highs, lows, closes):
+            if None in (o, h, l, c):
+                continue
+            d = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            out[d] = (o, h, l, c)
+    except Exception:  # noqa: BLE001
+        out = {}
+    return _store(key, out)
+
+
 def run_proof(kind: str, symbol: str) -> dict:
     dates, closes = fetch_history(kind, symbol)
     if len(closes) < backtest.WARMUP + max(backtest.HORIZONS) + 2:
@@ -313,7 +340,23 @@ def run_proof(kind: str, symbol: str) -> dict:
     out["walkforward"] = backtest.walk_forward(dates, closes, kind=kind)
     out["symbol"] = symbol.upper()
     out["kind"] = kind
-    out["series"] = {"dates": dates, "closes": [round(c, 4) for c in closes]}
+    series = {"dates": dates, "closes": [round(c, 4) for c in closes]}
+    if kind != "crypto":
+        omap = _stock_ohlc_map(symbol)
+        hits = sum(1 for d in dates if d in omap)
+        if hits >= len(dates) * 0.9:  # enough real candles to be worth it
+            # One [o,h,l,c] per signal date; fall back to a flat close-candle
+            # for any gap so the x-axis stays aligned with the signal markers.
+            candles = []
+            for d, c in zip(dates, closes):
+                bar = omap.get(d)
+                if bar:
+                    o, h, l, cl = bar
+                    candles.append([round(o, 4), round(h, 4), round(l, 4), round(cl, 4)])
+                else:
+                    candles.append([c, c, c, c])
+            series["ohlc"] = candles
+    out["series"] = series
     return out
 
 
@@ -521,6 +564,8 @@ class Handler(BaseHTTPRequestHandler):
         ctype = {
             ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
             ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+            ".json": "application/json",
+            ".webmanifest": "application/manifest+json",
         }.get(os.path.splitext(full)[1], "application/octet-stream")
         with open(full, "rb") as fh:
             self._send(200, fh.read(), ctype)
