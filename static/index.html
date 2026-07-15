@@ -200,17 +200,20 @@
           market zero. Educational — not advice.</b></p>
       </div>
       <form class="live-form" id="liveForm" autocomplete="off">
-        <input id="liveSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
-        <select id="liveKind" class="opt-expiry">
-          <option value="stock">Stock</option>
-          <option value="crypto">Crypto</option>
-        </select>
-        <select id="liveSide" class="opt-expiry">
-          <option value="long">LONG / DCA buy</option>
-          <option value="call">CALL lean (bullish)</option>
-          <option value="put">PUT lean (bearish)</option>
-        </select>
-        <label class="opt-potwrap" title="Dollars you're modeling on this play">stake $<input id="liveStake" class="opt-pot" type="number" min="10" step="any" value="300" /></label>
+        <div class="live-form-top">
+          <input id="liveSymbol" class="add-input" placeholder="NVDA  or  bitcoin" value="NVDA" />
+          <select id="liveKind" class="opt-expiry">
+            <option value="stock">Stock</option>
+            <option value="crypto">Crypto</option>
+          </select>
+          <select id="liveSide" class="opt-expiry">
+            <option value="long">LONG / DCA buy</option>
+            <option value="call">CALL lean (bullish)</option>
+            <option value="put">PUT lean (bearish)</option>
+          </select>
+        </div>
+        <div class="qf-label">Your stake</div>
+        <div id="liveStakeQf"></div>
         <button class="add-btn" type="submit">🔴 Pin entry</button>
       </form>
     </div>
@@ -306,6 +309,8 @@
     <span>Tap the Share icon <span class="ios-share">⎋</span> below, then <b>“Add to Home Screen”</b>.</span>
   </div>
 
+  <script src="vendor/big.min.js"></script>
+  <script src="quickfill.js"></script>
   <script src="app.js"></script>
   <script>
   /* PWA: register the service worker + drive the install affordance.
