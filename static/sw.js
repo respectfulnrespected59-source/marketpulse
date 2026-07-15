@@ -12,7 +12,7 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v2";
+const SHELL_VERSION = "mp-shell-v3";
 const SHELL_ASSETS = [
   "/",
   "/index.html",

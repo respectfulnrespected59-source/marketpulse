@@ -66,6 +66,37 @@ AI_STOCKS = [
     "PLTR", "SOUN", "BBAI", "AI", "IONQ", "RGTI",
 ]
 
+# CoinGecko's free API rate-limits shared datacenter IPs (429 on Render), so
+# crypto falls back to Coinbase's public API (keyless, allows datacenter IPs).
+# CoinGecko id -> (Coinbase product, ticker, display name). Coins Coinbase does
+# not list (BNB, TRON) simply drop from the grid during a CoinGecko outage
+# rather than 502-ing the whole tab.
+COINBASE_MAP = {
+    "bitcoin": ("BTC-USD", "BTC", "Bitcoin"),
+    "ethereum": ("ETH-USD", "ETH", "Ethereum"),
+    "solana": ("SOL-USD", "SOL", "Solana"),
+    "ripple": ("XRP-USD", "XRP", "XRP"),
+    "cardano": ("ADA-USD", "ADA", "Cardano"),
+    "dogecoin": ("DOGE-USD", "DOGE", "Dogecoin"),
+    "avalanche-2": ("AVAX-USD", "AVAX", "Avalanche"),
+    "chainlink": ("LINK-USD", "LINK", "Chainlink"),
+    "polkadot": ("DOT-USD", "DOT", "Polkadot"),
+    "litecoin": ("LTC-USD", "LTC", "Litecoin"),
+}
+COINBASE_API = "https://api.exchange.coinbase.com"
+
+# Optional CoinGecko Demo API key (free, key-scoped not IP-scoped). If set as an
+# env var it is sent as a header so CoinGecko keeps working on Render too.
+_CG_KEY = os.environ.get("MP_CG_KEY", "").strip()
+
+
+def _cg_headers() -> dict:
+    h = {"User-Agent": "Mozilla/5.0 MarketPulse"}
+    if _CG_KEY:
+        h["x-cg-demo-api-key"] = _CG_KEY
+    return h
+
+
 _cache: dict[str, tuple[float, object]] = {}
 
 
@@ -89,11 +120,15 @@ def _get_json(url: str, headers: dict | None = None, timeout: int = 12):
 
 # ---------------------------------------------------------------- crypto
 
-def fetch_crypto(ids: list[str]) -> list[dict]:
-    key = "crypto:" + ",".join(ids)
-    cached = _cached(key)
-    if cached is not None:
-        return cached
+def _signal_from_closes(closes: list[float]) -> dict:
+    """Hourly-close signal; htf_factor=24 makes the higher-timeframe check daily."""
+    if len(closes) > 35:
+        return indicators.score_signals(closes, htf_factor=24)
+    return {"score": 0, "label": "NEUTRAL", "css": "neutral", "rsi": None,
+            "macd_hist": None, "sma": None, "reasons": ["not enough history"]}
+
+
+def _crypto_from_coingecko(ids: list[str]) -> list[dict]:
     qs = urllib.parse.urlencode({
         "vs_currency": "usd",
         "ids": ",".join(ids),
@@ -103,13 +138,8 @@ def fetch_crypto(ids: list[str]) -> list[dict]:
     })
     url = f"https://api.coingecko.com/api/v3/coins/markets?{qs}"
     rows = []
-    for c in _get_json(url):
+    for c in _get_json(url, headers=_cg_headers()):
         closes = [p for p in (c.get("sparkline_in_7d") or {}).get("price", []) if p]
-        # sparkline is hourly; htf_factor=24 makes the higher-timeframe check daily.
-        sig = indicators.score_signals(closes, htf_factor=24) if len(closes) > 35 else {
-            "score": 0, "label": "NEUTRAL", "css": "neutral", "rsi": None,
-            "macd_hist": None, "sma": None, "reasons": ["not enough history"],
-        }
         rows.append({
             "kind": "crypto",
             "symbol": (c.get("symbol") or "").upper(),
@@ -117,8 +147,57 @@ def fetch_crypto(ids: list[str]) -> list[dict]:
             "price": c.get("current_price"),
             "change": round(c.get("price_change_percentage_24h") or 0, 2),
             "spark": closes[-48:],
-            "signal": sig,
+            "signal": _signal_from_closes(closes),
         })
+    return rows
+
+
+def _coinbase_closes(product: str, granularity: int) -> tuple[list[int], list[float]]:
+    """(epoch_seconds, closes) ascending from Coinbase public candles.
+    Coinbase returns up to 300 rows newest-first as [time,low,high,open,close,vol]."""
+    url = f"{COINBASE_API}/products/{product}/candles?granularity={granularity}"
+    raw = _get_json(url)
+    rows = sorted((r for r in raw if r and r[4] is not None), key=lambda r: r[0])
+    return [int(r[0]) for r in rows], [float(r[4]) for r in rows]
+
+
+def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
+    """Keyless fallback: one hourly-candle call per supported coin, in parallel."""
+    targets = [(i, COINBASE_MAP[i]) for i in ids if i in COINBASE_MAP]
+
+    def one(item):
+        cg_id, (product, ticker, name) = item
+        try:
+            _, closes = _coinbase_closes(product, 3600)  # hourly (~12 days)
+            if not closes:
+                return None
+            price = closes[-1]
+            ref = closes[-25] if len(closes) >= 25 else closes[0]
+            change = round((price - ref) / ref * 100, 2) if ref else 0
+            return {
+                "kind": "crypto", "symbol": ticker, "name": name, "price": price,
+                "change": change, "spark": closes[-48:],
+                "signal": _signal_from_closes(closes),
+            }
+        except Exception:  # noqa: BLE001
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return [r for r in pool.map(one, targets) if r]
+
+
+def fetch_crypto(ids: list[str]) -> list[dict]:
+    key = "crypto:" + ",".join(ids)
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    try:
+        rows = _crypto_from_coingecko(ids)
+        if rows:
+            return _store(key, rows)
+    except Exception:  # noqa: BLE001  (429/geo/timeout) -> keyless fallback
+        pass
+    rows = _crypto_from_coinbase(ids)
     return _store(key, rows)
 
 
@@ -282,13 +361,21 @@ def fetch_history(kind: str, symbol: str):
     if cached is not None:
         return cached
     if kind == "crypto":
-        url = (f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}"
-               "/market_chart?vs_currency=usd&days=365&interval=daily")
-        data = _get_json(url)
         dates, closes = [], []
-        for ms, price in data.get("prices", []):
-            dates.append(datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d"))
-            closes.append(price)
+        try:
+            url = (f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}"
+                   "/market_chart?vs_currency=usd&days=365&interval=daily")
+            data = _get_json(url, headers=_cg_headers())
+            for ms, price in data.get("prices", []):
+                dates.append(datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d"))
+                closes.append(price)
+        except Exception:  # noqa: BLE001  (429/geo) -> Coinbase daily candles
+            dates, closes = [], []
+        if not closes and symbol.lower() in COINBASE_MAP:
+            product = COINBASE_MAP[symbol.lower()][0]
+            stamps, cl = _coinbase_closes(product, 86400)  # daily (~300 days)
+            dates = [datetime.datetime.utcfromtimestamp(t).strftime("%Y-%m-%d") for t in stamps]
+            closes = cl
     else:
         url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
                "?range=2y&interval=1d")
