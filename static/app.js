@@ -13,7 +13,7 @@ const store = {
 };
 
 const state = {
-  view: "crypto",
+  view: "stocks",
   cryptoIds: store.get("mp_crypto_ids", null),   // null => use server defaults
   stockSyms: store.get("mp_stock_syms", null),
   watch: new Set(store.get("mp_watch", [])),      // "CRYPTO:BTC"
