@@ -161,6 +161,47 @@ def _coinbase_closes(product: str, granularity: int) -> tuple[list[int], list[fl
     return [int(r[0]) for r in rows], [float(r[4]) for r in rows]
 
 
+def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
+    """[[open,high,low,close], ...] ascending from Coinbase candles
+    ([time,low,high,open,close,vol] -> reordered to o,h,l,c)."""
+    url = f"{COINBASE_API}/products/{product}/candles?granularity={granularity}"
+    raw = _get_json(url)
+    rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
+    return [[float(r[3]), float(r[2]), float(r[1]), float(r[4])] for r in rows]
+
+
+def fetch_intraday(kind: str, symbol: str) -> dict:
+    """Recent intraday OHLC candles for the live trading chart. Stocks use
+    Yahoo 15-min bars over 5 days; crypto uses Coinbase hourly candles. Short-
+    cached so a live poll can refresh without hammering upstream."""
+    key = f"intraday:{kind}:{symbol.lower()}"
+    hit = _cache.get(key)
+    if hit and (time.time() - hit[0]) < QUOTE_TTL:
+        return hit[1]
+    ohlc: list[list[float]] = []
+    if kind == "crypto":
+        prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
+        if prod:
+            try:
+                ohlc = _coinbase_ohlc(prod, 3600)  # hourly (~12 days)
+            except Exception:  # noqa: BLE001
+                ohlc = []
+    else:
+        try:
+            url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+                   "?range=5d&interval=15m")
+            q = _get_json(url)["chart"]["result"][0]["indicators"]["quote"][0]
+            for o, h, l, c in zip(q["open"], q["high"], q["low"], q["close"]):
+                if None not in (o, h, l, c):
+                    ohlc.append([round(o, 4), round(h, 4), round(l, 4), round(c, 4)])
+        except Exception:  # noqa: BLE001
+            ohlc = []
+    out = {"symbol": symbol.upper(), "kind": kind, "ohlc": ohlc,
+           "last": ohlc[-1][3] if ohlc else None, "ts": int(time.time())}
+    _cache[key] = (time.time(), out)
+    return out
+
+
 def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
     """Keyless fallback: one hourly-candle call per supported coin, in parallel."""
     targets = [(i, COINBASE_MAP[i]) for i in ids if i in COINBASE_MAP]
@@ -511,6 +552,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not symbol:
                     return self._json({"error": "symbol required"}, code=400)
                 return self._json(live_quote(kind, symbol))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
+        if path == "/api/intraday":
+            try:
+                symbol = (params.get("symbol", [""])[0]).strip()
+                kind = (params.get("kind", ["stock"])[0]).lower()
+                if not symbol:
+                    return self._json({"error": "symbol required"}, code=400)
+                return self._json(fetch_intraday(kind, symbol))
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, code=502)
 

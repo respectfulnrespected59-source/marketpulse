@@ -795,3 +795,26 @@ body {
   text-align: center;
 }
 .qf-convert b { color: var(--buy); font-weight: 700; }
+
+/* ---- Live trading chart ---- */
+.live-chart-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px 16px; margin: 4px 0 18px;
+  box-shadow: var(--shadow);
+}
+.ltc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.ltc-title { display: flex; align-items: baseline; gap: 8px; }
+.ltc-title b { font-size: 20px; font-weight: 800; letter-spacing: 0.01em; }
+.ltc-kind { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.ltc-price { display: flex; align-items: baseline; gap: 8px; }
+.ltc-price > b { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+.ltc-chg { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.ltc-chg.up { color: var(--buy); }
+.ltc-chg.down { color: var(--sell); }
+.ltc-chart-wrap {
+  position: relative; width: 100%; aspect-ratio: 10 / 3;
+  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 40%);
+  border-radius: 10px; overflow: hidden;
+}
+#liveTradeChart { width: 100%; height: 100%; display: block; }
+.ltc-foot { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.45; }
