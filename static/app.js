@@ -365,6 +365,7 @@ function setView(v) {
   document.querySelector(".breadth").hidden = isPanel;
   if (!isLive) stopLivePoll();  // don't poll prices while off the Live tab
   if (isLive) {
+    ensureLiveQf();
     renderLive();
     const lp = getLive();
     if (lp && lp.status === "open") startLivePoll();
@@ -751,6 +752,28 @@ let liveTimer = null, liveClock = null;
 function getLive() { return store.get("mp_livetrack", null); }
 function saveLive(p) { store.set("mp_livetrack", p); }
 
+// Robinhood-style quick-fill stake control (mounted lazily on first Live view).
+let liveStakeQf = null;
+function ensureLiveQf() {
+  if (liveStakeQf || typeof QuickFill === "undefined") return;
+  const el = $("#liveStakeQf");
+  if (!el) return;
+  liveStakeQf = QuickFill.mount(el, {
+    amount: 300, chips: [50, 100, 250, 500, 1000], step: 25, min: 10,
+    getContext: () => ({
+      symbol: $("#liveSymbol").value.trim(),
+      kind: $("#liveKind").value,
+      side: $("#liveSide").value,
+    }),
+    priceFetcher: async (sym, kind) => {
+      const q = await fetchQuote(kind === "crypto" ? sym.toLowerCase() : sym.toUpperCase(), kind);
+      return q.price;
+    },
+  });
+  ["#liveSymbol", "#liveKind", "#liveSide"].forEach((sel) =>
+    $(sel).addEventListener("change", () => liveStakeQf && liveStakeQf.refreshConversion()));
+}
+
 function livePnl(p, current) {
   const c = LIVE_BPS[p.kind === "crypto" ? "crypto" : "stock"];
   const movePct = (current - p.entry) / p.entry * 100;       // raw price move
@@ -781,7 +804,7 @@ async function pinLive() {
   const sym = ($("#liveSymbol").value.trim() || "NVDA").toUpperCase();
   const kind = $("#liveKind").value;
   const side = $("#liveSide").value;
-  const stake = parseFloat($("#liveStake").value) || 300;
+  const stake = liveStakeQf ? liveStakeQf.getAmount() : 300;
   $("#liveBoard").innerHTML = `<div class="proof-empty">Pulling live price for ${esc(sym)}…</div>`;
   try {
     const q = await fetchQuote(kind === "crypto" ? $("#liveSymbol").value.trim().toLowerCase() : sym, kind);

@@ -750,3 +750,48 @@ body {
   cursor: pointer;
 }
 .ios-close:hover { color: var(--text); }
+
+/* ---- QuickFill: Robinhood-style amount control ---- */
+.live-form-top { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.qf-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-faint); margin-bottom: 6px;
+}
+.qf { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.qf-row { display: flex; align-items: stretch; gap: 10px; }
+.qf-step {
+  flex: 0 0 46px; font-size: 22px; font-weight: 700; line-height: 1;
+  color: var(--text); background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; cursor: pointer;
+  transition: background var(--duration-fast, 150ms) var(--ease), border-color var(--duration-fast, 150ms) var(--ease);
+}
+.qf-step:hover { background: var(--surface); border-color: var(--gold); color: var(--gold); }
+.qf-step:active { transform: scale(0.96); }
+.qf-amount {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 2px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 14px;
+}
+.qf-cur { font-family: var(--mono); font-size: 22px; color: var(--text-dim); }
+.qf-input {
+  width: 100%; min-width: 0; text-align: center;
+  font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--text); background: transparent; border: none; outline: none;
+}
+.qf-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.qf-chip {
+  flex: 1 1 auto; padding: 9px 6px; font-family: var(--mono); font-size: 13px; font-weight: 600;
+  color: var(--text-dim); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; cursor: pointer;
+  transition: all var(--duration-fast, 150ms) var(--ease);
+}
+.qf-chip:hover { color: var(--text); border-color: var(--text-faint); }
+.qf-chip.is-active {
+  color: #0a0d12; background: linear-gradient(180deg, #e6c073, var(--gold));
+  border-color: var(--gold); box-shadow: 0 6px 16px -8px rgba(217, 176, 97, 0.7);
+}
+.qf-convert {
+  min-height: 18px; font-family: var(--mono); font-size: 13px; color: var(--text-dim);
+  text-align: center;
+}
+.qf-convert b { color: var(--buy); font-weight: 700; }
