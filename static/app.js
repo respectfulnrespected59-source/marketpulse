@@ -346,6 +346,7 @@ let optionsLoaded = false;
 
 function setView(v) {
   state.view = v;
+  markSeen(v);
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("is-active", t.dataset.view === v));
 
@@ -811,6 +812,85 @@ function renderHome() {
   }
   renderHomePlans();
   renderHomeState();
+  renderOnboard();
+}
+
+/* ---------------- First-run walkthrough (7 steps) -------------------------
+   The problem this solves, in the user's words: "a large part of why things
+   like this don't sell is because people don't even know exactly what it is or
+   how to use it when they do get it."
+
+   It is a CHECKLIST, not a modal tour -- nothing is blocked, nothing is
+   hijacked, and it self-completes from real state rather than a counter you
+   click through. Step 5 is the only one that cannot be satisfied by looking:
+   you have to actually log a probe. That is deliberate -- the funnel is the
+   lesson, and the lesson is being wrong cheaply. */
+const ONBOARD_KEY = "mp_onboard";
+const ONBOARD = [
+  { view: "stocks",    title: "Read the board",
+    blurb: "RSI, MACD and trend on real prices. Four factors have to agree before it says STRONG BUY." },
+  { view: "pot",       title: "Set your pot",
+    blurb: "The money you can afford to be wrong with. Everything else sizes off this number." },
+  { view: "options",   title: "Find a play you can afford",
+    blurb: "The cheapest probe that still teaches you something — not the four-thousand-dollar lottery ticket." },
+  { view: "watchlist", title: "Watch a name",
+    blurb: "Star what you're tracking so the board stays yours, not ours." },
+  { view: "pot",       title: "Log your first probe", real: true,
+    blurb: "Small enough to be wrong cheaply. This is the only step you can't finish just by looking." },
+  { view: "proof",     title: "Prove it — losses and all",
+    blurb: "Proof Mode backtests the same signal over years and shows what lost, not just what won." },
+  { view: "dca",       title: "Plan the slow lane",
+    blurb: "DCA is the unsexy one that most often survives. Worth knowing before you need it." },
+];
+
+function getOnboard() { return store.get(ONBOARD_KEY, { seen: [], done: false }); }
+
+function markSeen(view) {
+  const o = getOnboard();
+  if (o.done || o.seen.includes(view)) return;
+  o.seen.push(view);
+  store.set(ONBOARD_KEY, o);
+}
+
+/* A step is complete when it is genuinely complete: `real` steps check actual
+   state, the rest count as done once you've opened that tab. */
+function onboardDone(step) {
+  if (step.real) return (getPot().probes || []).length > 0;
+  return getOnboard().seen.includes(step.view);
+}
+
+function renderOnboard() {
+  const box = $("#homeOnboard");
+  if (!box) return;
+  const o = getOnboard();
+  const done = ONBOARD.map(onboardDone);
+  const n = done.filter(Boolean).length;
+  if (o.done || n === ONBOARD.length) { box.innerHTML = ""; return; }
+  const next = done.indexOf(false);
+  box.innerHTML =
+    `<div class="ob">
+       <div class="ob-head">
+         <span class="ob-title">Getting started</span>
+         <span class="ob-count">${n} of ${ONBOARD.length}</span>
+         <button class="ob-skip" type="button" id="obSkip">skip</button>
+       </div>
+       <div class="ob-bar"><i style="width:${(n / ONBOARD.length) * 100}%"></i></div>
+       <ol class="ob-list">` +
+    ONBOARD.map((s, i) =>
+      `<li class="${done[i] ? "is-done" : i === next ? "is-next" : ""}">
+         <span class="ob-mark">${done[i] ? "✓" : i + 1}</span>
+         <span class="ob-step">
+           <b>${esc(s.title)}</b>
+           ${i === next ? `<span class="ob-blurb">${esc(s.blurb)}</span>` : ""}
+         </span>
+         ${done[i] ? "" : `<a class="ob-go" data-goto="${esc(s.view)}">open →</a>`}
+       </li>`).join("") +
+    `</ol></div>`;
+  const skip = $("#obSkip");
+  if (skip) skip.addEventListener("click", () => {
+    store.set(ONBOARD_KEY, { ...getOnboard(), done: true });
+    renderOnboard();
+  });
 }
 
 /* Honest market read for the cockpit.
