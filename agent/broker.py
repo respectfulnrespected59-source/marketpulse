@@ -43,7 +43,50 @@ def _headers() -> dict:
     }
 
 
+# --------------------------------------------------------------- key scoping
+# Alpaca has no "trade-only" API key toggle (unlike Binance/Coinbase, where you
+# can mint a key with withdrawals disabled). So we enforce the equivalent HERE,
+# at our own chokepoint: an explicit allowlist of the endpoints this agent
+# legitimately needs. Anything else -- account configuration changes, transfers,
+# journals, bulk position closes -- is refused before the request is built, even
+# if a bug or a tampered caller asks for it.
+#
+# Same principle as guardrails.check_symbol_allowed: do not trust the caller.
+# Exact paths only -- a prefix rule here would also admit sub-resources such as
+# /v2/account/configurations and /v2/account/activities, which we do not want.
+_ALLOWED_EXACT = (
+    ("GET",  "/v2/account"),        # equity + buying power
+    ("GET",  "/v2/positions"),      # all open positions
+    ("GET",  "/v2/clock"),          # market open/closed
+    ("POST", "/v2/orders"),         # the ONLY write this agent may perform
+)
+# Prefixes, for paths that legitimately carry a symbol segment.
+_ALLOWED_PREFIX = (
+    ("GET", "/v2/positions/"),      # a single position, /v2/positions/AAPL
+    ("GET", "/v2/stocks/"),         # market data (data base)
+    ("GET", "/v2/crypto/"),         # market data (data base)
+)
+
+
+class DisallowedEndpointError(AuthError):
+    """The agent tried to call an Alpaca endpoint outside its allowlist."""
+
+
+def _assert_allowed(method: str, path: str) -> None:
+    base = path.split("?", 1)[0]
+    if (method, base) in _ALLOWED_EXACT:
+        return
+    for m, p in _ALLOWED_PREFIX:
+        if method == m and base.startswith(p) and len(base) > len(p):
+            return
+    raise DisallowedEndpointError(
+        f"{method} {base} is not in the agent's endpoint allowlist. "
+        "This agent may read the account and submit orders; it may not move "
+        "money, change account configuration, or close positions in bulk.")
+
+
 def _request(method: str, path: str, body: dict | None = None, base: str | None = None):
+    _assert_allowed(method, path)
     url = (base or config.ALPACA_BASE) + path
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, headers=_headers(), method=method)
