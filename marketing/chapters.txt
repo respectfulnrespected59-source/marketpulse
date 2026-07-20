@@ -1,0 +1,16 @@
+0:00 It finds a setup it likes - then says no
+0:10 How people actually lose money
+0:43 Everybody sells signals. Nobody sells brakes
+0:56 1 - Propose, don't execute
+1:12 2 - The $100 per-trade ceiling
+1:30 3 - $400/day, kills the death spiral
+1:46 4 - The kill switch + 5 - Signals expire in 30 min
+2:07 6 - It re-checks its own ticker list
+2:24 7 - Slippage bands
+2:40 8 - Three losses and it halts itself
+2:52 9 - Down 5%, everything halts
+3:07 The asymmetry: buys capped, sells never
+3:33 Fail closed: no price, no order
+3:46 The receipts
+3:59 What this is NOT
+4:28 Quantum Melanin Media
