@@ -883,3 +883,16 @@ body {
 .dca-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 @media (max-width: 720px) { .home-grid { grid-template-columns: 1fr; } }
+
+/* ----- Cockpit market read (honest empty state) ------------------------- */
+.hs { border-radius: 12px; padding: 14px 18px; margin: 0 0 16px;
+      border: 1px solid #232a3a; background: #11151f; }
+.hs-head { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+.hs-body { font-size: 13.5px; line-height: 1.5; color: #9aa4b8; }
+.hs-body b { color: #d8dee9; }
+.hs-quiet { border-left: 3px solid #6b7280; }
+.hs-quiet .hs-head { color: #cbd3e1; }
+.hs-live  { border-left: 3px solid #d8a33a; }
+.hs-live .hs-head { color: #e8bf5c; }
+.hs-scan  { border-left: 3px solid #2c3444; color: #7a8397; font-size: 13.5px; }
+@media (max-width: 720px) { .hs { padding: 12px 14px; } }

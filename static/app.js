@@ -810,6 +810,59 @@ function renderHome() {
       `<div class="hc-sub">entry ${fmtPrice(p.entry)} → ${fmtPrice(price)} (${r.netPct >= 0 ? "+" : ""}${r.netPct.toFixed(2)}%)</div>`;
   }
   renderHomePlans();
+  renderHomeState();
+}
+
+/* Honest market read for the cockpit.
+   Most days there is no edge worth paying for. Say so, out loud, with the
+   counts that prove it — an empty board is a finding, not a failure state.
+   Every number here is counted from the same live signals the grids show;
+   nothing is asserted that the tool did not just measure. */
+async function renderHomeState() {
+  const box = $("#homeState");
+  if (!box) return;
+  box.innerHTML = `<div class="hs hs-scan">Reading the board…</div>`;
+  try {
+    const [stocks, crypto] = await Promise.all([
+      fetch("/api/markets?kind=stocks").then((r) => r.json()).catch(() => ({ rows: [] })),
+      fetch("/api/markets?kind=crypto").then((r) => r.json()).catch(() => ({ rows: [] })),
+    ]);
+    const rows = [...(stocks.rows || []), ...(crypto.rows || [])].filter((r) => !r.error);
+    if (!rows.length) {
+      box.innerHTML = `<div class="hs hs-scan">Couldn't read the board just now — the data source is quiet.
+        Nothing to act on until it comes back.</div>`;
+      return;
+    }
+    const label = (r) => ((r.signal || {}).label || "NEUTRAL").toUpperCase();
+    const strongBuy = rows.filter((r) => label(r) === "STRONG BUY").length;
+    const strongSell = rows.filter((r) => label(r) === "STRONG SELL").length;
+    const soft = rows.filter((r) => ["BUY", "SELL"].includes(label(r))).length;
+    const strong = strongBuy + strongSell;
+
+    let cls, head, body;
+    if (strong === 0) {
+      cls = "hs-quiet";
+      head = "Nothing qualifies right now";
+      body = `<b>0 of ${rows.length}</b> names show a strong signal`
+        + (soft ? ` (${soft} weak — the engine does not enter on those)` : "")
+        + `. That's a normal day. Most days there's no edge worth paying for,
+           and sitting out is the trade. The board refreshes on its own.`;
+    } else {
+      cls = "hs-live";
+      head = `${strong} of ${rows.length} names are showing conviction`;
+      const parts = [];
+      if (strongBuy) parts.push(`${strongBuy} strong buy`);
+      if (strongSell) parts.push(`${strongSell} strong sell`);
+      body = `${parts.join(" · ")}${soft ? ` · ${soft} weak (not actionable)` : ""}.
+        Read it yourself before you act — a signal is a lean, never an order.`;
+    }
+    box.innerHTML = `<div class="hs ${cls}">`
+      + `<div class="hs-head">${head}</div>`
+      + `<div class="hs-body">${body}</div></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="hs hs-scan">Board unavailable (${esc(e.message)}).
+      Nothing to act on until it reads clean.</div>`;
+  }
 }
 
 function renderHomePlans() {
