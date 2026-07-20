@@ -12,8 +12,10 @@ TIER = "pro"                # "free" or "pro"
 FREE_SYMBOL_CAP = 6         # assets shown per market in the free build
 UPGRADE_URL = "https://quantummelaninmedia.gumroad.com"  # set to the Pro product link
 
-PRO = {"proof": True, "alerts": True, "unlimited_symbols": True}
-FREE = {"proof": False, "alerts": False, "unlimited_symbols": False}
+PRO = {"proof": True, "alerts": True, "unlimited_symbols": True,
+       "dca": True, "options": True}
+FREE = {"proof": False, "alerts": False, "unlimited_symbols": False,
+        "dca": False, "options": False}
 
 
 def features() -> dict:
