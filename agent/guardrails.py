@@ -162,15 +162,28 @@ def authorize_send(proposal: dict, current_price: float | None = None) -> None:
     It is REQUIRED — omitting it means we cannot bound slippage, so we fail
     closed rather than send blind.
     """
-    check_not_halted()
-    check_symbol_allowed(proposal)
-    check_fresh(proposal)
-    if current_price is None:
-        raise SlippageError(
-            "No live price supplied to authorize_send; refusing to send blind")
-    check_slippage(proposal, current_price)
-    if proposal["side"] == "buy":  # sells reduce exposure; don't spend-cap exits
-        check_spend(Decimal(str(proposal["notional"])))
+    try:
+        check_not_halted()
+        check_symbol_allowed(proposal)
+        check_fresh(proposal)
+        if current_price is None:
+            raise SlippageError(
+                "No live price supplied to authorize_send; refusing to send blind")
+        check_slippage(proposal, current_price)
+        if proposal["side"] == "buy":  # sells reduce exposure; don't spend-cap exits
+            check_spend(Decimal(str(proposal["notional"])))
+    except GuardrailError as exc:
+        # store.audit promises "every decision is logged, success or not" -- and a
+        # refusal IS the decision this agent exists to make. Logging only the
+        # approvals would leave the audit trail describing a system that never
+        # says no. Record which control fired, then re-raise unchanged.
+        store.audit("refused", {"id": proposal.get("id"),
+                                "symbol": proposal.get("symbol"),
+                                "side": proposal.get("side"),
+                                "notional": proposal.get("notional"),
+                                "control": type(exc).__name__,
+                                "reason": str(exc)})
+        raise
     store.audit("authorized", {"id": proposal["id"], "symbol": proposal["symbol"],
                                "side": proposal["side"], "notional": proposal["notional"],
                                "ref_price": proposal.get("ref_price"),
