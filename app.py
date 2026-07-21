@@ -21,11 +21,36 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import datetime
 
-import backtest
 import config
-import dca
 import indicators
-import options
+
+# Pro modules are absent from the FREE buyer pack (see tools/build_buyer_pack.py).
+# Import them defensively so the free build still starts; every route that uses
+# them is gated by _enabled() below, which treats "not installed" as "locked".
+# dca imports backtest, so a missing backtest also yields dca is None.
+try:
+    import backtest
+except ModuleNotFoundError:
+    backtest = None
+try:
+    import dca
+except ModuleNotFoundError:
+    dca = None
+try:
+    import options
+except ModuleNotFoundError:
+    options = None
+
+_INSTALLED = {
+    "proof": backtest is not None,
+    "dca": dca is not None,
+    "options": options is not None,
+}
+
+
+def _enabled(feature: str) -> bool:
+    """True only if the tier grants the feature AND its module shipped."""
+    return bool(config.features().get(feature)) and _INSTALLED.get(feature, True)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -540,7 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, code=502)
 
         if path == "/api/proof":
-            if not config.features()["proof"]:
+            if not _enabled("proof"):
                 return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
                                    "error": "Proof Mode is a Pro feature."}, code=402)
             try:
@@ -577,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, code=502)
 
         if path == "/api/dca":
-            if not config.features()["proof"]:
+            if not _enabled("dca"):
                 return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
                                    "error": "The DCA Wizard is a Pro feature."}, code=402)
             try:
@@ -608,6 +633,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, code=502)
 
         if path == "/api/options":
+            if not _enabled("options"):
+                return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                   "error": "The options engine is a Pro feature."}, code=402)
             try:
                 symbol = (params.get("symbol", [""])[0]).strip()
                 if not symbol:
@@ -658,6 +686,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, code=502)
 
         if path == "/api/probe-scan":
+            if not _enabled("options"):
+                return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                   "error": "Probe scan is a Pro feature."}, code=402)
             try:
                 try:
                     pot = max(50, min(1_000_000, int(float(params.get("pot", ["300"])[0]))))

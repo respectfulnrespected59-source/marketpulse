@@ -51,3 +51,20 @@ agent/HALT
 # OS
 .DS_Store
 Thumbs.db
+
+# Discipline explainer build artifacts (regenerable from bake_/assemble_ scripts)
+marketing/discipline_build/
+marketing/discipline_shots/
+marketing/vo_discipline/
+marketing/_frames/
+marketing/norm_*/
+marketing/cap_*/
+marketing/captions_*/
+marketing/ads_quantus_tess/clips/
+marketing/ads_quantus_tess/norm/
+marketing/ads_quantus_tess/vo/
+marketing/ads_quantus_tess/*.mp4
+marketing/ads_quantus_tess/*.png
+marketing/ads_quantus_tess/*.mp3
+# Office lock files
+~$*
