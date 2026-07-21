@@ -893,6 +893,19 @@ function renderOnboard() {
   });
 }
 
+/* State the refresh cadence plainly instead of leaving "Auto" to mean anything.
+   The numbers are the real ones, not a marketing figure: the view timer is
+   60000ms (see startAuto) and the server caches responses for CACHE_TTL=60s,
+   so a reading can be up to a minute old. If Auto is off, say that too -- a
+   stale board that looks live is worse than one that admits it. */
+function cadenceLine() {
+  const on = !!($("#autoRefresh") || {}).checked;
+  const t = new Date().toLocaleTimeString();
+  return on
+    ? `Checked ${t} · re-reads every 60s · quotes cached up to 60s, so a reading can be a minute old.`
+    : `Checked ${t} · <b>Auto is off</b> — this board will not update until you turn it on or hit refresh.`;
+}
+
 /* Honest market read for the cockpit.
    Most days there is no edge worth paying for. Say so, out loud, with the
    counts that prove it — an empty board is a finding, not a failure state.
@@ -926,7 +939,7 @@ async function renderHomeState() {
       body = `<b>0 of ${rows.length}</b> names show a strong signal`
         + (soft ? ` (${soft} weak — the engine does not enter on those)` : "")
         + `. That's a normal day. Most days there's no edge worth paying for,
-           and sitting out is the trade. The board refreshes on its own.`;
+           and sitting out is the trade.`;
     } else {
       cls = "hs-live";
       head = `${strong} of ${rows.length} names are showing conviction`;
@@ -938,7 +951,8 @@ async function renderHomeState() {
     }
     box.innerHTML = `<div class="hs ${cls}">`
       + `<div class="hs-head">${head}</div>`
-      + `<div class="hs-body">${body}</div></div>`;
+      + `<div class="hs-body">${body}</div>`
+      + `<div class="hs-foot">${cadenceLine()}</div></div>`;
   } catch (e) {
     box.innerHTML = `<div class="hs hs-scan">Board unavailable (${esc(e.message)}).
       Nothing to act on until it reads clean.</div>`;
