@@ -1,20 +1,64 @@
+<div align="center">
+
 # MarketPulse — "MAPLE58"
 
-An **honest options-research dashboard**. It pulls live market data, reads the
-technicals, and walks you through one question: *what's a play I can actually
-afford, and how do I lose small when I'm wrong?*
+**An honest options-research dashboard. Live prices, real signals, no upsell.**
 
-Runs on **your own machine**. No account. No API key. No monthly fee. No data
-leaves your computer.
+<a href="https://marketpulse-22bi.onrender.com/">
+  <img src="docs/img/hero.png" alt="MarketPulse Live tab — snap-to-candle trend lines on a 1-minute NVDA tape" width="820"/>
+</a>
+
+**[▶ Try it live at marketpulse-22bi.onrender.com](https://marketpulse-22bi.onrender.com/)**
+
+![A Quantum Melanin Media tool](https://img.shields.io/badge/A_Quantum_Melanin_Media_tool-D9B061?style=flat-square&labelColor=0a0d12)
+![Live on Render](https://img.shields.io/badge/live_on-Render-46E3B7?style=flat-square&labelColor=0a0d12)
+![Python stdlib · zero pip installs](https://img.shields.io/badge/Python_stdlib-zero_pip_installs-4aa3ff?style=flat-square&labelColor=0a0d12)
+![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm_Noncommercial-8a99ab?style=flat-square&labelColor=0a0d12)
+
+</div>
+
+---
+
+MarketPulse pulls live market data, reads the technicals, and walks you through
+one question: *what's a play I can actually afford, and how do I lose small when
+I'm wrong?*
+
+Two ways to run it:
+
+- **Just use it →** hit **[marketpulse-22bi.onrender.com](https://marketpulse-22bi.onrender.com/)**
+- **Run it locally →** one command, no account, no API key, no data leaves your machine.
 
 > **MAPLE58 = MArket PuLsE.** Brand rule: it will **not** lie to you about
 > getting rich. Most options trades lose — *survival* is the real skill.
 
 ---
 
-## Quick start
+## 🔴 Live Trading Chart *(the new hotness)*
 
-You need **Python 3** installed.
+The **Live** tab is a hand-rolled SVG chart tuned for actually working a trade:
+
+- **1-minute intraday tape** for stocks (Yahoo) and crypto (Coinbase), auto-refreshes every ~8 seconds
+- **Webull-style layout** — right-side price ladder with a floating gold last-price tag, bottom time axis, volume histogram
+- **Snap-to-candle precision pointer** — the cursor magnetically locks to a candle's `HIGH` / `LOW` / `OPEN` / `CLOSE` within ~18 physical pixels. Color-coded reticle tells you which point you're grabbing. Hold `Alt` to bypass.
+- **Draw your own trend lines** — click the target price, then press-and-drag anywhere on the chart to rubber-band a gold trend line to the release point. Both endpoints snap to candle wicks.
+- **Mark potential entries** with a single click; each mark is saved per-symbol in your browser
+- **Edit anything you've drawn** — hover any mark or trend endpoint → cursor becomes a grab hand → drag to move (still snaps). `Alt+click` to delete.
+- **Fullscreen mode** with a smooth View Transitions morph (`⛶` button or `Esc` to exit)
+- **Persistence** — marks and trend lines are stored per-symbol as `(timestamp, price)` in `localStorage`, so switching timeframes doesn't misalign them
+
+<div align="center">
+
+<img src="docs/img/fullscreen.png" alt="MarketPulse fullscreen live chart with crosshair, price ladder, volume histogram, and time axis" width="820"/>
+
+*Fullscreen mode: crosshair + price ladder + volume + time axis, Webull-style.*
+
+</div>
+
+---
+
+## Quick start (run it locally)
+
+You need **Python 3** installed. That's it.
 
 - **Windows:** double-click **`run.bat`**
 - **Mac / Linux:** run **`bash run.sh`**
@@ -26,7 +70,7 @@ To stop it, close the terminal window (or press `Ctrl+C`).
 If `run.bat` flashes open and closes, you don't have Python yet. Install it once:
 
 1. Go to **https://www.python.org/downloads/** and install Python 3.
-2. **Important:** on the first installer screen, check **“Add Python to PATH.”**
+2. **Important:** on the first installer screen, check **"Add Python to PATH."**
 3. Re-run `run.bat`.
 
 That's the only setup. Everything else is built in — no `pip install`, no extra
@@ -67,11 +111,20 @@ IV + Greeks in per-contract dollars.
 ## Where the data comes from
 - **Options chains, IV & Greeks:** CBOE free delayed quotes (no key).
 - **Stocks:** Yahoo Finance chart API (no key).
-- **Crypto:** CoinGecko public API (no key).
+- **Crypto:** CoinGecko public API + Coinbase public candles (no key).
 
 The included Python server fetches this for you (so the browser never hits a CORS
-wall) and caches responses to stay within free limits. Data is delayed (~15 min)
-— this is a research tool, not a live trading terminal.
+wall) and caches responses to stay within free limits. Data is delayed (~15 min
+for options) — this is a research tool, not a live trading terminal.
+
+---
+
+## Under the hood
+
+- **Backend:** pure Python **standard library** HTTP server (`app.py`). No Flask, no requests, no `pip install`. Just Python 3.
+- **Frontend:** vanilla JavaScript + hand-rolled SVG charts. No React, no chart library. Fast to load, easy to hack.
+- **State:** browser `localStorage` — your Pot, your Live pins, your marks and trend lines never leave your machine.
+- **Deploy:** auto-deploys from `main` to Render on push.
 
 ---
 
@@ -95,4 +148,8 @@ fast and liquidated.
 
 ---
 
-*A Quantum Melanin Media tool.*
+<div align="center">
+
+*A [**Quantum Melanin Media**](https://marketpulse-22bi.onrender.com/) tool.*
+
+</div>
