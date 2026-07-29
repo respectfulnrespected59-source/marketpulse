@@ -52,6 +52,13 @@ agent/HALT
 .DS_Store
 Thumbs.db
 
+# Local dev-server logs (from running app.py locally)
+.mp.out
+.mp.err
+
+# Local screenshot / test artifacts (Playwright + manual)
+.shots/
+
 # Discipline explainer build artifacts (regenerable from bake_/assemble_ scripts)
 marketing/discipline_build/
 marketing/discipline_shots/
