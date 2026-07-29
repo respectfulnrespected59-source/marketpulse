@@ -256,7 +256,23 @@
         <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span><span class="ltc-tf" id="ltcTf"></span></div>
         <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span></div>
       </div>
-      <div class="ltc-chart-wrap"><svg id="liveTradeChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg></div>
+      <div class="ltc-toolbar" id="ltcToolbar">
+        <div class="ltc-tools" role="group" aria-label="Chart tools">
+          <button type="button" class="ltc-tool" data-tool="none" title="Select / no tool">✥</button>
+          <button type="button" class="ltc-tool" data-tool="mark" title="Click chart to mark an entry point">◉ Mark entry</button>
+          <button type="button" class="ltc-tool" data-tool="line" title="Click two points to draw a trend line">╱ Trend line</button>
+        </div>
+        <div class="ltc-tools ltc-actions">
+          <button type="button" class="ltc-tool ghost" id="ltcUndo" title="Undo last mark or line">↶ Undo</button>
+          <button type="button" class="ltc-tool ghost" id="ltcClear" title="Clear all marks & lines for this symbol">✕ Clear</button>
+          <button type="button" class="ltc-tool ghost" id="ltcFullBtn" title="Fullscreen chart">⛶ Fullscreen</button>
+        </div>
+      </div>
+      <div class="ltc-chart-wrap" id="liveTradeWrap">
+        <svg id="liveTradeChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg>
+        <div class="ltc-hint" id="ltcHint" hidden></div>
+        <div class="ltc-cursor-readout" id="ltcCursor" hidden></div>
+      </div>
       <div class="ltc-foot" id="ltcFoot">Live candles · gold line = your entry · refreshes ~20s · educational, not advice</div>
     </div>
 

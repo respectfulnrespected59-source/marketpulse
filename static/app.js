@@ -370,6 +370,7 @@ function setView(v) {
   if (isHome) { renderHome(); return; }
   if (isLive) {
     ensureLiveQf();
+    initLiveChartInteractions();
     renderLive();
     loadLiveTradeChart();
     startChartPoll();
@@ -1244,14 +1245,72 @@ function renderLiveChart(p, winCls) {
 
 /* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
 let liveChartTimer = null;
-let liveTf = "wide";   // "day" = tight intraday, "wide" = zoomed out
-const TF_LABELS = { stock: { day: "1D", wide: "5D" }, crypto: { day: "1D", wide: "1W" } };
+let liveTf = "day";
+const TF_ORDER = ["1m", "day", "wide"];
+const TF_LABELS = {
+  stock: { "1m": "1m", day: "1D", wide: "5D" },
+  crypto: { "1m": "1m", day: "1D", wide: "1W" },
+};
+const TF_GRAIN = {
+  stock: { "1m": "1m bars", day: "5m bars", wide: "15m bars" },
+  crypto: { "1m": "1m bars", day: "5m bars", wide: "1h bars" },
+};
+// 1m tape needs a much faster poll to feel alive; wider zooms don't.
+const TF_POLL_MS = { "1m": 8000, day: 20000, wide: 30000 };
+
+// In-memory snapshot of the last loaded intraday payload — click handlers use
+// it to convert pixel coords back into (timestamp, price) space.
+let liveLast = { data: null, kind: "stock", ok: false };
+// Chart interaction mode: "none" | "mark" | "line".
+// Trend line UX: single click drops a pending gold anchor at the target price
+// (visible ring + dashed price rule). Then press-and-drag ANYWHERE on the
+// chart — no timing window, no double-click — rubber-bands a gold line from
+// the anchor to the cursor; release commits it. Plain click without dragging
+// just relocates the anchor.
+let ltcTool = "none";
+let trendAnchor = null;        // {ts, price, x, y} — target price, ephemeral
+let trendDragging = false;
+let trendPreview = null;       // {ax, ay, bx, by} for live rubber-band
+let dragState = null;          // {startX, startY, moved} — press-and-drag tracker
+let suppressNextClick = false; // stop the drag's release from committing an anchor
+let _rafDrag = 0;
+const DRAG_THRESHOLD_PX = 4;   // how far the cursor must travel to be a "drag"
+
+// Precision + edit state
+let altHeld = false;           // hold Alt to bypass snap
+let editState = null;          // {kind: "mark"|"lineA"|"lineB", idx, sym} being edited
+let editPreview = null;        // {ts, price} live-follows the cursor during edit
+const SNAP_PHYS_PX = 18;       // snap radius in *screen* pixels (feels the same at any zoom)
+const HIT_PHYS_PX = 12;        // click hit radius in *screen* pixels
+
+// Per-symbol persistence for user-drawn marks & trend lines. Timestamps are
+// unix-seconds so switching timeframes still lines them up on the tape.
+function _ltcKeys(sym) {
+  const k = String(sym || "").toUpperCase();
+  return { marks: `mp_marks_${k}`, lines: `mp_lines_${k}` };
+}
+function _readArr(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } }
+function _writeArr(key, arr) { try { localStorage.setItem(key, JSON.stringify(arr)); } catch {} }
+function getUserMarks(sym) { return _readArr(_ltcKeys(sym).marks); }
+function getUserLines(sym) { return _readArr(_ltcKeys(sym).lines); }
+function addUserMark(sym, m) { const k = _ltcKeys(sym).marks; const a = _readArr(k); a.push(m); _writeArr(k, a); }
+function addUserLine(sym, l) { const k = _ltcKeys(sym).lines; const a = _readArr(k); a.push(l); _writeArr(k, a); }
+function popUserLast(sym) {
+  const k = _ltcKeys(sym); const m = _readArr(k.marks), l = _readArr(k.lines);
+  // Undo whichever bucket was written most recently, using the trailing `t`.
+  const lastM = m.length ? m[m.length - 1].t || 0 : -1;
+  const lastL = l.length ? l[l.length - 1].t || 0 : -1;
+  if (lastL >= lastM && l.length) { l.pop(); _writeArr(k.lines, l); return "line"; }
+  if (m.length) { m.pop(); _writeArr(k.marks, m); return "mark"; }
+  return null;
+}
+function clearUserAll(sym) { const k = _ltcKeys(sym); _writeArr(k.marks, []); _writeArr(k.lines, []); }
 
 function renderTfButtons(kind) {
   const box = $("#ltcTf");
   if (!box) return;
   const labels = TF_LABELS[kind === "crypto" ? "crypto" : "stock"];
-  box.innerHTML = ["day", "wide"].map((tf) =>
+  box.innerHTML = TF_ORDER.map((tf) =>
     `<button type="button" data-tf="${tf}" class="${tf === liveTf ? "is-active" : ""}">${labels[tf]}</button>`
   ).join("");
   box.querySelectorAll("button").forEach((b) =>
@@ -1259,6 +1318,7 @@ function renderTfButtons(kind) {
       if (liveTf === b.dataset.tf) return;
       liveTf = b.dataset.tf;
       loadLiveTradeChart();
+      startChartPoll();                       // reset cadence for new tf
     }));
 }
 
@@ -1267,7 +1327,7 @@ function stopChartPoll() {
 }
 function startChartPoll() {
   stopChartPoll();
-  liveChartTimer = setInterval(loadLiveTradeChart, 20000);
+  liveChartTimer = setInterval(loadLiveTradeChart, TF_POLL_MS[liveTf] || 20000);
 }
 
 async function loadLiveTradeChart() {
@@ -1284,34 +1344,87 @@ async function loadLiveTradeChart() {
 function renderLiveTradeChart(d, kind) {
   const svg = $("#liveTradeChart");
   const ohlc = (d && d.ohlc) || [];
+  const tsArr = (d && d.ts) || [];
+  const volArr = (d && d.volume) || [];
   $("#ltcSym").textContent = (d && d.symbol) || "—";
-  const grain = kind === "crypto"
-    ? (liveTf === "day" ? "5m" : "1h")
-    : (liveTf === "day" ? "5m" : "15m");
-  $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + grain;
+  const grainMap = TF_GRAIN[kind === "crypto" ? "crypto" : "stock"];
+  $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + (grainMap[liveTf] || "");
   renderTfButtons(kind);
+  liveLast = { data: d, kind, ok: ohlc.length >= 2 };
   if (ohlc.length < 2) {
     svg.innerHTML = "";
     $("#ltcLast").textContent = "—";
     $("#ltcChg").textContent = "";
     $("#ltcFoot").textContent = kind === "crypto"
-      ? "No intraday candles for this coin (try BTC, ETH, SOL…)."
-      : "No intraday candles right now — market may be closed.";
+      ? (liveTf === "1m" ? "No 1m tape for this coin — try BTC, ETH, SOL…" : "No intraday candles for this coin (try BTC, ETH, SOL…).")
+      : (liveTf === "1m" ? "No 1m tape right now — Yahoo only serves 1m during the current session." : "No intraday candles right now — market may be closed.");
     return;
   }
-  const W = 1000, H = 300, pad = 12;
-  const c = candlesSVG(ohlc, W, H, pad);
-  const clampY = (v) => Math.max(pad, Math.min(H - pad, c.Y(v)));
+
+  // Webull-style layout: candles left, price ladder right, time axis below,
+  // volume pane between them.
+  const W = 1000, H = 360;
+  const padL = 8, padT = 10;
+  const AXIS_R = 58;   // right price ladder width
+  const AXIS_B = 22;   // bottom time-label strip height
+  const VOL_H = 46;    // volume histogram height
+  const VOL_GAP = 4;
+  const priceRect = {
+    x: padL, y: padT,
+    w: W - padL - AXIS_R,
+    h: H - padT - AXIS_B - VOL_H - VOL_GAP,
+  };
+  const volRect = { x: padL, y: priceRect.y + priceRect.h + VOL_GAP, w: priceRect.w, h: VOL_H };
+  const timeAxisTop = volRect.y + volRect.h;
+
+  const c = candlesInRect(ohlc, priceRect);
+  const clampY = (v) => Math.max(priceRect.y, Math.min(priceRect.y + priceRect.h, c.Y(v)));
   const last = ohlc[ohlc.length - 1][3];
-  let overlay =
-    `<line x1="${pad}" y1="${clampY(last).toFixed(1)}" x2="${W - pad}" y2="${clampY(last).toFixed(1)}"
-      stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 3" opacity="0.55"/>`;
+  liveLast.geom = {
+    W, H, pad: padL, X: c.X, Y: c.Y, n: ohlc.length, ohlc, ts: tsArr,
+    priceRect, volRect, timeAxisTop, axisR: AXIS_R,
+    priceMin: c.min, priceMax: c.max,
+  };
+
+  let base = "";
+  base += _priceGridSVG(priceRect, c.min, c.max);
+  base += c.markup;
+  base += _volumeSVG(volRect, ohlc, volArr);
+  base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop);
+  base += _priceAxisSVG(priceRect, c.min, c.max, last, AXIS_R, W);
+
+  // Overlays live on top of the chart & axes.
+  let overlay = "";
+  overlay += `<line x1="${priceRect.x}" y1="${clampY(last).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(last).toFixed(1)}"
+    stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>`;
   const p = getLive();
   if (p && p.sym && d.symbol && p.sym.toUpperCase() === String(d.symbol).toUpperCase()) {
-    overlay += `<line x1="${pad}" y1="${clampY(p.entry).toFixed(1)}" x2="${W - pad}" y2="${clampY(p.entry).toFixed(1)}"
-      stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="6 4"><title>your entry ${p.entry}</title></line>`;
+    overlay += `<line x1="${priceRect.x}" y1="${clampY(p.entry).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(p.entry).toFixed(1)}"
+      stroke="var(--gold)" stroke-width="1.8" stroke-dasharray="6 4" filter="url(#neonGold)"><title>your entry ${p.entry}</title></line>`;
   }
-  svg.innerHTML = c.markup + overlay;
+  overlay += _userOverlaySVG(d.symbol, liveLast.geom, clampY);
+
+  if (trendAnchor) {
+    const a = _tsToXY(liveLast.geom, trendAnchor.ts, trendAnchor.price);
+    if (a) {
+      const ay = clampY(trendAnchor.price);
+      overlay += `<line x1="${priceRect.x}" y1="${ay.toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${ay.toFixed(1)}"
+        stroke="var(--gold)" stroke-width="1" stroke-dasharray="2 4" opacity="0.55"/>`;
+      overlay += `<circle cx="${a.x.toFixed(1)}" cy="${ay.toFixed(1)}" r="6.5"
+        fill="var(--gold)" fill-opacity="0.35" stroke="var(--gold)" stroke-width="2"
+        filter="url(#neonGold)"><title>target ${trendAnchor.price} — press &amp; drag anywhere to draw the trend</title></circle>`;
+    }
+  }
+  if (trendPreview) {
+    overlay += `<line x1="${trendPreview.ax.toFixed(1)}" y1="${trendPreview.ay.toFixed(1)}"
+      x2="${trendPreview.bx.toFixed(1)}" y2="${trendPreview.by.toFixed(1)}"
+      stroke="var(--gold)" stroke-width="2" stroke-dasharray="6 4" opacity="0.95"
+      filter="url(#neonGold)"/>`;
+  }
+
+  // ltcCrosshair is updated separately in _drawCrosshair — no full redraw on hover.
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = _neonDefsSVG() + `<g id="ltcBase">${base}${overlay}</g><g id="ltcCrosshair" pointer-events="none"></g>`;
 
   const first = ohlc[0][3];
   const chg = first ? (last - first) / first * 100 : 0;
@@ -1319,7 +1432,630 @@ function renderLiveTradeChart(d, kind) {
   const chgEl = $("#ltcChg");
   chgEl.textContent = (chg >= 0 ? "▲ " : "▼ ") + Math.abs(chg).toFixed(2) + "%";
   chgEl.className = "ltc-chg " + (chg >= 0 ? "up" : "down");
-  $("#ltcFoot").textContent = "Live candles · gold line = your entry · refreshes ~20s · educational, not advice";
+  const cadence = TF_POLL_MS[liveTf] / 1000;
+  $("#ltcFoot").textContent = `Live candles · gold line = your entry · refreshes ~${cadence}s · Mark drops entries, Trend line = click target + drag · educational, not advice`;
+}
+
+/* ---- Webull-style chart primitives ---- */
+
+function candlesInRect(ohlc, rect) {
+  const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
+  const min = Math.min(...lows), max = Math.max(...highs), span = max - min || 1;
+  const n = ohlc.length;
+  const X = (i) => rect.x + (n === 1 ? 0.5 : i / (n - 1)) * rect.w;
+  const Y = (v) => rect.y + (1 - (v - min) / span) * rect.h;
+  const slot = rect.w / n;
+  const bw = Math.max(1, Math.min(slot * 0.7, 9));
+  const wick = Math.max(0.6, Math.min(bw * 0.28, 2));
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const [o, h, l, c] = ohlc[i];
+    const up = c >= o;
+    const col = up ? "var(--buy)" : "var(--sell)";
+    const x = X(i);
+    const yH = Y(h), yL = Y(l);
+    const yO = Y(o), yC = Y(c);
+    const top = Math.min(yO, yC), bot = Math.max(yO, yC);
+    const bodyH = Math.max(1, bot - top);
+    out += `<line x1="${x.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="${wick.toFixed(2)}"/>`;
+    out += `<rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${col}" rx="0.5"/>`;
+  }
+  return { markup: out, X, Y, min, max };
+}
+
+function _fmtAxisPrice(v) {
+  if (!isFinite(v)) return "";
+  if (Math.abs(v) >= 10000) return v.toFixed(0);
+  if (Math.abs(v) >= 100) return v.toFixed(1);
+  if (Math.abs(v) >= 1) return v.toFixed(2);
+  return v.toFixed(4);
+}
+
+function _priceGridSVG(rect, min, max) {
+  const steps = 5;
+  let out = "";
+  for (let i = 0; i <= steps; i++) {
+    const y = rect.y + rect.h * (i / steps);
+    out += `<line x1="${rect.x}" y1="${y.toFixed(1)}" x2="${rect.x + rect.w}" y2="${y.toFixed(1)}"
+      stroke="rgba(120,150,190,0.06)" stroke-width="1"/>`;
+  }
+  return out;
+}
+
+function _priceAxisSVG(rect, min, max, last, axisRW, W) {
+  const steps = 5;
+  const axisX = rect.x + rect.w;
+  const span = max - min || 1;
+  let out = "";
+  for (let i = 0; i <= steps; i++) {
+    const v = min + span * (1 - i / steps);   // top-to-bottom (highest first)
+    const y = rect.y + rect.h * (i / steps);
+    out += `<text x="${axisX + 6}" y="${(y + 3).toFixed(1)}" fill="var(--text-dim)"
+      font-family="var(--mono)" font-size="10.5" font-weight="600" letter-spacing="0.01em">${_fmtAxisPrice(v)}</text>`;
+  }
+  // Floating last-price tag — Webull's signature.
+  const ly = rect.y + (1 - (last - min) / span) * rect.h;
+  const y = Math.max(rect.y + 8, Math.min(rect.y + rect.h - 8, ly));
+  out += `<rect x="${(axisX + 2).toFixed(1)}" y="${(y - 8).toFixed(1)}" width="${axisRW - 6}" height="16" rx="3"
+    fill="var(--gold)" opacity="0.94" filter="url(#neonGold)"/>`;
+  out += `<text x="${(axisX + axisRW / 2 - 1).toFixed(1)}" y="${(y + 3).toFixed(1)}" fill="#0a0d12"
+    font-family="var(--mono)" font-size="10.5" font-weight="800" text-anchor="middle">${_fmtAxisPrice(last)}</text>`;
+  return out;
+}
+
+function _fmtAxisTime(dt, tf) {
+  if (tf === "1m" || tf === "day") {
+    return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+  return dt.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function _timeAxisSVG(rect, ohlc, tsArr, tf, kind, top) {
+  const n = ohlc.length;
+  if (!tsArr || tsArr.length !== n) return "";
+  const steps = 5;
+  let out = `<line x1="${rect.x}" y1="${top.toFixed(1)}" x2="${rect.x + rect.w}" y2="${top.toFixed(1)}"
+    stroke="rgba(120,150,190,0.14)" stroke-width="1"/>`;
+  for (let i = 0; i <= steps; i++) {
+    const idx = Math.round((n - 1) * i / steps);
+    const ts = tsArr[idx];
+    if (!ts) continue;
+    const x = rect.x + (n === 1 ? 0.5 : idx / (n - 1)) * rect.w;
+    const label = _fmtAxisTime(new Date(ts * 1000), tf);
+    out += `<line x1="${x.toFixed(1)}" y1="${top.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(top + 4).toFixed(1)}"
+      stroke="var(--text-dim)" stroke-width="1"/>`;
+    out += `<text x="${x.toFixed(1)}" y="${(top + 14).toFixed(1)}" fill="var(--text-dim)"
+      font-family="var(--mono)" font-size="10.5" font-weight="600" text-anchor="middle">${label}</text>`;
+  }
+  return out;
+}
+
+function _volumeSVG(rect, ohlc, volume) {
+  if (!volume || volume.length !== ohlc.length || volume.every((v) => !v)) return "";
+  const max = Math.max(...volume) || 1;
+  const n = volume.length;
+  const slot = rect.w / n;
+  const bw = Math.max(1, Math.min(slot * 0.7, 9));
+  let out = `<line x1="${rect.x}" y1="${rect.y.toFixed(1)}" x2="${rect.x + rect.w}" y2="${rect.y.toFixed(1)}"
+    stroke="rgba(120,150,190,0.10)" stroke-width="1" stroke-dasharray="2 4"/>`;
+  for (let i = 0; i < n; i++) {
+    const h = (volume[i] / max) * rect.h;
+    const x = rect.x + (n === 1 ? 0.5 : i / (n - 1)) * rect.w;
+    const y = rect.y + rect.h - h;
+    const [o, , , c] = ohlc[i];
+    const col = c >= o ? "rgba(47,209,128,0.42)" : "rgba(255,93,108,0.42)";
+    out += `<rect x="${(x - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+  }
+  out += `<text x="${(rect.x + 4).toFixed(1)}" y="${(rect.y + 11).toFixed(1)}"
+    fill="var(--text-faint)" font-family="var(--mono)" font-size="9" letter-spacing="0.14em">VOL</text>`;
+  return out;
+}
+
+function _drawCrosshair(x, y) {
+  const g = liveLast.geom; if (!g) return _clearCrosshair();
+  const r = g.priceRect;
+  if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) return _clearCrosshair();
+  const el = $("#ltcCrosshair"); if (!el) return;
+
+  // Snap the crosshair to the nearest OHLC point unless Alt bypasses it.
+  const snap = altHeld ? null : _getSnapCandidate(x, y);
+  const cx = snap ? snap.x : x;
+  const cy = snap ? snap.y : y;
+  const p = _pixelToTsPrice(cx, cy);
+  if (snap) { p.price = snap.price; p.ts = snap.ts; }
+  const priceLabelX = r.x + r.w;
+  const when = p && p.ts ? _fmtAxisTime(new Date(p.ts * 1000), liveTf) : "";
+  const priceStr = p ? _fmtAxisPrice(p.price) : "";
+  const snapCol = snap ? snap.color : "var(--gold)";
+  const snapDot = snap
+    ? `<rect x="${(cx - 4).toFixed(1)}" y="${(cy - 4).toFixed(1)}" width="8" height="8"
+        transform="rotate(45 ${cx.toFixed(1)} ${cy.toFixed(1)})"
+        fill="${snap.color}" stroke="rgba(10,13,18,0.9)" stroke-width="1"/>
+       <text x="${(cx + 8).toFixed(1)}" y="${(cy - 8).toFixed(1)}" fill="${snap.color}"
+        font-family="var(--mono)" font-size="9" font-weight="700" letter-spacing="0.08em">${snap.kind.toUpperCase()}</text>`
+    : "";
+
+  // 1px physical-pixel lines regardless of chart size — sharper reads.
+  const strokeW = 1 / (g.pxPerSvgY || 1);
+  const lineCol = snap ? snapCol : "rgba(217,176,97,0.65)";
+  el.innerHTML = `
+    <line x1="${r.x}" y1="${cy.toFixed(2)}" x2="${(r.x + r.w).toFixed(2)}" y2="${cy.toFixed(2)}"
+      stroke="${lineCol}" stroke-width="${strokeW.toFixed(2)}" stroke-dasharray="4 4" shape-rendering="crispEdges"/>
+    <line x1="${cx.toFixed(2)}" y1="${r.y}" x2="${cx.toFixed(2)}" y2="${(r.y + r.h).toFixed(2)}"
+      stroke="${lineCol}" stroke-width="${strokeW.toFixed(2)}" stroke-dasharray="4 4" shape-rendering="crispEdges"/>
+    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="1.4" fill="${snap ? snapCol : "var(--gold)"}" opacity="0.95"/>
+    <rect x="${(priceLabelX + 2).toFixed(1)}" y="${(cy - 8).toFixed(1)}"
+      width="${g.axisR - 6}" height="16" rx="3"
+      fill="rgba(10,13,18,0.96)" stroke="${snapCol}" stroke-width="1"/>
+    <text x="${(priceLabelX + g.axisR / 2 - 1).toFixed(1)}" y="${(cy + 3).toFixed(1)}"
+      fill="${snapCol}" font-family="var(--mono)" font-size="10.5" font-weight="800" text-anchor="middle">${priceStr}</text>
+    <rect x="${(cx - 28).toFixed(1)}" y="${(g.timeAxisTop + 2).toFixed(1)}"
+      width="56" height="16" rx="3" fill="rgba(10,13,18,0.96)" stroke="${snapCol}" stroke-width="1"/>
+    <text x="${cx.toFixed(1)}" y="${(g.timeAxisTop + 13).toFixed(1)}"
+      fill="${snapCol}" font-family="var(--mono)" font-size="10" font-weight="700" text-anchor="middle">${when}</text>
+    ${snapDot}
+  `;
+}
+
+function _clearCrosshair() {
+  const el = $("#ltcCrosshair"); if (el) el.innerHTML = "";
+}
+
+/* ---- Precision snap to candle OHLC ---- */
+
+// Return the nearest {high, low, open, close} point on candles near the
+// cursor, or null if nothing is within SNAP_PHYS_PX *screen pixels*. Checks
+// the nearest candle and its two neighbors so snap kicks in even when the
+// cursor is between wicks. Colors follow the semantic role of the point so
+// the user can eyeball which they're grabbing.
+function _getSnapCandidate(x, y) {
+  const g = liveLast.geom;
+  if (!g || !g.ohlc || !g.ohlc.length) return null;
+  const scale = g.pxPerSvgX && g.pxPerSvgY;
+  // Convert the physical-pixel threshold back to SVG units on each axis.
+  const thX = SNAP_PHYS_PX / (g.pxPerSvgX || 1);
+  const thY = SNAP_PHYS_PX / (g.pxPerSvgY || 1);
+  const r = g.priceRect;
+  const relX = Math.max(0, Math.min(1, (x - r.x) / r.w));
+  const nearest = Math.max(0, Math.min(g.n - 1, Math.round(relX * (g.n - 1))));
+  const indices = [nearest - 1, nearest, nearest + 1].filter((i) => i >= 0 && i < g.n);
+  let best = null, bestD = Infinity;
+  for (const idx of indices) {
+    const cx = g.X(idx);
+    const [o, h, l, c] = g.ohlc[idx];
+    const opts = [
+      { price: h, kind: "high",  color: "var(--buy)"  },
+      { price: l, kind: "low",   color: "var(--sell)" },
+      { price: o, kind: "open",  color: "var(--gold)" },
+      { price: c, kind: "close", color: "var(--gold)" },
+    ];
+    for (const opt of opts) {
+      const py = g.Y(opt.price);
+      // Normalize distance to physical pixels so 1px in X and 1px in Y count equally.
+      const dxPx = (cx - x) * (g.pxPerSvgX || 1);
+      const dyPx = (py - y) * (g.pxPerSvgY || 1);
+      const d = Math.hypot(dxPx, dyPx);
+      if (d < bestD) { bestD = d; best = { ...opt, x: cx, y: py, idx, ts: (g.ts && g.ts[idx]) || 0 }; }
+    }
+  }
+  if (bestD > SNAP_PHYS_PX) return null;
+  return best;
+}
+
+/* ---- Hit-testing existing marks + trend-line endpoints ---- */
+
+function _hitTestMarker(x, y) {
+  const g = liveLast.geom;
+  const sym = liveLast.data && liveLast.data.symbol;
+  if (!g || !sym) return null;
+  const px = g.pxPerSvgX || 1, py = g.pxPerSvgY || 1;
+  const inRange = (dx, dy) => Math.hypot(dx * px, dy * py) <= HIT_PHYS_PX;
+  const marks = getUserMarks(sym);
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const m = marks[i];
+    const pt = _tsToXY(g, m.ts, m.price);
+    if (!pt) continue;
+    if (inRange(pt.x - x, g.Y(m.price) - y)) return { kind: "mark", idx: i, mark: m };
+  }
+  const lines = getUserLines(sym);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    const a = _tsToXY(g, l.a && l.a.ts, l.a && l.a.price);
+    const b = _tsToXY(g, l.b && l.b.ts, l.b && l.b.price);
+    if (a && inRange(a.x - x, g.Y(l.a.price) - y)) return { kind: "lineA", idx: i, line: l };
+    if (b && inRange(b.x - x, g.Y(l.b.price) - y)) return { kind: "lineB", idx: i, line: l };
+  }
+  return null;
+}
+
+function _deleteHit(hit, sym) {
+  const k = _ltcKeys(sym);
+  if (hit.kind === "mark") {
+    const marks = getUserMarks(sym);
+    marks.splice(hit.idx, 1);
+    _writeArr(k.marks, marks);
+  } else {
+    const lines = getUserLines(sym);
+    lines.splice(hit.idx, 1);
+    _writeArr(k.lines, lines);
+  }
+  if (typeof toast === "function") toast("Deleted");
+}
+
+function _commitEdit() {
+  if (!editState || !editPreview) return;
+  const sym = editState.sym;
+  const k = _ltcKeys(sym);
+  if (editState.kind === "mark") {
+    const marks = getUserMarks(sym);
+    if (marks[editState.idx]) {
+      marks[editState.idx] = { ...marks[editState.idx], ts: editPreview.ts, price: editPreview.price };
+      _writeArr(k.marks, marks);
+    }
+  } else {
+    const end = editState.kind === "lineA" ? "a" : "b";
+    const lines = getUserLines(sym);
+    if (lines[editState.idx]) {
+      lines[editState.idx] = { ...lines[editState.idx], [end]: { ts: editPreview.ts, price: editPreview.price } };
+      _writeArr(k.lines, lines);
+    }
+  }
+}
+
+/* ---- Neon defs, grid, and user overlays for the live chart ---- */
+
+function _neonDefsSVG() {
+  return `<defs>
+    <filter id="neonGold" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="neonBuy" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="neonSell" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>`;
+}
+
+function _gridSVG(W, H, pad, ohlc) {
+  const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
+  const min = Math.min(...lows), max = Math.max(...highs);
+  const step = (max - min) / 4 || 1;
+  let g = "";
+  for (let i = 1; i < 4; i++) {
+    const v = min + step * i;
+    const y = pad + (1 - (v - min) / (max - min || 1)) * (H - pad * 2);
+    g += `<line x1="${pad}" y1="${y.toFixed(1)}" x2="${W - pad}" y2="${y.toFixed(1)}"
+      stroke="rgba(120,150,190,0.08)" stroke-width="1"/>`;
+  }
+  return g;
+}
+
+// Convert a stored (ts, price) point to (x, y) using current geometry. Falls
+// back to first/last candle when the ts is outside the visible tape.
+function _tsToXY(geom, ts, price) {
+  if (!geom) return null;
+  const { X, Y, ts: tsArr, n } = geom;
+  let idx = 0;
+  if (tsArr && tsArr.length === n && ts) {
+    // Nearest-candle by unix seconds.
+    let bestD = Infinity;
+    for (let i = 0; i < tsArr.length; i++) {
+      const d = Math.abs(tsArr[i] - ts);
+      if (d < bestD) { bestD = d; idx = i; }
+    }
+  }
+  return { x: X(idx), y: Y(price), idx };
+}
+
+function _userOverlaySVG(symbol, geom, clampY) {
+  const marks = getUserMarks(symbol);
+  const lines = getUserLines(symbol);
+  const r = geom.priceRect || { x: geom.pad, y: 0, w: geom.W - geom.pad * 2, h: geom.H };
+  const isEditing = editState && editState.sym === symbol && editPreview;
+  let out = "";
+  for (let i = 0; i < lines.length; i++) {
+    let l = lines[i];
+    if (isEditing && editState.idx === i) {
+      if (editState.kind === "lineA") l = { ...l, a: { ...l.a, ts: editPreview.ts, price: editPreview.price } };
+      if (editState.kind === "lineB") l = { ...l, b: { ...l.b, ts: editPreview.ts, price: editPreview.price } };
+    }
+    const a = _tsToXY(geom, l.a && l.a.ts, l.a && l.a.price);
+    const b = _tsToXY(geom, l.b && l.b.ts, l.b && l.b.price);
+    if (!a || !b) continue;
+    const col = l.color || "var(--gold)";
+    out += `<line x1="${a.x.toFixed(1)}" y1="${clampY(l.a.price).toFixed(1)}"
+      x2="${b.x.toFixed(1)}" y2="${clampY(l.b.price).toFixed(1)}"
+      stroke="${col}" stroke-width="1.6" opacity="0.9" filter="url(#neonGold)"/>`;
+    // Endpoint handles — visible + hit-testable.
+    const ax = a.x, ay = clampY(l.a.price), bx = b.x, by = clampY(l.b.price);
+    const editingA = isEditing && editState.kind === "lineA" && editState.idx === i;
+    const editingB = isEditing && editState.kind === "lineB" && editState.idx === i;
+    out += `<circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${editingA ? 5 : 3.5}" fill="${col}" fill-opacity="${editingA ? 0.9 : 0.65}" stroke="var(--bg)" stroke-width="1"/>`;
+    out += `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${editingB ? 5 : 3.5}" fill="${col}" fill-opacity="${editingB ? 0.9 : 0.65}" stroke="var(--bg)" stroke-width="1"/>`;
+  }
+  for (let i = 0; i < marks.length; i++) {
+    let m = marks[i];
+    if (isEditing && editState.kind === "mark" && editState.idx === i) {
+      m = { ...m, ts: editPreview.ts, price: editPreview.price };
+    }
+    const p = _tsToXY(geom, m.ts, m.price);
+    if (!p) continue;
+    const y = clampY(m.price);
+    const col = m.dir === "put" || m.dir === "short" ? "var(--sell)"
+              : m.dir === "call" || m.dir === "long" ? "var(--buy)"
+              : "var(--gold)";
+    const filt = col.includes("sell") ? "neonSell" : col.includes("buy") ? "neonBuy" : "neonGold";
+    const editingMe = isEditing && editState.kind === "mark" && editState.idx === i;
+    out += `<line x1="${r.x}" y1="${y.toFixed(1)}" x2="${(r.x + r.w).toFixed(1)}" y2="${y.toFixed(1)}"
+      stroke="${col}" stroke-width="1" stroke-dasharray="2 5" opacity="0.35"/>`;
+    out += `<circle cx="${p.x.toFixed(1)}" cy="${y.toFixed(1)}" r="${editingMe ? 7 : 5.5}" fill="${editingMe ? col : "none"}" fill-opacity="${editingMe ? 0.4 : 1}"
+      stroke="${col}" stroke-width="${editingMe ? 2.8 : 2.2}" filter="url(#${filt})">
+      <title>${m.note || (m.dir || "mark") + " @ " + m.price} — drag to move, Alt-click to delete</title></circle>`;
+  }
+  return out;
+}
+
+/* ---- Chart interaction: click to mark / draw / hover crosshair / fullscreen ---- */
+
+function _svgEventToChart(evt) {
+  const svg = $("#liveTradeChart");
+  const rect = svg.getBoundingClientRect();
+  // Use the SVG's current viewBox — it was resized when we moved to the
+  // Webull layout (1000×360), so a hardcoded height throws Y off by 20%.
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const W = (vb && vb.width) || 1000;
+  const H = (vb && vb.height) || 360;
+  const x = ((evt.clientX - rect.left) / rect.width) * W;
+  const y = ((evt.clientY - rect.top) / rect.height) * H;
+  return { x, y, W, H, pxPerSvgX: rect.width / W, pxPerSvgY: rect.height / H };
+}
+
+function _pixelToTsPrice(x, y) {
+  const g = liveLast.geom;
+  if (!g) return null;
+  const r = g.priceRect || { x: g.pad, y: g.pad, w: g.W - g.pad * 2, h: g.H - g.pad * 2 };
+  const t = Math.max(0, Math.min(1, (x - r.x) / r.w));
+  const idx = Math.round(t * (g.n - 1));
+  const ts = (g.ts && g.ts[idx]) || Math.floor(Date.now() / 1000);
+  const min = g.priceMin != null ? g.priceMin : Math.min(...g.ohlc.map((b) => b[2]));
+  const max = g.priceMax != null ? g.priceMax : Math.max(...g.ohlc.map((b) => b[1]));
+  const span = (max - min) || 1;
+  const price = min + (1 - Math.max(0, Math.min(1, (y - r.y) / r.h))) * span;
+  return { ts, price: +price.toFixed(4), idx };
+}
+
+function _setTool(t) {
+  ltcTool = t;
+  // Any tool switch clears an in-flight trend gesture.
+  trendAnchor = null; trendDragging = false; trendPreview = null; dragState = null;
+  const wrap = $("#liveTradeWrap");
+  if (wrap) {
+    wrap.classList.toggle("tool-mark", t === "mark");
+    wrap.classList.toggle("tool-line", t === "line");
+    wrap.classList.toggle("tool-active", t !== "none");
+  }
+  document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.tool === t));
+  const hint = $("#ltcHint");
+  if (hint) {
+    if (t === "mark") { hint.hidden = false; hint.textContent = "Click the chart to drop an entry mark"; }
+    else if (t === "line") { hint.hidden = false; hint.textContent = "Click target price → then press & drag to draw the trend"; }
+    else { hint.hidden = true; hint.textContent = ""; }
+  }
+  if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+function _onChartClick(evt) {
+  if (suppressNextClick) { suppressNextClick = false; return; }
+  if (!liveLast.ok || ltcTool === "none") return;
+  const { x, y } = _svgEventToChart(evt);
+  // Snap to the nearest OHLC point unless Alt held.
+  const snap = altHeld ? null : _getSnapCandidate(x, y);
+  const p = snap ? { ts: snap.ts, price: snap.price, idx: snap.idx } : _pixelToTsPrice(x, y);
+  if (!p) return;
+  const sym = (liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim().toUpperCase();
+  if (ltcTool === "mark") {
+    addUserMark(sym, { ts: p.ts, price: p.price, dir: $("#liveSide").value || "mark", t: Date.now() });
+    if (typeof toast === "function") toast(`◉ Marked @ ${fmtPrice(p.price)}${snap ? " (" + snap.kind + ")" : ""}`, "buy");
+    renderLiveTradeChart(liveLast.data, liveLast.kind);
+  } else if (ltcTool === "line") {
+    trendAnchor = { ts: p.ts, price: p.price, x: snap ? snap.x : x, y: snap ? snap.y : y };
+    const hint = $("#ltcHint");
+    if (hint) hint.textContent = `Target @ ${fmtPrice(p.price)}${snap ? " (" + snap.kind + ")" : ""} — press & drag anywhere to draw the trend`;
+    renderLiveTradeChart(liveLast.data, liveLast.kind);
+  }
+}
+
+function _onChartMouseDown(evt) {
+  if (!liveLast.ok) return;
+  const { x, y, pxPerSvgX, pxPerSvgY } = _svgEventToChart(evt);
+  if (liveLast.geom) { liveLast.geom.pxPerSvgX = pxPerSvgX; liveLast.geom.pxPerSvgY = pxPerSvgY; }
+
+  // Hit-test existing markers/endpoints first — works from ANY tool so Rob
+  // can retouch a point without switching modes.
+  const hit = _hitTestMarker(x, y);
+  if (hit) {
+    const sym = liveLast.data && liveLast.data.symbol;
+    if (evt.altKey) {
+      _deleteHit(hit, sym);
+      suppressNextClick = true;
+      renderLiveTradeChart(liveLast.data, liveLast.kind);
+      evt.preventDefault();
+      return;
+    }
+    editState = { kind: hit.kind, idx: hit.idx, sym };
+    // Initialize the preview to the marker's current location so the first
+    // mousemove has something to nudge from.
+    if (hit.kind === "mark") editPreview = { ts: hit.mark.ts, price: hit.mark.price };
+    else editPreview = { ts: hit.line[hit.kind === "lineA" ? "a" : "b"].ts,
+                         price: hit.line[hit.kind === "lineA" ? "a" : "b"].price };
+    evt.preventDefault();
+    return;
+  }
+
+  // Otherwise, arm a potential trend-line drag.
+  if (ltcTool !== "line" || !trendAnchor) return;
+  dragState = { startX: x, startY: y, moved: false };
+}
+
+function _scheduleDragRedraw() {
+  if (_rafDrag) return;
+  _rafDrag = requestAnimationFrame(() => {
+    _rafDrag = 0;
+    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  });
+}
+
+function _onChartMouseUp(evt) {
+  // Commit an in-flight edit of an existing marker/endpoint.
+  if (editState) {
+    _commitEdit();
+    if (typeof toast === "function") toast("Adjusted", "buy");
+    editState = null; editPreview = null;
+    suppressNextClick = true;
+    const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
+    renderLiveTradeChart(liveLast.data, liveLast.kind);
+    return;
+  }
+  if (!dragState) return;
+  const wasDrag = dragState.moved;
+  const startedInLine = ltcTool === "line" && trendAnchor;
+  dragState = null;
+  if (!wasDrag) return;   // wasn't a drag — let the click handler run normally
+  const { x, y } = _svgEventToChart(evt);
+  // Snap the release endpoint for precise line drawing.
+  const snap = altHeld ? null : _getSnapCandidate(x, y);
+  const p = snap ? { ts: snap.ts, price: snap.price } : _pixelToTsPrice(x, y);
+  const sym = (liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim().toUpperCase();
+  if (startedInLine && p) {
+    addUserLine(sym, {
+      a: { ts: trendAnchor.ts, price: trendAnchor.price },
+      b: { ts: p.ts, price: p.price },
+      color: "var(--gold)", t: Date.now(),
+    });
+    if (typeof toast === "function") toast("╱ Trend line saved" + (snap ? " (snapped)" : ""), "buy");
+  }
+  trendDragging = false; trendPreview = null; trendAnchor = null;
+  suppressNextClick = true;  // the release will also fire a `click` — swallow it
+  const hint = $("#ltcHint");
+  if (hint) hint.textContent = "Click target price → then press & drag to draw the trend";
+  renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+function _onChartMove(evt) {
+  if (!liveLast.ok) return;
+  const { x, y, pxPerSvgX, pxPerSvgY } = _svgEventToChart(evt);
+  // Cache scale so snap distance can be enforced in real screen pixels.
+  if (liveLast.geom) { liveLast.geom.pxPerSvgX = pxPerSvgX; liveLast.geom.pxPerSvgY = pxPerSvgY; }
+  _drawCrosshair(x, y);
+
+  // Cursor affordance: grab-hand when hovering an editable marker.
+  const svg = $("#liveTradeChart");
+  if (svg && !editState && !dragState) {
+    const hit = _hitTestMarker(x, y);
+    svg.style.cursor = hit ? (evt.altKey ? "not-allowed" : "grab") : "";
+  }
+
+  // Live-edit an existing marker/endpoint being dragged.
+  if (editState) {
+    const snap = altHeld ? null : _getSnapCandidate(x, y);
+    const p = snap ? { ts: snap.ts, price: snap.price } : _pixelToTsPrice(x, y);
+    editPreview = { ts: p.ts, price: p.price };
+    if (svg) svg.style.cursor = "grabbing";
+    _scheduleDragRedraw();
+    return;
+  }
+
+  // Trend-line drag detection: press-and-drag while trend anchor exists.
+  if (dragState && ltcTool === "line" && trendAnchor) {
+    const dx = x - dragState.startX, dy = y - dragState.startY;
+    if (!dragState.moved && (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)) {
+      dragState.moved = true;
+      trendDragging = true;
+      const a = _tsToXY(liveLast.geom, trendAnchor.ts, trendAnchor.price);
+      trendPreview = {
+        ax: a ? a.x : trendAnchor.x,
+        ay: liveLast.geom.Y(trendAnchor.price),
+        bx: x, by: y,
+      };
+    }
+    if (dragState.moved && trendPreview) {
+      // Snap the drag endpoint too, for precision line drawing.
+      const snap = altHeld ? null : _getSnapCandidate(x, y);
+      trendPreview.bx = snap ? snap.x : x;
+      trendPreview.by = snap ? snap.y : y;
+      _scheduleDragRedraw();
+    }
+  }
+}
+function _onChartLeave() { _clearCrosshair(); }
+
+function _toggleFullscreen() {
+  const card = $("#liveTradeCard");
+  if (!card) return;
+  const apply = () => {
+    const on = card.classList.toggle("is-fullscreen");
+    document.body.classList.toggle("mp-lock-scroll", on);
+    const btn = $("#ltcFullBtn");
+    if (btn) btn.textContent = on ? "⤢ Exit" : "⛶ Fullscreen";
+    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  };
+  // View Transitions API gives a butter-smooth cross-fade + size morph
+  // on Chromium; graceful fallback keeps other browsers working.
+  if (document.startViewTransition) document.startViewTransition(apply);
+  else apply();
+}
+
+function initLiveChartInteractions() {
+  const svg = $("#liveTradeChart");
+  if (!svg || svg.dataset.wired === "1") return;
+  svg.dataset.wired = "1";
+  svg.addEventListener("click", _onChartClick);
+  svg.addEventListener("mousedown", _onChartMouseDown);
+  svg.addEventListener("mousemove", _onChartMove);
+  svg.addEventListener("mouseleave", _onChartLeave);
+  // Mouseup on window (not just SVG) so a drag that releases outside the chart still commits.
+  window.addEventListener("mouseup", _onChartMouseUp);
+  svg.addEventListener("dblclick", (e) => e.preventDefault());
+  document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) =>
+    b.addEventListener("click", () => _setTool(b.dataset.tool)));
+  const undo = $("#ltcUndo");
+  if (undo) undo.addEventListener("click", () => {
+    const sym = ($("#liveSymbol").value || "").trim().toUpperCase();
+    const what = popUserLast(sym);
+    if (what && liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+    if (typeof toast === "function") toast(what ? `Undid ${what}` : "Nothing to undo");
+  });
+  const clr = $("#ltcClear");
+  if (clr) clr.addEventListener("click", () => {
+    const sym = ($("#liveSymbol").value || "").trim().toUpperCase();
+    if (!confirm(`Clear all marks & trend lines for ${sym}?`)) return;
+    clearUserAll(sym);
+    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  });
+  const full = $("#ltcFullBtn");
+  if (full) full.addEventListener("click", _toggleFullscreen);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Alt") { altHeld = true; }
+    if (e.key === "Escape") {
+      if (editState) { editState = null; editPreview = null; renderLiveTradeChart(liveLast.data, liveLast.kind); return; }
+      if (trendAnchor || trendDragging) {
+        trendAnchor = null; trendDragging = false; trendPreview = null;
+        if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+        return;
+      }
+      if ($("#liveTradeCard").classList.contains("is-fullscreen")) _toggleFullscreen();
+    }
+    if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
+    if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key === "Alt") { altHeld = false; }
+  });
+  window.addEventListener("blur", () => { altHeld = false; });
+  _setTool("none");
 }
 
 /* ----------------------------------------------------- dca wizard */

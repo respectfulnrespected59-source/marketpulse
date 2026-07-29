@@ -195,44 +195,69 @@ def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
     return [[float(r[3]), float(r[2]), float(r[1]), float(r[4])] for r in rows]
 
 
-# Timeframe presets for the live chart. "day" = tight intraday; "wide" = zoom
-# out. Stocks map to Yahoo range/interval; crypto to a Coinbase granularity.
+# Timeframe presets for the live chart. Stocks map to Yahoo range/interval;
+# crypto to a Coinbase granularity (seconds). "1m" is the tightest tape.
 INTRADAY_TF = {
-    "stock": {"day": ("1d", "5m"), "wide": ("5d", "15m")},
-    "crypto": {"day": 300, "wide": 3600},   # 5-min (~1 day) vs hourly (~12 days)
+    "stock": {"1m": ("1d", "1m"), "day": ("1d", "5m"), "wide": ("5d", "15m")},
+    "crypto": {"1m": 60, "day": 300, "wide": 3600},
 }
 
 
 def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
     """Recent intraday OHLC candles for the live trading chart, at a chosen
     timeframe. Stocks use Yahoo bars; crypto uses Coinbase candles. Short-
-    cached so a live poll can refresh without hammering upstream."""
-    tf = tf if tf in ("day", "wide") else "wide"
+    cached so a live poll can refresh without hammering upstream.
+
+    Response shape:
+      ohlc: [[o,h,l,c], ...]       (unchanged — legacy candle renderer)
+      ts:   [unix_seconds, ...]    (parallel to ohlc; empty if source lacks it)
+    """
+    tf = tf if tf in INTRADAY_TF["stock"] else "wide"
     key = f"intraday:{kind}:{symbol.lower()}:{tf}"
     hit = _cache.get(key)
-    if hit and (time.time() - hit[0]) < QUOTE_TTL:
+    # 1-min tape needs a snappier cache so a live poll actually shows new bars.
+    ttl = 20 if tf == "1m" else QUOTE_TTL
+    if hit and (time.time() - hit[0]) < ttl:
         return hit[1]
     ohlc: list[list[float]] = []
+    ts_arr: list[int] = []
+    vol_arr: list[float] = []
     if kind == "crypto":
         prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
         if prod:
             try:
-                ohlc = _coinbase_ohlc(prod, INTRADAY_TF["crypto"][tf])
+                gran = INTRADAY_TF["crypto"][tf]
+                url = f"{COINBASE_API}/products/{prod}/candles?granularity={gran}"
+                raw = _get_json(url) or []
+                rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
+                for r in rows:
+                    # Coinbase row: [time, low, high, open, close, volume]
+                    ohlc.append([round(float(r[3]), 4), round(float(r[2]), 4),
+                                 round(float(r[1]), 4), round(float(r[4]), 4)])
+                    ts_arr.append(int(r[0]))
+                    vol_arr.append(round(float(r[5] or 0), 2))
             except Exception:  # noqa: BLE001
-                ohlc = []
+                ohlc, ts_arr, vol_arr = [], [], []
     else:
         try:
             rng, interval = INTRADAY_TF["stock"][tf]
             url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
                    f"?range={rng}&interval={interval}")
-            q = _get_json(url)["chart"]["result"][0]["indicators"]["quote"][0]
-            for o, h, l, c in zip(q["open"], q["high"], q["low"], q["close"]):
+            result = _get_json(url)["chart"]["result"][0]
+            q = result["indicators"]["quote"][0]
+            times = result.get("timestamp") or []
+            vols = q.get("volume") or []
+            for i, (o, h, l, c) in enumerate(zip(q["open"], q["high"], q["low"], q["close"])):
                 if None not in (o, h, l, c):
                     ohlc.append([round(o, 4), round(h, 4), round(l, 4), round(c, 4)])
+                    ts_arr.append(int(times[i]) if i < len(times) else 0)
+                    v = vols[i] if i < len(vols) else 0
+                    vol_arr.append(float(v) if v is not None else 0.0)
         except Exception:  # noqa: BLE001
-            ohlc = []
-    out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc,
-           "last": ohlc[-1][3] if ohlc else None, "ts": int(time.time())}
+            ohlc, ts_arr, vol_arr = [], [], []
+    out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc, "ts": ts_arr,
+           "volume": vol_arr,
+           "last": ohlc[-1][3] if ohlc else None, "server_ts": int(time.time())}
     _cache[key] = (time.time(), out)
     return out
 

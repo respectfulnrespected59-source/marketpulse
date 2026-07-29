@@ -796,28 +796,102 @@ body {
 }
 .qf-convert b { color: var(--buy); font-weight: 700; }
 
-/* ---- Live trading chart ---- */
+/* ---- Live trading chart (neon-drip build) ---- */
 .live-chart-card {
-  background: var(--surface); border: 1px solid var(--line);
+  position: relative;
+  background:
+    radial-gradient(1200px 260px at 10% -20%, rgba(217,176,97,0.10), transparent 60%),
+    radial-gradient(900px 240px at 110% 120%, rgba(47,209,128,0.09), transparent 65%),
+    linear-gradient(180deg, var(--surface), var(--bg-2));
+  border: 1px solid var(--line);
   border-radius: var(--radius); padding: 14px 16px; margin: 4px 0 18px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(217,176,97,0.06) inset;
+  overflow: hidden;
+  transition: box-shadow 220ms var(--ease), border-color 220ms var(--ease);
 }
-.ltc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+/* Animated neon accent border — the "drip". */
+.live-chart-card::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit;
+  padding: 1px; pointer-events: none;
+  background: linear-gradient(120deg,
+    rgba(217,176,97,0.55) 0%, rgba(47,209,128,0.35) 35%,
+    rgba(93,161,255,0.35) 60%, rgba(217,176,97,0.55) 100%);
+  background-size: 200% 200%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0.55; animation: ltcNeon 10s linear infinite;
+}
+@keyframes ltcNeon {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 0%; }
+}
+.ltc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; position: relative; z-index: 1; }
 .ltc-title { display: flex; align-items: baseline; gap: 8px; }
-.ltc-title b { font-size: 20px; font-weight: 800; letter-spacing: 0.01em; }
+.ltc-title b { font-size: 20px; font-weight: 800; letter-spacing: 0.01em;
+  text-shadow: 0 0 12px rgba(217,176,97,0.35); }
 .ltc-kind { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
 .ltc-price { display: flex; align-items: baseline; gap: 8px; }
 .ltc-price > b { font-family: var(--mono); font-size: 22px; font-weight: 700; }
 .ltc-chg { font-family: var(--mono); font-size: 13px; font-weight: 700; }
-.ltc-chg.up { color: var(--buy); }
-.ltc-chg.down { color: var(--sell); }
-.ltc-chart-wrap {
-  position: relative; width: 100%; aspect-ratio: 10 / 3;
-  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 40%);
-  border-radius: 10px; overflow: hidden;
+.ltc-chg.up { color: var(--buy); text-shadow: 0 0 10px rgba(47,209,128,0.45); }
+.ltc-chg.down { color: var(--sell); text-shadow: 0 0 10px rgba(255,93,108,0.45); }
+
+/* Toolbar row */
+.ltc-toolbar {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin: 6px 0 10px; flex-wrap: wrap;
 }
-#liveTradeChart { width: 100%; height: 100%; display: block; }
-.ltc-foot { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.45; }
+.ltc-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.ltc-tools.ltc-actions { margin-left: auto; }
+.ltc-tool {
+  padding: 5px 10px; font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text-dim); background: rgba(15,20,27,0.6); border: 1px solid var(--line);
+  border-radius: 8px; cursor: pointer;
+  transition: color 160ms var(--ease), border-color 160ms var(--ease),
+              box-shadow 160ms var(--ease), background 160ms var(--ease);
+}
+.ltc-tool:hover { color: var(--text); border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(217,176,97,0.25); }
+.ltc-tool.is-active {
+  color: #0a0d12; background: var(--gold); border-color: var(--gold);
+  box-shadow: 0 0 14px rgba(217,176,97,0.55), 0 0 32px rgba(217,176,97,0.18);
+}
+.ltc-tool.ghost { background: transparent; }
+
+.ltc-chart-wrap {
+  position: relative; width: 100%; aspect-ratio: 25 / 9;
+  background:
+    radial-gradient(600px 220px at 50% 110%, rgba(47,209,128,0.05), transparent 70%),
+    linear-gradient(180deg, rgba(255,255,255,0.015), transparent 40%);
+  border-radius: 10px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(120,150,190,0.08);
+}
+#liveTradeChart { width: 100%; height: 100%; display: block; cursor: crosshair; }
+.ltc-cursor-readout { display: none; }
+/* Mode cursors */
+.ltc-chart-wrap.tool-mark #liveTradeChart,
+.ltc-chart-wrap.tool-line #liveTradeChart { cursor: crosshair; }
+.ltc-chart-wrap.tool-active { box-shadow: inset 0 0 0 1px rgba(217,176,97,0.35),
+  0 0 24px rgba(217,176,97,0.12); }
+
+.ltc-hint {
+  position: absolute; top: 8px; left: 10px;
+  padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  color: var(--gold); background: rgba(217,176,97,0.10);
+  border: 1px solid rgba(217,176,97,0.35);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 14px rgba(217,176,97,0.25); pointer-events: none;
+}
+.ltc-cursor-readout {
+  position: absolute; bottom: 8px; right: 10px;
+  padding: 4px 8px; border-radius: 6px; font-family: var(--mono);
+  font-size: 11px; font-weight: 700; color: var(--text);
+  background: rgba(10,13,18,0.72); border: 1px solid var(--line);
+  pointer-events: none; letter-spacing: 0.02em;
+}
+
+.ltc-foot { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.45; position: relative; z-index: 1; }
 .qf-over { color: var(--sell); font-weight: 600; }
 
 /* live chart timeframe toggle */
@@ -827,8 +901,31 @@ body {
   color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--line);
   border-radius: 7px; cursor: pointer; transition: all var(--duration-fast, 150ms) var(--ease);
 }
-.ltc-tf button:hover { color: var(--text); border-color: var(--text-faint); }
-.ltc-tf button.is-active { color: #0a0d12; background: var(--gold); border-color: var(--gold); }
+.ltc-tf button:hover { color: var(--text); border-color: var(--gold);
+  box-shadow: 0 0 10px rgba(217,176,97,0.22); }
+.ltc-tf button.is-active { color: #0a0d12; background: var(--gold); border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(217,176,97,0.55); }
+
+/* Fullscreen mode — the "REALLY get into it" view */
+.live-chart-card {
+  view-transition-name: mp-live-chart;
+}
+.live-chart-card.is-fullscreen {
+  position: fixed; inset: 0; margin: 0; z-index: 9999;
+  border-radius: 0; padding: 18px 24px;
+  display: flex; flex-direction: column;
+}
+.live-chart-card.is-fullscreen .ltc-chart-wrap {
+  flex: 1 1 auto; aspect-ratio: auto; height: auto; min-height: 0;
+}
+.live-chart-card.is-fullscreen::before { opacity: 0.85; }
+body.mp-lock-scroll { overflow: hidden; }
+/* View-transition tuning — Chromium uses these to cross-fade + morph. */
+::view-transition-old(mp-live-chart),
+::view-transition-new(mp-live-chart) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
 
 /* ---- Sprint 3: Cockpit / Home ---- */
 .home { padding: 18px 26px 40px; }
