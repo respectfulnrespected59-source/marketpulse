@@ -10,7 +10,10 @@ source is always visible). Real enforcement = host it as a SaaS later.
 
 TIER = "pro"                # "free" or "pro"
 FREE_SYMBOL_CAP = 6         # assets shown per market in the free build
-UPGRADE_URL = "https://quantummelaninmedia.gumroad.com"  # set to the Pro product link
+# The Pro product page itself, not the storefront root — this is the single
+# most important click in the free edition, and dropping someone on the store
+# to go hunting for the right product loses them.
+UPGRADE_URL = "https://quantummelaninmedia.gumroad.com/l/yvsyyg"
 
 PRO = {"proof": True, "alerts": True, "unlimited_symbols": True,
        "dca": True, "options": True}
