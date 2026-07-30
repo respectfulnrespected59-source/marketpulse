@@ -1291,6 +1291,18 @@ const EMA_COLORS = { ema14: "#f5c66b", ema21: "#5b8def", ema57: "#c471ed" };
 // In-memory snapshot of the last loaded intraday payload — click handlers use
 // it to convert pixel coords back into (timestamp, price) space.
 let liveLast = { data: null, kind: "stock", ok: false };
+
+// Chart viewport: which slice of the loaded OHLC is currently visible.
+// `pinned` = true means "keep the right edge glued to the latest bar as new
+// bars arrive"; the moment the user pans back, that latches to false and the
+// poll no longer yanks them forward. Reset whenever symbol or timeframe
+// changes so a fresh tape starts fully fit.
+let chartView = { start: null, count: null, pinned: true };
+let lastRenderSym = null, lastRenderTf = null;
+const MIN_VISIBLE_BARS = 6;
+const ZOOM_FACTOR = 1.20;
+let panDrag = null;  // {startClientX, startBar, moved}
+function resetChartView() { chartView = { start: null, count: null, pinned: true }; }
 // Chart interaction mode: "none" | "mark" | "line".
 // Trend line UX: single click drops a pending gold anchor at the target price
 // (visible ring + dashed price rule). Then press-and-drag ANYWHERE on the
@@ -1471,17 +1483,40 @@ function _renderEmaLegend(overlay) {
 
 function renderLiveTradeChart(d, kind) {
   const svg = $("#liveTradeChart");
-  const ohlc = (d && d.ohlc) || [];
-  const tsArr = (d && d.ts) || [];
-  const volArr = (d && d.volume) || [];
+  const fullOhlc = (d && d.ohlc) || [];
+  const fullTs = (d && d.ts) || [];
+  const fullVol = (d && d.volume) || [];
   $("#ltcSym").textContent = (d && d.symbol) || "—";
   const grainMap = TF_GRAIN[kind === "crypto" ? "crypto" : "stock"];
   $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + (grainMap[liveTf] || "");
   renderTfButtons(kind);
-  // Overlay chips update on every render — always reflect current cache state
-  // (the async loader will trigger another render when new data lands).
   _renderSqueezeChip(liveOverlay);
   _renderEmaLegend(liveOverlay);
+
+  // Reset the viewport whenever the identity of the tape changes so a fresh
+  // symbol / timeframe starts with all bars visible (not stuck on a stale window).
+  const sym = d && d.symbol;
+  if (sym !== lastRenderSym || liveTf !== lastRenderTf) {
+    resetChartView();
+    lastRenderSym = sym;
+    lastRenderTf = liveTf;
+  }
+
+  // Slice to viewport. `count == null` means "fit all"; otherwise clamp to
+  // sane bounds. If pinned, glue to the right edge as new bars arrive.
+  const nAll = fullOhlc.length;
+  let count = chartView.count == null ? nAll : Math.max(MIN_VISIBLE_BARS, Math.min(nAll, chartView.count));
+  let start;
+  if (chartView.pinned || chartView.start == null) {
+    start = Math.max(0, nAll - count);
+  } else {
+    start = Math.max(0, Math.min(nAll - count, chartView.start));
+  }
+  const end = start + count;
+  const ohlc = fullOhlc.slice(start, end);
+  const tsArr = fullTs.slice(start, end);
+  const volArr = fullVol.slice(start, end);
+
   liveLast = { data: d, kind, ok: ohlc.length >= 2 };
   if (ohlc.length < 2) {
     svg.innerHTML = "";
@@ -1516,6 +1551,8 @@ function renderLiveTradeChart(d, kind) {
     W, H, pad: padL, X: c.X, Y: c.Y, n: ohlc.length, ohlc, ts: tsArr,
     priceRect, volRect, timeAxisTop, axisR: AXIS_R,
     priceMin: c.min, priceMax: c.max,
+    // Viewport bookkeeping so wheel/drag can operate against the full tape.
+    fullOhlc, fullTs, fullVol, viewStart: start, viewCount: count, viewEnd: end, nAll,
   };
 
   let base = "";
@@ -1876,7 +1913,11 @@ function _tsToXY(geom, ts, price) {
   const { X, Y, ts: tsArr, n } = geom;
   let idx = 0;
   if (tsArr && tsArr.length === n && ts) {
-    // Nearest-candle by unix seconds.
+    // Clip to the visible window so a mark whose timestamp is scrolled off
+    // the chart doesn't render as a stray blob at the nearest edge candle.
+    const first = tsArr[0], last = tsArr[n - 1];
+    const step = n > 1 ? Math.max(1, (last - first) / (n - 1)) : 1;
+    if (ts < first - step || ts > last + step) return null;
     let bestD = Infinity;
     for (let i = 0; i < tsArr.length; i++) {
       const d = Math.abs(tsArr[i] - ts);
@@ -2033,8 +2074,17 @@ function _onChartMouseDown(evt) {
   }
 
   // Otherwise, arm a potential trend-line drag.
-  if (ltcTool !== "line" || !trendAnchor) return;
-  dragState = { startX: x, startY: y, moved: false };
+  if (ltcTool === "line" && trendAnchor) {
+    dragState = { startX: x, startY: y, moved: false };
+    return;
+  }
+  // Default (no tool active, not editing a marker, not a hit): drag = pan.
+  if (ltcTool === "none" && liveLast.geom) {
+    panDrag = { startClientX: evt.clientX, startBar: liveLast.geom.viewStart, moved: false };
+    const svg = $("#liveTradeChart");
+    if (svg) svg.style.cursor = "grab";
+    evt.preventDefault();
+  }
 }
 
 function _scheduleDragRedraw() {
@@ -2054,6 +2104,15 @@ function _onChartMouseUp(evt) {
     suppressNextClick = true;
     const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
     renderLiveTradeChart(liveLast.data, liveLast.kind);
+    return;
+  }
+  // Finish a pan-drag. Suppress the trailing click so the mouseup doesn't
+  // count as a click on empty chart space.
+  if (panDrag) {
+    const wasDrag = panDrag.moved;
+    panDrag = null;
+    const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
+    if (wasDrag) suppressNextClick = true;
     return;
   }
   if (!dragState) return;
@@ -2088,11 +2147,34 @@ function _onChartMove(evt) {
   if (liveLast.geom) { liveLast.geom.pxPerSvgX = pxPerSvgX; liveLast.geom.pxPerSvgY = pxPerSvgY; }
   _drawCrosshair(x, y);
 
-  // Cursor affordance: grab-hand when hovering an editable marker.
   const svg = $("#liveTradeChart");
+
+  // Pan-drag beats every other hover behavior — track pixel delta, translate
+  // into full-tape bar units, and re-render on rAF.
+  if (panDrag && liveLast.geom) {
+    const rect = svg.getBoundingClientRect();
+    const dxPx = evt.clientX - panDrag.startClientX;
+    if (!panDrag.moved && Math.abs(dxPx) > DRAG_THRESHOLD_PX) {
+      panDrag.moved = true;
+      if (svg) svg.style.cursor = "grabbing";
+    }
+    if (panDrag.moved) {
+      const g = liveLast.geom;
+      const barsPerPx = g.n / Math.max(1, rect.width);
+      const deltaBars = -Math.round(dxPx * barsPerPx);
+      const nAll = g.nAll || (g.fullOhlc || []).length;
+      const newStart = Math.max(0, Math.min(Math.max(0, nAll - g.viewCount), panDrag.startBar + deltaBars));
+      chartView = { start: newStart, count: g.viewCount, pinned: (newStart + g.viewCount) >= nAll };
+      _scheduleDragRedraw();
+    }
+    return;
+  }
+
+  // Cursor affordance: grab-hand when hovering an editable marker.
   if (svg && !editState && !dragState) {
     const hit = _hitTestMarker(x, y);
-    svg.style.cursor = hit ? (evt.altKey ? "not-allowed" : "grab") : "";
+    if (hit) svg.style.cursor = evt.altKey ? "not-allowed" : "grab";
+    else svg.style.cursor = ltcTool === "none" ? "grab" : "";
   }
 
   // Live-edit an existing marker/endpoint being dragged.
@@ -2129,6 +2211,65 @@ function _onChartMove(evt) {
 }
 function _onChartLeave() { _clearCrosshair(); }
 
+/* ---- Pan + zoom: viewport ops ------------------------------------------
+   All coord math funnels through liveLast.geom, so pan/zoom just rewrites
+   chartView and triggers a redraw. `pinned` re-latches to true whenever the
+   right edge of the window touches the latest bar, so a user who zooms back
+   in to "now" gets auto-follow again for free. */
+
+function _panBars(deltaBars) {
+  const g = liveLast.geom;
+  if (!g) return;
+  const nAll = g.nAll || (g.fullOhlc || []).length;
+  const count = g.viewCount || g.n;
+  if (!nAll || !count) return;
+  const newStart = Math.max(0, Math.min(Math.max(0, nAll - count), g.viewStart + deltaBars));
+  chartView = { start: newStart, count, pinned: (newStart + count) >= nAll };
+  renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+function _zoomAtBar(anchorBarFull, factor) {
+  const g = liveLast.geom;
+  if (!g) return;
+  const nAll = g.nAll || (g.fullOhlc || []).length;
+  if (!nAll) return;
+  const oldCount = g.viewCount || g.n;
+  const newCount = Math.max(MIN_VISIBLE_BARS, Math.min(nAll, Math.round(oldCount * factor)));
+  if (newCount === oldCount) return;
+  // Keep the bar under the cursor at the same fractional x position.
+  const relCursor = oldCount <= 1 ? 0.5 : (anchorBarFull - g.viewStart) / (oldCount - 1);
+  const newStart = Math.max(0, Math.min(Math.max(0, nAll - newCount),
+    Math.round(anchorBarFull - relCursor * (newCount - 1))));
+  chartView = { start: newStart, count: newCount, pinned: (newStart + newCount) >= nAll };
+  renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+function _onChartWheel(evt) {
+  if (!liveLast.ok || !liveLast.geom) return;
+  evt.preventDefault();
+  const g = liveLast.geom;
+  const svg = $("#liveTradeChart");
+  const rect = svg.getBoundingClientRect();
+  const relX = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+  const cursorBarInView = Math.round(relX * Math.max(0, g.n - 1));
+  const cursorBarInFull = g.viewStart + cursorBarInView;
+  // Horizontal-dominant wheel or shift+wheel = pan; otherwise zoom.
+  if (evt.shiftKey || Math.abs(evt.deltaX) > Math.abs(evt.deltaY)) {
+    const raw = evt.shiftKey ? evt.deltaY : evt.deltaX;
+    const barsPerPx = Math.max(0.02, g.n / rect.width);
+    const step = Math.max(1, Math.round(Math.abs(raw) * barsPerPx / 3));
+    _panBars(raw >= 0 ? step : -step);
+    return;
+  }
+  const factor = evt.deltaY > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
+  _zoomAtBar(cursorBarInFull, factor);
+}
+
+function _onChartDblClick(evt) {
+  evt.preventDefault();
+  if (liveLast.ok && liveLast.data) { resetChartView(); renderLiveTradeChart(liveLast.data, liveLast.kind); }
+}
+
 function _toggleFullscreen() {
   const card = $("#liveTradeCard");
   if (!card) return;
@@ -2155,7 +2296,10 @@ function initLiveChartInteractions() {
   svg.addEventListener("mouseleave", _onChartLeave);
   // Mouseup on window (not just SVG) so a drag that releases outside the chart still commits.
   window.addEventListener("mouseup", _onChartMouseUp);
-  svg.addEventListener("dblclick", (e) => e.preventDefault());
+  svg.addEventListener("dblclick", _onChartDblClick);
+  // Wheel-to-zoom / shift-wheel-to-pan. passive:false so preventDefault
+  // suppresses the page's own scroll while the cursor is over the chart.
+  svg.addEventListener("wheel", _onChartWheel, { passive: false });
   document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) =>
     b.addEventListener("click", () => _setTool(b.dataset.tool)));
   const undo = $("#ltcUndo");
@@ -2174,6 +2318,11 @@ function initLiveChartInteractions() {
   });
   const full = $("#ltcFullBtn");
   if (full) full.addEventListener("click", _toggleFullscreen);
+  const fit = $("#ltcFit");
+  if (fit) fit.addEventListener("click", () => {
+    resetChartView();
+    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Alt") { altHeld = true; }
     if (e.key === "Escape") {

@@ -909,9 +909,12 @@ body {
   border-radius: 10px; overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(120,150,190,0.08);
 }
-#liveTradeChart { width: 100%; height: 100%; display: block; cursor: crosshair; }
+/* Default cursor is "grab" — the whole chart is scroll/zoom surface by
+   default (Webull-style: drag to pan, wheel to zoom, double-click to fit). */
+#liveTradeChart { width: 100%; height: 100%; display: block; cursor: grab; }
+#liveTradeChart:active { cursor: grabbing; }
 .ltc-cursor-readout { display: none; }
-/* Mode cursors */
+/* Mode cursors: Mark / Trend tools switch to crosshair for precision. */
 .ltc-chart-wrap.tool-mark #liveTradeChart,
 .ltc-chart-wrap.tool-line #liveTradeChart { cursor: crosshair; }
 .ltc-chart-wrap.tool-active { box-shadow: inset 0 0 0 1px rgba(217,176,97,0.35),
