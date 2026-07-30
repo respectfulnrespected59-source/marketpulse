@@ -1267,18 +1267,26 @@ function renderLiveChart(p, winCls) {
 
 /* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
 let liveChartTimer = null;
-let liveTf = "day";
-const TF_ORDER = ["1m", "day", "wide"];
+let liveTf = "5m";
+const TF_ORDER = ["1m", "5m", "10m", "1h"];
 const TF_LABELS = {
-  stock: { "1m": "1m", day: "1D", wide: "5D" },
-  crypto: { "1m": "1m", day: "1D", wide: "1W" },
+  stock: { "1m": "1m", "5m": "5m", "10m": "10m", "1h": "1h" },
+  crypto: { "1m": "1m", "5m": "5m", "10m": "10m", "1h": "1h" },
 };
 const TF_GRAIN = {
-  stock: { "1m": "1m bars", day: "5m bars", wide: "15m bars" },
-  crypto: { "1m": "1m bars", day: "5m bars", wide: "1h bars" },
+  stock: { "1m": "1m · 1D", "5m": "5m · 5D", "10m": "10m · 5D", "1h": "1h · 1M" },
+  crypto: { "1m": "1m · ~5h", "5m": "5m · ~1D", "10m": "10m · ~2D", "1h": "1h · ~12D" },
 };
 // 1m tape needs a much faster poll to feel alive; wider zooms don't.
-const TF_POLL_MS = { "1m": 8000, day: 20000, wide: 30000 };
+const TF_POLL_MS = { "1m": 8000, "5m": 20000, "10m": 30000, "1h": 60000 };
+
+// Chart overlay cache: daily EMA(14/21/57) series + TTM squeeze status. Fetched
+// once per symbol, refreshed every ~5 min (daily bars only change once a day).
+let liveOverlay = null;                  // last payload, or null
+let liveOverlayKey = null;               // "kind:symbol" of what's currently cached
+let liveOverlayAt = 0;                   // ms epoch of last successful fetch
+const OVERLAY_TTL_MS = 5 * 60 * 1000;
+const EMA_COLORS = { ema14: "#f5c66b", ema21: "#5b8def", ema57: "#c471ed" };
 
 // In-memory snapshot of the last loaded intraday payload — click handlers use
 // it to convert pixel coords back into (timestamp, price) space.
@@ -1359,8 +1367,106 @@ async function loadLiveTradeChart() {
   const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
   try {
     const d = await (await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`)).json();
+    // Fire-and-forget overlay refresh so the chart shows immediately; the
+    // next full render (either this call's chain or the next poll) picks up
+    // the daily EMAs + squeeze once they land.
+    loadChartOverlay(kind, sym).then((ov) => {
+      if (ov) renderLiveTradeChart(d, kind);
+    }).catch(() => {});
     renderLiveTradeChart(d, kind);
   } catch (e) { /* keep the prior chart on a transient error */ }
+}
+
+async function loadChartOverlay(kind, sym) {
+  const key = `${kind}:${sym.toLowerCase()}`;
+  if (liveOverlayKey === key && Date.now() - liveOverlayAt < OVERLAY_TTL_MS) {
+    return liveOverlay;
+  }
+  try {
+    const r = await fetch(`/api/chart-overlay?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
+    const d = await r.json();
+    if (d && !d.error) {
+      liveOverlay = d;
+      liveOverlayKey = key;
+      liveOverlayAt = Date.now();
+      return d;
+    }
+  } catch (e) { /* keep prior overlay */ }
+  return liveOverlay && liveOverlayKey === key ? liveOverlay : null;
+}
+
+/* Interpolate an EMA value at unix-second `ts` from sorted [[ts,v]] pairs.
+   Before the earliest / after the latest → clamp to the closest end. */
+function _emaAt(pairs, ts) {
+  if (!pairs || !pairs.length) return null;
+  if (ts <= pairs[0][0]) return pairs[0][1];
+  if (ts >= pairs[pairs.length - 1][0]) return pairs[pairs.length - 1][1];
+  let lo = 0, hi = pairs.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pairs[mid][0] <= ts) lo = mid; else hi = mid;
+  }
+  const [t0, v0] = pairs[lo], [t1, v1] = pairs[hi];
+  const f = t1 === t0 ? 0 : (ts - t0) / (t1 - t0);
+  return v0 + (v1 - v0) * f;
+}
+
+function _emaOverlaySVG(geom, clampY, emas) {
+  if (!geom || !emas) return "";
+  const { X, Y, ts, n } = geom;
+  if (!ts || ts.length !== n || n < 2) return "";
+  let out = "";
+  const order = ["ema14", "ema21", "ema57"];
+  for (const key of order) {
+    const pairs = emas[key];
+    if (!pairs || pairs.length < 1) continue;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const v = _emaAt(pairs, ts[i]);
+      if (v == null) continue;
+      pts.push(`${X(i).toFixed(1)},${clampY(v).toFixed(1)}`);
+    }
+    if (pts.length < 2) continue;
+    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="${EMA_COLORS[key]}"
+      stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" opacity="0.9"
+      pointer-events="none"><title>${key.toUpperCase()} (daily)</title></polyline>`;
+  }
+  return out;
+}
+
+function _renderSqueezeChip(overlay) {
+  const box = $("#ltcSqz");
+  if (!box) return;
+  const sq = overlay && overlay.squeeze;
+  const wk = sq && sq.weekly;
+  if (!wk || !wk.state) { box.hidden = true; box.textContent = ""; return; }
+  const state = wk.state;                              // "on" | "fired" | "off"
+  const mom = wk.mom;                                  // "bull" | "bear"
+  const arrow = mom === "bull"
+    ? (wk.accel === "rising" ? "▲" : "△")
+    : (wk.accel === "falling" ? "▼" : "▽");
+  const grain = sq.grain === "daily" ? "D" : "W";
+  const txt = state === "on" ? `ON·${wk.bars}` : state === "fired" ? "FIRED" : "off";
+  box.hidden = false;
+  box.className = `ltc-sqz ${state} ${mom || ""}`;
+  box.innerHTML = `<b>TTM</b> ${grain} ${txt} <span class="ltc-sqz-arr">${arrow}</span>`;
+  box.title = `TTM squeeze ${state} (${grain === "D" ? "daily" : "weekly"} bars) · momentum ${mom || "—"} ${wk.accel || ""}`;
+}
+
+function _renderEmaLegend(overlay) {
+  const box = $("#ltcEmas");
+  if (!box) return;
+  const e = overlay && overlay.emas;
+  const has = e && (e.ema14.length || e.ema21.length || e.ema57.length);
+  if (!has) { box.hidden = true; box.textContent = ""; return; }
+  const chip = (k, label) => {
+    const arr = e[k];
+    const v = arr && arr.length ? arr[arr.length - 1][1] : null;
+    if (v == null) return "";
+    return `<span class="ltc-ema-chip"><i style="background:${EMA_COLORS[k]}"></i>${label}<b>${fmtPrice(v)}</b></span>`;
+  };
+  box.hidden = false;
+  box.innerHTML = chip("ema14", "EMA14") + chip("ema21", "EMA21") + chip("ema57", "EMA57");
 }
 
 function renderLiveTradeChart(d, kind) {
@@ -1372,6 +1478,10 @@ function renderLiveTradeChart(d, kind) {
   const grainMap = TF_GRAIN[kind === "crypto" ? "crypto" : "stock"];
   $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + (grainMap[liveTf] || "");
   renderTfButtons(kind);
+  // Overlay chips update on every render — always reflect current cache state
+  // (the async loader will trigger another render when new data lands).
+  _renderSqueezeChip(liveOverlay);
+  _renderEmaLegend(liveOverlay);
   liveLast = { data: d, kind, ok: ohlc.length >= 2 };
   if (ohlc.length < 2) {
     svg.innerHTML = "";
@@ -1423,6 +1533,11 @@ function renderLiveTradeChart(d, kind) {
   if (p && p.sym && d.symbol && p.sym.toUpperCase() === String(d.symbol).toUpperCase()) {
     overlay += `<line x1="${priceRect.x}" y1="${clampY(p.entry).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(p.entry).toFixed(1)}"
       stroke="var(--gold)" stroke-width="1.8" stroke-dasharray="6 4" filter="url(#neonGold)"><title>your entry ${p.entry}</title></line>`;
+  }
+  // Daily EMA(14/21/57) polylines — interpolated onto the intraday grid so
+  // they span the whole width at any timeframe.
+  if (liveOverlay && liveOverlay.emas) {
+    overlay += _emaOverlaySVG(liveLast.geom, clampY, liveOverlay.emas);
   }
   overlay += _userOverlaySVG(d.symbol, liveLast.geom, clampY);
 

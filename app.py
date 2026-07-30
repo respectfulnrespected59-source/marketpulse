@@ -198,9 +198,14 @@ def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
 
 # Timeframe presets for the live chart. Stocks map to Yahoo range/interval;
 # crypto to a Coinbase granularity (seconds). "1m" is the tightest tape.
+# Intraday timeframe map. The `10m` slot has no native venue interval on
+# either Yahoo or Coinbase, so the fetch pulls 5m bars and pair-aggregates
+# them into synthesized 10m candles server-side (see _pair_agg_ohlc).
 INTRADAY_TF = {
-    "stock": {"1m": ("1d", "1m"), "day": ("1d", "5m"), "wide": ("5d", "15m")},
-    "crypto": {"1m": 60, "day": 300, "wide": 3600},
+    "stock": {"1m": ("1d", "1m"), "5m": ("5d", "5m"), "10m": ("5d", "5m"),
+              "1h": ("1mo", "60m"), "day": ("1d", "5m"), "wide": ("5d", "15m")},
+    "crypto": {"1m": 60, "5m": 300, "10m": 300, "1h": 3600,
+               "day": 300, "wide": 3600},
 }
 
 
@@ -256,9 +261,101 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
                     vol_arr.append(float(v) if v is not None else 0.0)
         except Exception:  # noqa: BLE001
             ohlc, ts_arr, vol_arr = [], [], []
+    # Synthesize 10m bars by pair-aggregating consecutive 5m bars.
+    if tf == "10m" and ohlc:
+        ohlc, ts_arr, vol_arr = _pair_agg_ohlc(ohlc, ts_arr, vol_arr)
     out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc, "ts": ts_arr,
            "volume": vol_arr,
            "last": ohlc[-1][3] if ohlc else None, "server_ts": int(time.time())}
+    _cache[key] = (time.time(), out)
+    return out
+
+
+def _pair_agg_ohlc(ohlc: list, ts: list, vol: list) -> tuple[list, list, list]:
+    """Fold two adjacent bars into one: open = first.o, close = second.c,
+    high = max, low = min, volume = sum, timestamp = first bar's start."""
+    o2, t2, v2 = [], [], []
+    n = len(ohlc) - (len(ohlc) % 2)
+    for i in range(0, n, 2):
+        a, b = ohlc[i], ohlc[i + 1]
+        o2.append([a[0], max(a[1], b[1]), min(a[2], b[2]), b[3]])
+        t2.append(ts[i] if i < len(ts) else 0)
+        v2.append(round((vol[i] if i < len(vol) else 0) + (vol[i + 1] if i + 1 < len(vol) else 0), 2))
+    return o2, t2, v2
+
+
+# ---------------------------------------------------- chart overlays
+
+def _daily_bars(kind: str, symbol: str) -> tuple[list[int], list[float], list[float], list[float]]:
+    """Return (ts, highs, lows, closes) of ~120 daily bars for overlay math.
+    Reuses existing fetchers so a hiccup here degrades gracefully to empty."""
+    try:
+        if kind == "crypto":
+            prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
+            if not prod:
+                return [], [], [], []
+            url = f"{COINBASE_API}/products/{prod}/candles?granularity=86400"
+            raw = _get_json(url) or []
+            rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
+            ts = [int(r[0]) for r in rows]
+            highs = [float(r[2]) for r in rows]
+            lows = [float(r[1]) for r in rows]
+            closes = [float(r[4]) for r in rows]
+            return ts, highs, lows, closes
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               "?range=6mo&interval=1d")
+        result = _get_json(url)["chart"]["result"][0]
+        stamps = result.get("timestamp") or []
+        q = result["indicators"]["quote"][0]
+        ts, highs, lows, closes = [], [], [], []
+        for i, (h, l, c) in enumerate(zip(q.get("high", []), q.get("low", []), q.get("close", []))):
+            if None in (h, l, c):
+                continue
+            ts.append(int(stamps[i]) if i < len(stamps) else 0)
+            highs.append(float(h)); lows.append(float(l)); closes.append(float(c))
+        return ts, highs, lows, closes
+    except Exception:  # noqa: BLE001
+        return [], [], [], []
+
+
+def chart_overlay(kind: str, symbol: str) -> dict:
+    """Daily EMA(14/21/57) series + TTM squeeze status, cached ~5 min.
+    Returns EMAs as [[unix_ts, value], ...] pairs so the client can align
+    them on the intraday chart without knowing anything about calendars."""
+    key = f"overlay:{kind}:{symbol.lower()}"
+    hit = _cache.get(key)
+    if hit and (time.time() - hit[0]) < 300:  # 5-min TTL — daily bars change once/day
+        return hit[1]
+    ts, highs, lows, closes = _daily_bars(kind, symbol)
+    out: dict = {"symbol": symbol.upper(), "kind": kind, "server_ts": int(time.time()),
+                 "emas": {"ema14": [], "ema21": [], "ema57": []}, "squeeze": None}
+    if closes and len(closes) >= 14:
+        for period, name in ((14, "ema14"), (21, "ema21"), (57, "ema57")):
+            series = indicators.ema_series(closes, period)
+            if not series:
+                continue
+            # ema_series length = len(closes) - period + 1; each value aligns
+            # with the bar at index (period - 1 + i).
+            pairs = []
+            for i, v in enumerate(series):
+                bar_idx = period - 1 + i
+                if bar_idx < len(ts):
+                    pairs.append([ts[bar_idx], round(v, 4)])
+            out["emas"][name] = pairs
+    # Squeeze: reuse the weekly path for stocks; compute daily-scale for crypto
+    # (crypto has no natural weekly cadence in a 24/7 market).
+    if kind == "crypto":
+        if closes and len(closes) >= 22:
+            try:
+                weekly = indicators.ttm_squeeze(highs, lows, closes)
+                out["squeeze"] = {"weekly": weekly, "biweekly": None,
+                                  "grain": "daily"}
+            except Exception:  # noqa: BLE001
+                out["squeeze"] = None
+    else:
+        out["squeeze"] = _weekly_squeeze(symbol)
+        if out["squeeze"]:
+            out["squeeze"]["grain"] = "weekly"
     _cache[key] = (time.time(), out)
     return out
 
@@ -624,6 +721,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not symbol:
                     return self._json({"error": "symbol required"}, code=400)
                 return self._json(fetch_intraday(kind, symbol, tf))
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": str(exc)}, code=502)
+
+        if path == "/api/chart-overlay":
+            try:
+                symbol = (params.get("symbol", [""])[0]).strip()
+                kind = (params.get("kind", ["stock"])[0]).lower()
+                if not symbol:
+                    return self._json({"error": "symbol required"}, code=400)
+                return self._json(chart_overlay(kind, symbol))
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": str(exc)}, code=502)
 

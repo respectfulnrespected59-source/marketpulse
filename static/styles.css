@@ -872,6 +872,35 @@ body {
 }
 .ltc-tool.ghost { background: transparent; }
 
+/* Chart overlays row: TTM squeeze chip + EMA legend (14/21/57). Sits between
+   the tool toolbar and the chart itself; hides cleanly when overlay data
+   hasn't landed yet so the layout doesn't shift. */
+.ltc-overlays { position: relative; z-index: 1; display: flex; flex-wrap: wrap;
+  align-items: center; gap: 8px; margin: 0 0 8px; min-height: 22px; }
+.ltc-sqz { display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; font-family: var(--mono);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--text-dim); background: rgba(15,20,27,0.6);
+  border: 1px solid var(--line); }
+.ltc-sqz b { color: var(--text); font-weight: 800; }
+.ltc-sqz .ltc-sqz-arr { font-size: 12px; line-height: 1; }
+.ltc-sqz.on { color: #e8b03a; border-color: rgba(232,176,58,0.5);
+  background: rgba(232,176,58,0.10); box-shadow: 0 0 12px rgba(232,176,58,0.25); }
+.ltc-sqz.on b { color: #e8b03a; }
+.ltc-sqz.fired { color: var(--buy); border-color: rgba(47,209,128,0.45);
+  background: rgba(47,209,128,0.10); box-shadow: 0 0 12px rgba(47,209,128,0.25); }
+.ltc-sqz.fired b { color: var(--buy); }
+.ltc-sqz.bull .ltc-sqz-arr { color: var(--buy); }
+.ltc-sqz.bear .ltc-sqz-arr { color: var(--sell); }
+.ltc-emas { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ltc-ema-chip { display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 6px; font-family: var(--mono);
+  font-size: 11px; font-weight: 700; color: var(--text-dim);
+  background: rgba(15,20,27,0.55); border: 1px solid var(--line); }
+.ltc-ema-chip i { display: inline-block; width: 10px; height: 2.5px;
+  border-radius: 2px; }
+.ltc-ema-chip b { color: var(--text); font-weight: 800; margin-left: 2px; }
+
 .ltc-chart-wrap {
   position: relative; width: 100%; aspect-ratio: 25 / 9;
   background:
