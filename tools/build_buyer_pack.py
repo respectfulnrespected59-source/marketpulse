@@ -36,8 +36,12 @@ BASE = [
     "indicators.py",
     "config.py",
     "daily_plays.py",
-    "safety.py",           # app.py imports these at module load — omitting one
-    "symbols.py",          # makes the unzipped app die on startup.
+    # app.py imports these at module load — omitting one makes the unzipped
+    # app die on startup. strategy.py is here rather than with the agent
+    # because the free edition's paper trading evaluates rules with it too.
+    "safety.py",
+    "strategy.py",
+    "symbols.py",
     "run.bat",
     "run.sh",
     "README.md",
@@ -67,6 +71,7 @@ BASE = [
     "pytest.ini",
     "tests/conftest.py",
     "tests/test_indicators.py",
+    "tests/test_strategy.py",   # the rule engine ships in both editions
 ]
 
 # FREE ONLY. The free edition ships under PolyForm Noncommercial 1.0.0; the Pro
@@ -95,10 +100,8 @@ PRO_ONLY = [
     "agent/guardrails.py",
     "agent/broker.py",
     "agent/proposer.py",
-    "agent/strategy.py",          # the rule engine; strategy.json is the USER'S
     "agent/cli.py",
     "tests/test_guardrails.py",   # needs agent/
-    "tests/test_strategy.py",     # needs agent/
 ]
 
 EDITIONS = {

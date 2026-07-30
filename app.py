@@ -25,6 +25,7 @@ import datetime
 import config
 import indicators
 from safety import BoundedCache, InvalidSymbol, clean_kind, clean_symbol
+import strategy as rules_engine
 import symbols as symbol_catalog
 
 # Pro modules are absent from the FREE buyer pack (see tools/build_buyer_pack.py).
@@ -224,6 +225,76 @@ def _px(value) -> float:
 def coinbase_product(symbol: str) -> str | None:
     """The Coinbase product for a slug or ticker, or None if it isn't tradable."""
     return symbol_catalog.resolve_crypto_product(symbol, COINBASE_MAP, listed_crypto())
+
+
+# ------------------------------------------------- paper trading
+
+# A paper run evaluates the trader's own rules over their own universe. Bounded
+# so one request can't fan out into an unbounded number of upstream fetches.
+MAX_PAPER_SYMBOLS = 12
+
+
+def paper_scan(strategy_doc: dict, open_symbols: dict | None = None) -> dict:
+    """Evaluate a trader's rules against live prices, and say what they imply.
+
+    Decides nothing on its own: it reports, per symbol, whether the declared
+    entry or exit conditions hold right now and at what price. The caller — the
+    browser's paper tracker — is what actually opens and closes positions.
+
+    Deliberately the SAME engine the paid agent runs, so a rule that fires on
+    paper fires identically when it is executing on a real broker. Two
+    implementations would drift, and the drift would show up as "it behaved
+    differently with real money", which is the worst possible bug to have.
+    """
+    errors = rules_engine.validate(strategy_doc)
+    if errors:
+        return {"error": "invalid strategy", "problems": errors}
+
+    kind = "crypto" if strategy_doc.get("kind") == "crypto" else "stock"
+    open_symbols = open_symbols or {}
+    universe: list[str] = []
+    for raw in strategy_doc.get("universe", [])[:MAX_PAPER_SYMBOLS]:
+        try:
+            universe.append(clean_symbol(raw))
+        except InvalidSymbol:
+            continue          # skip a bad ticker rather than fail the whole run
+
+    decisions: list[dict] = []
+    if kind == "crypto":
+        rows = []
+        for sym in universe:
+            got = fetch_crypto([sym.lower()])
+            if got:
+                got[0]["symbol"] = sym.upper()
+                rows.append(got[0])
+    else:
+        rows = fetch_stocks(universe) if universe else []
+
+    for row in rows:
+        if row.get("error"):
+            continue
+        symbol = row.get("symbol")
+        price = row.get("price")
+        facts = rules_engine.facts_from(
+            row.get("signal") or {}, price,
+            row.get("guides"), (row.get("squeeze") or {}).get("weekly"),
+        )
+        held = open_symbols.get(str(symbol).upper())
+        entry = exit_hit = False
+        why = ""
+        if held:
+            exit_hit, why = rules_engine.exit_signal(
+                strategy_doc, facts, float(held) if held else None)
+        else:
+            entry = rules_engine.entry_signal(strategy_doc, facts)
+        decisions.append({
+            "symbol": symbol, "kind": kind, "price": price,
+            "entry": entry, "exit": exit_hit, "why": why,
+            "label": (row.get("signal") or {}).get("label"),
+            "facts": facts,
+        })
+
+    return {"kind": kind, "server_ts": int(time.time()), "decisions": decisions}
 
 
 def search_symbols(query: str, limit: int = 12) -> list[dict]:
@@ -871,6 +942,37 @@ class Handler(BaseHTTPRequestHandler):
         symbol = clean_symbol(params.get("symbol", [""])[0])
         kind = clean_kind(params.get("kind", [default_kind])[0], default=default_kind)
         return symbol, kind
+
+    # Strategies are posted rather than put in a query string: a rule set is
+    # structured and can be long, and URLs get logged.
+    MAX_BODY_BYTES = 64 * 1024
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/api/paper/scan", "/api/strategy/validate"):
+            return self._send(404, b"Not found", "text/plain")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json({"error": "bad Content-Length"}, code=400)
+        if length <= 0 or length > self.MAX_BODY_BYTES:
+            return self._json({"error": "request body missing or too large"}, code=413)
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return self._json({"error": "body must be JSON"}, code=400)
+        if not isinstance(body, dict):
+            return self._json({"error": "body must be a JSON object"}, code=400)
+
+        try:
+            if path == "/api/strategy/validate":
+                problems = rules_engine.validate(body.get("strategy"))
+                return self._json({"ok": not problems, "problems": problems})
+
+            open_symbols = body.get("open") if isinstance(body.get("open"), dict) else {}
+            return self._json(paper_scan(body.get("strategy") or {}, open_symbols))
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)

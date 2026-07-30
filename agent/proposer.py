@@ -25,7 +25,6 @@ import time
 import config
 import guardrails
 import store
-import strategy
 
 # The signal engine lives one directory up (the MarketPulse root).
 _ROOT = os.path.dirname(config.HERE)
@@ -33,6 +32,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import app  # noqa: E402  (provides fetch_stocks / fetch_crypto with signals)
+import strategy  # noqa: E402  (the rule engine lives at the root, beside app)
 
 
 def _held_symbols() -> set[str]:
