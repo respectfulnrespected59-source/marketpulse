@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -23,6 +24,7 @@ import datetime
 
 import config
 import indicators
+from safety import BoundedCache, InvalidSymbol, clean_kind, clean_symbol
 
 # Pro modules are absent from the FREE buyer pack (see tools/build_buyer_pack.py).
 # Import them defensively so the free build still starts; every route that uses
@@ -122,7 +124,16 @@ def _cg_headers() -> dict:
     return h
 
 
-_cache: dict[str, tuple[float, object]] = {}
+# Bounded on purpose. The keys include a caller-supplied symbol, so a plain
+# dict let anyone grow this process's memory by asking for symbols that don't
+# exist. 512 entries covers every symbol a real session touches across all
+# timeframes, and evicts least-recently-used past that.
+MAX_CACHE_ENTRIES = 512
+_cache = BoundedCache(MAX_CACHE_ENTRIES)
+
+# One fixed sentence for every upstream failure. Detail goes to the log, not
+# to the caller — see Handler._upstream_failed.
+UPSTREAM_ERROR_MESSAGE = "Market data is temporarily unavailable. Try again shortly."
 
 
 def _cached(key: str):
@@ -509,7 +520,11 @@ def fetch_one_stock(symbol: str) -> dict | None:
             "guides": _decision_guides(symbol, closes),
         }
     except Exception as exc:  # noqa: BLE001 — one bad symbol shouldn't kill the grid
-        return {"kind": "stock", "symbol": symbol.upper(), "error": str(exc)}
+        # Detail to the log; the row itself only says the quote didn't load, so
+        # the grid never renders internal URLs or paths into the page.
+        print(f"[error] quote {symbol}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return {"kind": "stock", "symbol": symbol.upper(),
+                "error": UPSTREAM_ERROR_MESSAGE}
 
 
 def fetch_stocks(symbols: list[str]) -> list[dict]:
@@ -663,6 +678,26 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200):
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
+    @staticmethod
+    def _upstream_failed(route: str, exc: Exception) -> str:
+        """Log the real cause, hand the client a fixed sentence.
+
+        The exception text carries the URL we built and local file paths, so
+        echoing it told a caller how the server is wired. Operators still get
+        the detail on stderr.
+        """
+        print(f"[error] {route}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return UPSTREAM_ERROR_MESSAGE
+
+    def _symbol_and_kind(self, params: dict, default_kind: str = "stock"):
+        """Pull a validated (symbol, kind) out of the query string.
+
+        Raises InvalidSymbol, which the route handlers turn into a 400.
+        """
+        symbol = clean_symbol(params.get("symbol", [""])[0])
+        kind = clean_kind(params.get("kind", [default_kind])[0], default=default_kind)
+        return symbol, kind
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -684,65 +719,60 @@ class Handler(BaseHTTPRequestHandler):
                     ids = ids[:cap]
                 return self._json({"type": "crypto", "rows": fetch_crypto(ids),
                                    "ts": int(time.time())})
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/proof":
             if not _enabled("proof"):
                 return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
                                    "error": "Proof Mode is a Pro feature."}, code=402)
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                kind = (params.get("kind", ["stock"])[0]).lower()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
+                symbol, kind = self._symbol_and_kind(params)
                 key = f"proof:{kind}:{symbol.lower()}"
                 cached = _cached(key)
                 return self._json(cached if cached is not None
                                   else _store(key, run_proof(kind, symbol)))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/quote":
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                kind = (params.get("kind", ["stock"])[0]).lower()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
+                symbol, kind = self._symbol_and_kind(params)
                 return self._json(live_quote(kind, symbol))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/intraday":
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                kind = (params.get("kind", ["stock"])[0]).lower()
+                symbol, kind = self._symbol_and_kind(params)
                 tf = (params.get("tf", ["wide"])[0]).lower()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
                 return self._json(fetch_intraday(kind, symbol, tf))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/chart-overlay":
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                kind = (params.get("kind", ["stock"])[0]).lower()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
+                symbol, kind = self._symbol_and_kind(params)
                 return self._json(chart_overlay(kind, symbol))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/dca":
             if not _enabled("dca"):
                 return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
                                    "error": "The DCA Wizard is a Pro feature."}, code=402)
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                kind = (params.get("kind", ["stock"])[0]).lower()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
+                symbol, kind = self._symbol_and_kind(params)
                 try:
                     monthly = max(1.0, min(1_000_000.0, float(params.get("monthly", ["200"])[0])))
                 except (TypeError, ValueError):
@@ -762,17 +792,17 @@ class Handler(BaseHTTPRequestHandler):
                                        "error": "not enough history"})
                 report = dca.dca_report(dates, closes, kind, symbol, monthly, cadence, years)
                 return self._json(_store(key, report))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/options":
             if not _enabled("options"):
                 return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
                                    "error": "The options engine is a Pro feature."}, code=402)
             try:
-                symbol = (params.get("symbol", [""])[0]).strip()
-                if not symbol:
-                    return self._json({"error": "symbol required"}, code=400)
+                symbol = clean_symbol(params.get("symbol", [""])[0])
                 expiry = params.get("expiry", [None])[0]
                 try:
                     pot = max(50, min(1_000_000, int(float(params.get("pot", ["300"])[0]))))
@@ -815,8 +845,10 @@ class Handler(BaseHTTPRequestHandler):
                     # $-pot Probe→Read→Escalate sizer scaled to the stock's price.
                     ch["probe_plan"] = options.probe_plan(ch, pot)
                 return self._json(_store(key, ch))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/probe-scan":
             if not _enabled("options"):
@@ -858,8 +890,10 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"pot": pot, "budget": round(pot * 0.20), "scanned": len(rows),
                        "qualifiers": qualifiers, "near": near, "crypto": crypto}
                 return self._json(_store(key, out))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
-                return self._json({"error": str(exc)}, code=502)
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 
         if path == "/api/universe":
             return self._json({
