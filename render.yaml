@@ -10,7 +10,11 @@ services:
     buildCommand: "python -m compileall app.py indicators.py options.py backtest.py dca.py config.py"
     startCommand: "python app.py"
     healthCheckPath: /api/universe
-    autoDeploy: true
+    # Off deliberately. Once people are buying against what this demo shows,
+    # a routine push must not change the product underneath them — deploys are
+    # a decision, not a side effect of a commit. Tagged releases (v1.0) are the
+    # reference; promote them by hand.
+    autoDeploy: false
     envVars:
       - key: HOST
         value: 0.0.0.0
