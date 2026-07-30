@@ -104,9 +104,18 @@ function card(r) {
   }
   state.lastPrice[k] = r.price;
 
+  // Click-to-live handoff: for crypto we need the CoinGecko id (falls back to
+  // lowercased name if the backend didn't send one); for stocks the ticker is
+  // what /api/intraday expects.
+  const liveSym = r.kind === "crypto"
+    ? (r.id || (r.name || r.symbol || "").toLowerCase())
+    : r.symbol;
+
   el.innerHTML = `
     <div class="card-top">
-      <div>
+      <div class="sym-tap" role="button" tabindex="0"
+           data-live-kind="${esc(r.kind)}" data-live-sym="${esc(liveSym)}"
+           title="Open ${esc(r.symbol)} live chart">
         <div class="sym">${esc(r.symbol)}</div>
         <div class="name">${esc(r.name || "")}</div>
       </div>
@@ -129,9 +138,19 @@ function card(r) {
     ${guidesRow(r.guides)}
   `;
 
-  el.querySelector(".star").addEventListener("click", () => toggleWatch(r));
-  el.querySelector(".alert").addEventListener("click", () => openAlert(r));
+  el.querySelector(".star").addEventListener("click", (e) => { e.stopPropagation(); toggleWatch(r); });
+  el.querySelector(".alert").addEventListener("click", (e) => { e.stopPropagation(); openAlert(r); });
   return el;
+}
+
+/* Jump straight to the Live tab with a symbol preloaded and start the chart. */
+function openLiveFor(kind, sym) {
+  if (!sym) return;
+  const k = (kind === "crypto") ? "crypto" : "stock";
+  const symEl = $("#liveSymbol"), kindEl = $("#liveKind");
+  if (symEl) symEl.value = k === "crypto" ? String(sym).toLowerCase() : String(sym).toUpperCase();
+  if (kindEl) kindEl.value = k;
+  setView("live");
 }
 
 function guidesRow(g) {
@@ -805,9 +824,12 @@ function renderHome() {
     const r = livePnl(p, price);
     const cls = r.netUsd > 0 ? "up" : r.netUsd < 0 ? "down" : "";
     const side = (LIVE_SIDE[p.side] || LIVE_SIDE.long).label;
+    const liveSym = p.kind === "crypto" ? String(p.sym).toLowerCase() : p.sym;
     $("#homeLive").innerHTML =
       `<div class="hc-head">🔴 Live play <a class="hc-link" data-goto="live">open →</a></div>` +
-      `<div class="hc-big ${cls}">${esc(p.sym)} ${r.netUsd >= 0 ? "+" : "-"}$${Math.abs(r.netUsd).toFixed(2)}</div>` +
+      `<div class="hc-big ${cls}"><span class="sym-tap" role="button" tabindex="0"
+          data-live-kind="${esc(p.kind)}" data-live-sym="${esc(liveSym)}"
+          title="Open ${esc(p.sym)} live chart">${esc(p.sym)}</span> ${r.netUsd >= 0 ? "+" : "-"}$${Math.abs(r.netUsd).toFixed(2)}</div>` +
       `<div class="hc-sub">${esc(side)} · $${p.stake} stake · ${esc(p.status)}</div>` +
       `<div class="hc-sub">entry ${fmtPrice(p.entry)} → ${fmtPrice(price)} (${r.netPct >= 0 ? "+" : ""}${r.netPct.toFixed(2)}%)</div>`;
   }
@@ -2458,6 +2480,20 @@ async function init() {
   });
   $("#refreshBtn").addEventListener("click", loadView);
   $("#autoRefresh").addEventListener("change", startAuto);
+
+  // Click any ticker header on the grid or the cockpit's live card → jump to
+  // that symbol's live chart. Handler is delegated so it survives re-renders.
+  const onTapLive = (e) => {
+    const tap = e.target.closest(".sym-tap");
+    if (!tap) return;
+    if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    openLiveFor(tap.dataset.liveKind, tap.dataset.liveSym);
+  };
+  $("#grid").addEventListener("click", onTapLive);
+  $("#grid").addEventListener("keydown", onTapLive);
+  $("#homePanel").addEventListener("click", onTapLive);
+  $("#homePanel").addEventListener("keydown", onTapLive);
   $("#addForm").addEventListener("submit", (e) => {
     e.preventDefault();
     addSymbol($("#addInput").value);

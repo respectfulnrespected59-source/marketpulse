@@ -167,6 +167,7 @@ def _crypto_from_coingecko(ids: list[str]) -> list[dict]:
         closes = [p for p in (c.get("sparkline_in_7d") or {}).get("price", []) if p]
         rows.append({
             "kind": "crypto",
+            "id": c.get("id"),
             "symbol": (c.get("symbol") or "").upper(),
             "name": c.get("name"),
             "price": c.get("current_price"),
@@ -276,8 +277,8 @@ def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
             ref = closes[-25] if len(closes) >= 25 else closes[0]
             change = round((price - ref) / ref * 100, 2) if ref else 0
             return {
-                "kind": "crypto", "symbol": ticker, "name": name, "price": price,
-                "change": change, "spark": closes[-48:],
+                "kind": "crypto", "id": cg_id, "symbol": ticker, "name": name,
+                "price": price, "change": change, "spark": closes[-48:],
                 "signal": _signal_from_closes(closes),
             }
         except Exception:  # noqa: BLE001

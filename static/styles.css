@@ -170,6 +170,19 @@ body {
 .sym { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
 .name { font-size: 12px; color: var(--text-faint); margin-top: 1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+
+/* Click-to-live handoff — every ticker header is a portal to its live chart.
+   Neon-gold accent on hover matches the chart-tool selection language. */
+.sym-tap { cursor: pointer; border-radius: 8px; padding: 2px 6px; margin: -2px -6px;
+  transition: color 0.18s var(--ease), text-shadow 0.18s var(--ease),
+              background 0.18s var(--ease); }
+.sym-tap:hover .sym, .sym-tap:focus-visible .sym {
+  color: var(--gold); text-shadow: 0 0 12px rgba(217,176,97,0.55); }
+.sym-tap:hover { background: rgba(217,176,97,0.06); }
+.sym-tap:focus-visible { outline: 1px solid var(--gold);
+  box-shadow: 0 0 0 3px rgba(217,176,97,0.18); }
+.hc-big .sym-tap:hover, .hc-big .sym-tap:focus-visible {
+  color: var(--gold); text-shadow: 0 0 14px rgba(217,176,97,0.6); }
 .card-actions { margin-left: auto; display: flex; gap: 4px; }
 .icon-btn {
   width: 28px; height: 28px; display: grid; place-items: center; cursor: pointer;
