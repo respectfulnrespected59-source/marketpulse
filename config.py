@@ -20,7 +20,23 @@ TIER = "pro"                # "free" or "pro"  — rewritten per edition at buil
 # Kept as a separate statement on purpose — tools/build_buyer_pack.py rewrites
 # the literal assignment above by regex, and folding the two together would
 # break that match and abort the build.
-TIER = os.environ.get("MP_TIER", TIER).strip().lower()
+_explicit_tier = os.environ.get("MP_TIER", "").strip().lower()
+
+# A publicly reachable instance defaults to FREE even if nobody remembered to
+# set MP_TIER. The demo shipped as Pro precisely because the tier depended on
+# someone configuring a dashboard correctly; the safe default should not.
+# Local runs (the downloaded zip binds 127.0.0.1) keep the tier they were
+# built with. A buyer self-hosting their own Pro copy sets MP_TIER=pro.
+_host = os.environ.get("HOST", "127.0.0.1").strip().lower()
+_is_public = _host not in ("127.0.0.1", "localhost", "::1", "") or bool(
+    os.environ.get("RENDER")
+)
+
+if _explicit_tier:
+    TIER = _explicit_tier   # an explicit setting always wins
+elif _is_public:
+    TIER = "free"
+
 if TIER not in ("free", "pro"):
     TIER = "free"           # unrecognised value fails closed, never open
 
