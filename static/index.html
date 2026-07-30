@@ -381,6 +381,14 @@
 
   <script src="vendor/big.min.js"></script>
   <script src="quickfill.js"></script>
+  <!-- All of these are declaration-only and share one global scope. app.js
+       loads LAST because it calls init() on its final line, and that path
+       reaches into every file above it. -->
+  <script src="chart.js"></script>
+  <script src="chart-tools.js"></script>
+  <script src="panels.js"></script>
+  <script src="home.js"></script>
+  <script src="wizards.js"></script>
   <script src="app.js"></script>
   <script>
   /* PWA: register the service worker + drive the install affordance.

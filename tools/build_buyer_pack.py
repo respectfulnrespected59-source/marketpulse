@@ -36,13 +36,33 @@ BASE = [
     "indicators.py",
     "config.py",
     "daily_plays.py",
+    "safety.py",           # app.py imports these at module load — omitting one
+    "symbols.py",          # makes the unzipped app die on startup.
     "run.bat",
     "run.sh",
     "README.md",
     "DISCLAIMER.md",      # risk disclosures — ships in BOTH editions, never optional
+    # Every script index.html loads must ship, or the unzipped app 404s on it.
+    # quickfill.js and vendor/big.min.js were missing here: the pot tracker's
+    # amount control and its money math both went undefined in the delivered
+    # zip while working fine in the repo.
     "static/index.html",
     "static/styles.css",
     "static/app.js",
+    "static/chart.js",
+    "static/chart-tools.js",
+    "static/panels.js",
+    "static/home.js",
+    "static/wizards.js",
+    "static/quickfill.js",
+    "static/vendor/big.min.js",
+    # PWA shell — index.html links the manifest and registers the worker.
+    "static/sw.js",
+    "static/manifest.webmanifest",
+    "static/icons/favicon-32.png",
+    "static/icons/icon-192.png",
+    "static/icons/icon-512.png",
+    "static/icons/apple-touch-icon.png",
     # --- test suite (trust signal; not required to run the app) ---
     "pytest.ini",
     "tests/conftest.py",

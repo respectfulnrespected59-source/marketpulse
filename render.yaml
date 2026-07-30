@@ -14,5 +14,10 @@ services:
     envVars:
       - key: HOST
         value: 0.0.0.0
+      # The public demo is the FREE edition. Without this the hosted app runs
+      # whatever tier config.py ships with — which is "pro" — and hands the
+      # paid product to anyone holding the link.
+      - key: MP_TIER
+        value: free
       - key: PYTHON_VERSION
         value: "3.11.9"
