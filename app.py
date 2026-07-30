@@ -25,6 +25,7 @@ import datetime
 import config
 import indicators
 from safety import BoundedCache, InvalidSymbol, clean_kind, clean_symbol
+import symbols as symbol_catalog
 
 # Pro modules are absent from the FREE buyer pack (see tools/build_buyer_pack.py).
 # Import them defensively so the free build still starts; every route that uses
@@ -154,6 +155,75 @@ def _get_json(url: str, headers: dict | None = None, timeout: int = 12):
         return json.loads(resp.read().decode("utf-8"))
 
 
+# ------------------------------------------------- symbol universe
+
+# Coinbase's catalogue changes when coins are listed or delisted, which is rare,
+# so this is cached for six hours. COINBASE_MAP stays as the curated core (it
+# carries display names and CoinGecko slugs the grid needs); this adds
+# everything else Coinbase currently trades.
+LISTED_CRYPTO_TTL = 6 * 3600
+
+
+def listed_crypto() -> dict[str, str]:
+    """Base ticker -> Coinbase product id, for every market Coinbase lists.
+
+    Degrades to an empty map if Coinbase is unreachable, in which case symbol
+    resolution falls back to the curated map and the app behaves as before.
+    """
+    hit = _cache.get("listed:crypto")
+    if hit and (time.time() - hit[0]) < LISTED_CRYPTO_TTL:
+        return hit[1]
+    try:
+        raw = _get_json(f"{COINBASE_API}/products", timeout=15)
+        listed = symbol_catalog.parse_coinbase_products(raw)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] could not load Coinbase catalogue: {exc}", file=sys.stderr)
+        listed = {}
+    if listed:
+        _cache["listed:crypto"] = (time.time(), listed)
+    return listed
+
+
+def _px(value) -> float:
+    """Round a price for the wire, keeping sub-penny coins intact."""
+    return symbol_catalog.round_price(float(value))
+
+
+def coinbase_product(symbol: str) -> str | None:
+    """The Coinbase product for a slug or ticker, or None if it isn't tradable."""
+    return symbol_catalog.resolve_crypto_product(symbol, COINBASE_MAP, listed_crypto())
+
+
+def search_symbols(query: str, limit: int = 12) -> list[dict]:
+    """Look a symbol up by name or ticker across stocks, ETFs, and crypto.
+
+    Two sources, because each is only trustworthy for half the problem: Yahoo
+    indexes company names but returns unusable identifiers for crypto, while
+    Coinbase's catalogue is exactly the set of coins this app can actually
+    price. Crypto matches lead — a user typing "pepe" means the coin.
+    """
+    key = f"search:{query.lower()}:{limit}"
+    hit = _cache.get(key)
+    if hit and (time.time() - hit[0]) < 300:
+        return hit[1]
+
+    coins = symbol_catalog.search_listed_crypto(
+        query, listed_crypto(), COINBASE_MAP, limit=max(1, limit // 2)
+    )
+
+    stocks: list[dict] = []
+    try:
+        url = ("https://query1.finance.yahoo.com/v1/finance/search"
+               f"?q={urllib.parse.quote(query)}&quotesCount={limit}&newsCount=0")
+        stocks = symbol_catalog.parse_yahoo_search(_get_json(url), limit=limit)
+    except Exception as exc:  # noqa: BLE001 — a coin match is still useful
+        print(f"[warn] symbol search upstream failed: {exc}", file=sys.stderr)
+
+    rows = (coins + stocks)[:limit]
+    _cache[key] = (time.time(), rows)
+    return rows
+
+
 # ---------------------------------------------------------------- crypto
 
 def _signal_from_closes(closes: list[float]) -> dict:
@@ -240,7 +310,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
     ts_arr: list[int] = []
     vol_arr: list[float] = []
     if kind == "crypto":
-        prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
+        prod = coinbase_product(symbol)
         if prod:
             try:
                 gran = INTRADAY_TF["crypto"][tf]
@@ -249,8 +319,9 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
                 rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
                 for r in rows:
                     # Coinbase row: [time, low, high, open, close, volume]
-                    ohlc.append([round(float(r[3]), 4), round(float(r[2]), 4),
-                                 round(float(r[1]), 4), round(float(r[4]), 4)])
+                    # Precision scales with price: a fixed 4dp flattens
+                    # sub-penny coins like PEPE to a row of zeros.
+                    ohlc.append([_px(r[3]), _px(r[2]), _px(r[1]), _px(r[4])])
                     ts_arr.append(int(r[0]))
                     vol_arr.append(round(float(r[5] or 0), 2))
             except Exception:  # noqa: BLE001
@@ -266,7 +337,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
             vols = q.get("volume") or []
             for i, (o, h, l, c) in enumerate(zip(q["open"], q["high"], q["low"], q["close"])):
                 if None not in (o, h, l, c):
-                    ohlc.append([round(o, 4), round(h, 4), round(l, 4), round(c, 4)])
+                    ohlc.append([_px(o), _px(h), _px(l), _px(c)])
                     ts_arr.append(int(times[i]) if i < len(times) else 0)
                     v = vols[i] if i < len(vols) else 0
                     vol_arr.append(float(v) if v is not None else 0.0)
@@ -302,7 +373,7 @@ def _daily_bars(kind: str, symbol: str) -> tuple[list[int], list[float], list[fl
     Reuses existing fetchers so a hiccup here degrades gracefully to empty."""
     try:
         if kind == "crypto":
-            prod = COINBASE_MAP.get(symbol.lower(), (None,))[0]
+            prod = coinbase_product(symbol)
             if not prod:
                 return [], [], [], []
             url = f"{COINBASE_API}/products/{prod}/candles?granularity=86400"
@@ -351,7 +422,7 @@ def chart_overlay(kind: str, symbol: str) -> dict:
             for i, v in enumerate(series):
                 bar_idx = period - 1 + i
                 if bar_idx < len(ts):
-                    pairs.append([ts[bar_idx], round(v, 4)])
+                    pairs.append([ts[bar_idx], _px(v)])
             out["emas"][name] = pairs
     # Squeeze: reuse the weekly path for stocks; compute daily-scale for crypto
     # (crypto has no natural weekly cadence in a 24/7 market).
@@ -373,7 +444,18 @@ def chart_overlay(kind: str, symbol: str) -> dict:
 
 def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
     """Keyless fallback: one hourly-candle call per supported coin, in parallel."""
-    targets = [(i, COINBASE_MAP[i]) for i in ids if i in COINBASE_MAP]
+    # Resolve every requested id, not just the curated ones — a coin the user
+    # added by ticker is as real as one that shipped in the defaults. Anything
+    # Coinbase does not list is dropped, same as before.
+    targets = []
+    for i in ids:
+        product = coinbase_product(i)
+        if not product:
+            continue
+        curated = COINBASE_MAP.get(i.lower())
+        ticker = curated[1] if curated else i.upper()
+        name = symbol_catalog.crypto_display_name(i, COINBASE_MAP)
+        targets.append((i, (product, ticker, name)))
 
     def one(item):
         cg_id, (product, ticker, name) = item
@@ -512,9 +594,9 @@ def fetch_one_stock(symbol: str) -> dict | None:
             "kind": "stock",
             "symbol": symbol.upper(),
             "name": meta.get("longName") or meta.get("shortName") or symbol.upper(),
-            "price": round(price, 2),
+            "price": _px(price),
             "change": change,
-            "spark": [round(c, 2) for c in closes[-48:]],
+            "spark": [_px(c) for c in closes[-48:]],
             "signal": sig,
             "squeeze": _weekly_squeeze(symbol),
             "guides": _decision_guides(symbol, closes),
@@ -585,8 +667,8 @@ def fetch_history(kind: str, symbol: str):
                 closes.append(price)
         except Exception:  # noqa: BLE001  (429/geo) -> Coinbase daily candles
             dates, closes = [], []
-        if not closes and symbol.lower() in COINBASE_MAP:
-            product = COINBASE_MAP[symbol.lower()][0]
+        product = None if closes else coinbase_product(symbol)
+        if product:
             stamps, cl = _coinbase_closes(product, 86400)  # daily (~300 days)
             dates = [datetime.datetime.utcfromtimestamp(t).strftime("%Y-%m-%d") for t in stamps]
             closes = cl
@@ -641,7 +723,7 @@ def run_proof(kind: str, symbol: str) -> dict:
     out["walkforward"] = backtest.walk_forward(dates, closes, kind=kind)
     out["symbol"] = symbol.upper()
     out["kind"] = kind
-    series = {"dates": dates, "closes": [round(c, 4) for c in closes]}
+    series = {"dates": dates, "closes": [_px(c) for c in closes]}
     if kind != "crypto":
         omap = _stock_ohlc_map(symbol)
         hits = sum(1 for d in dates if d in omap)
@@ -653,7 +735,7 @@ def run_proof(kind: str, symbol: str) -> dict:
                 bar = omap.get(d)
                 if bar:
                     o, h, l, cl = bar
-                    candles.append([round(o, 4), round(h, 4), round(l, 4), round(cl, 4)])
+                    candles.append([_px(o), _px(h), _px(l), _px(cl)])
                 else:
                     candles.append([c, c, c, c])
             series["ohlc"] = candles
@@ -892,6 +974,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(_store(key, out))
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
+
+        if path == "/api/search":
+            try:
+                q = (params.get("q", [""])[0]).strip()
+                if len(q) < 1:
+                    return self._json({"query": "", "results": []})
+                # Bounded so the upstream lookup and the cache key stay small.
+                return self._json({"query": q, "results": search_symbols(q[:64])})
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": self._upstream_failed(path, exc)}, code=502)
 

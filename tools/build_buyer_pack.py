@@ -36,8 +36,8 @@ BASE = [
     "indicators.py",
     "config.py",
     "daily_plays.py",
-    "safety.py",           # app.py imports this at module load — omitting it
-                           # makes the unzipped app die on startup.
+    "safety.py",           # app.py imports these at module load — omitting one
+    "symbols.py",          # makes the unzipped app die on startup.
     "run.bat",
     "run.sh",
     "README.md",

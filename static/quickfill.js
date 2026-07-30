@@ -25,9 +25,17 @@
   function money(n) {
     var neg = n < 0;
     var v = Math.abs(n);
-    var s = v >= 1000 && v % 1 === 0
-      ? v.toLocaleString("en-US")
-      : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var s;
+    if (v > 0 && v < 0.01) {
+      // Sub-penny coins: two decimals renders PEPE's price as "$0.00", which
+      // makes the conversion line look broken. Keep four significant digits.
+      var leadingZeros = Math.max(0, Math.floor(-Math.log10(v)));
+      s = v.toFixed(Math.min(12, leadingZeros + 4));
+    } else if (v >= 1000 && v % 1 === 0) {
+      s = v.toLocaleString("en-US");
+    } else {
+      s = v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
     return (neg ? "-$" : "$") + s;
   }
 

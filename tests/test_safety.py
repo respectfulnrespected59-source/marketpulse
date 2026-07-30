@@ -15,10 +15,15 @@ pytestmark = pytest.mark.unit
 class TestCleanSymbol:
     @pytest.mark.parametrize(
         "symbol",
-        ["AAPL", "TSLA", "F", "BRK.B", "BRK-B", "bitcoin", "bitcoin-cash", "SPY"],
+        ["AAPL", "TSLA", "F", "BRK.B", "BRK-B", "bitcoin", "bitcoin-cash", "SPY",
+         "PEPE", "WIF", "^GSPC", "^IXIC"],
     )
     def test_accepts_real_symbols(self, symbol):
         assert clean_symbol(symbol) == symbol
+
+    def test_rejects_a_bare_caret(self):
+        with pytest.raises(InvalidSymbol):
+            clean_symbol("^")
 
     def test_trims_surrounding_whitespace(self):
         assert clean_symbol("  AAPL  ") == "AAPL"

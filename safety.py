@@ -19,11 +19,12 @@ from collections import OrderedDict
 # things we legitimately send are CoinGecko slugs like "bitcoin-cash" (12).
 MAX_SYMBOL_LEN = 12
 
-# Tickers and CoinGecko slugs only: must start alphanumeric, then alphanumerics
-# with single dots or hyphens (BRK.B, BRK-B, bitcoin-cash). This deliberately
-# excludes everything that could change the meaning of the URL it lands in —
-# "/", "?", "#", "%", ":", "@" and whitespace.
-_SYMBOL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|[.\-](?=[A-Za-z0-9])){0,11}$")
+# Tickers and CoinGecko slugs only: an optional leading "^" (Yahoo's index
+# convention, as in ^GSPC), then alphanumerics with single dots or hyphens
+# (BRK.B, BRK-B, bitcoin-cash). This deliberately excludes everything that
+# could change the meaning of the URL it lands in — "/", "?", "#", "%", ":",
+# "@" and whitespace. "^" is not a URL delimiter, so it cannot.
+_SYMBOL_RE = re.compile(r"^\^?[A-Za-z0-9](?:[A-Za-z0-9]|[.\-](?=[A-Za-z0-9])){0,11}$")
 
 # Kinds the API understands. Anything else is a client bug, not a market.
 VALID_KINDS = ("stock", "crypto")

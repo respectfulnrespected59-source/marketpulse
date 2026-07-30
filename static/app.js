@@ -227,7 +227,14 @@ function fmtPrice(p) {
   if (p == null) return "—";
   if (p >= 1000) return "$" + p.toLocaleString(undefined, { maximumFractionDigits: 0 });
   if (p >= 1) return "$" + p.toFixed(2);
-  return "$" + p.toFixed(p >= 0.01 ? 4 : 6);
+  if (p >= 0.01) return "$" + p.toFixed(4);
+  // Sub-penny coins: a fixed 6dp renders PEPE at ~$0.0000027 as "$0.000003",
+  // hiding the digits that actually move. Keep four significant ones instead.
+  if (p > 0) {
+    const leadingZeros = Math.max(0, Math.floor(-Math.log10(p)));
+    return "$" + p.toFixed(Math.min(12, leadingZeros + 4));
+  }
+  return "$" + p.toFixed(6);
 }
 
 /* ----------------------------------------------------- watchlist */
@@ -317,20 +324,52 @@ function toast(kind, title, body) {
 
 /* ----------------------------------------------------- add symbol */
 
-function addSymbol(raw) {
-  const v = raw.trim();
-  if (!v) return;
-  const looksLikeTicker = /^[A-Za-z.\-]{1,6}$/.test(v) && v === v.toUpperCase();
-  if (state.view === "stocks" || (state.view === "watchlist" && looksLikeTicker)) {
-    const sym = v.toUpperCase();
+function pinSymbol(symbol, kind) {
+  if (kind === "stock") {
+    const sym = symbol.toUpperCase();
     state.stockSyms = [...new Set([...(state.stockSyms || defaults.stocks), sym])];
     store.set("mp_stock_syms", state.stockSyms);
   } else {
-    const id = v.toLowerCase();
+    const id = symbol.toLowerCase();
     state.cryptoIds = [...new Set([...(state.cryptoIds || defaults.crypto), id])];
     store.set("mp_crypto_ids", state.cryptoIds);
   }
   loadView();
+}
+
+/* Add whatever the user typed, resolving it against what the venues actually
+ * list. The old version guessed from a 1-6 letter regex, so anything with a
+ * digit or a longer name landed in the wrong bucket and quietly showed nothing.
+ * We ask the server first and fall back to the current view if it can't say. */
+async function addSymbol(raw) {
+  const v = (raw || "").trim();
+  if (!v) return;
+
+  const viewKind = state.view === "stocks" ? "stock" : "crypto";
+  try {
+    setStatus(`Looking up ${v}…`);
+    const res = await fetch(`/api/search?q=${encodeURIComponent(v)}`);
+    const data = await res.json();
+    const hits = (data && data.results) || [];
+
+    // Prefer an exact ticker match, and among ties respect the view the user
+    // is standing in — on the Stocks tab, "ETH" means the stock if one exists.
+    const exact = hits.filter((h) => h.symbol.toUpperCase() === v.toUpperCase());
+    const pick =
+      exact.find((h) => h.kind === viewKind) || exact[0] ||
+      hits.find((h) => h.kind === viewKind) || hits[0];
+
+    if (pick) {
+      setStatus(`Added ${pick.symbol} — ${pick.name}`);
+      pinSymbol(pick.symbol, pick.kind);
+      return;
+    }
+    setStatus(`No market found for "${v}"`);
+  } catch (err) {
+    // Search is a convenience; if it's down, honour what the user typed.
+    setStatus("");
+  }
+  pinSymbol(v, viewKind);
 }
 
 /* ----------------------------------------------------- wiring */
