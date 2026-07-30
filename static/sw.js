@@ -12,7 +12,7 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v8";
+const SHELL_VERSION = "mp-shell-v9";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -23,6 +23,7 @@ const SHELL_ASSETS = [
   "/panels.js",
   "/home.js",
   "/wizards.js",
+  "/paper.js",
   "/quickfill.js",
   "/vendor/big.min.js",
   "/manifest.webmanifest",

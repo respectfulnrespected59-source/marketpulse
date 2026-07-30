@@ -58,6 +58,7 @@ BASE = [
     "static/panels.js",
     "static/home.js",
     "static/wizards.js",
+    "static/paper.js",
     "static/quickfill.js",
     "static/vendor/big.min.js",
     # PWA shell — index.html links the manifest and registers the worker.

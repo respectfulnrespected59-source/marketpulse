@@ -224,6 +224,15 @@ class TestValidate:
         errors = strategy.validate(a_strategy(sizing={"max_open": bad}))
         assert any("max_open" in e for e in errors)
 
+    @pytest.mark.parametrize("good", [0, 15, 60, 90.5])
+    def test_accepts_a_sane_cooldown(self, good):
+        assert strategy.validate(a_strategy(sizing={"cooldown_min": good})) == []
+
+    @pytest.mark.parametrize("bad", [-1, "an hour"])
+    def test_rejects_a_nonsense_cooldown(self, bad):
+        errors = strategy.validate(a_strategy(sizing={"cooldown_min": bad}))
+        assert any("cooldown_min" in e for e in errors)
+
     def test_reports_every_problem_at_once(self):
         # Fixing a config one exception at a time is miserable.
         errors = strategy.validate({"universe": [], "entry": {"all": [["nope", "?!", 1]]}})

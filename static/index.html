@@ -38,6 +38,7 @@
       <button class="tab" data-view="pot">🫙 Pot</button>
       <button class="tab" data-view="dca">🌱 DCA</button>
       <button class="tab" data-view="live">🔴 Live</button>
+      <button class="tab" data-view="paper">📝 Paper</button>
       <button class="tab" data-view="proof">◆ Proof</button>
     </nav>
 
@@ -358,6 +359,40 @@
     <div class="dca-proj" id="dcaProj"></div>
   </section>
 
+  <!-- Paper trading: your rules, real prices, no real order ever placed. -->
+  <section class="paper" id="paperPanel" hidden>
+    <h2 class="panel-title">📝 Paper Trading</h2>
+    <p class="panel-sub">
+      Write your rules. They run against <b>real prices</b> on a timer and open
+      and close <b>paper</b> positions — no broker, no key, no real order.
+      Fills are charged the same commission and slippage the backtest uses,
+      because a paper record that fills at the mid price flatters itself.
+      <b>Most rules lose some. That is what a week of paper is for.</b>
+    </p>
+
+    <div class="paper-grid">
+      <div class="paper-rules-col">
+        <label class="paper-label" for="paperRules">Your rules</label>
+        <textarea id="paperRules" class="paper-rules" spellcheck="false" rows="18"></textarea>
+        <div class="paper-actions">
+          <button type="button" class="ltc-tool" id="paperValidateBtn">✓ Validate</button>
+          <button type="button" class="ltc-tool" id="paperRunBtn">▶ Start paper run</button>
+          <button type="button" class="ltc-tool ghost" id="paperResetBtn">↺ Reset record</button>
+          <span class="paper-status" id="paperStatus">stopped</span>
+        </div>
+        <div class="paper-validation" id="paperValidation"></div>
+      </div>
+
+      <div class="paper-record-col">
+        <div class="pot-stats" id="paperStats"></div>
+        <h3 class="paper-h3">Open positions</h3>
+        <div id="paperOpen"></div>
+        <h3 class="paper-h3">Closed trades</h3>
+        <div id="paperClosed"></div>
+      </div>
+    </div>
+  </section>
+
   <footer class="foot">
     <span>Signals are RSI + MACD + trend. <b>Educational tool — not financial advice.</b></span>
     <span class="foot-brand">A Quantum Melanin Media tool</span>
@@ -403,6 +438,7 @@
   <script src="panels.js"></script>
   <script src="home.js"></script>
   <script src="wizards.js"></script>
+  <script src="paper.js"></script>
   <script src="app.js"></script>
   <script>
   /* PWA: register the service worker + drive the install affordance.

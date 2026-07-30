@@ -414,18 +414,23 @@ function setView(v) {
   const isPot = v === "pot";
   const isDca = v === "dca";
   const isLive = v === "live";
-  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive;
+  const isPaper = v === "paper";
+  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper;
   $("#homePanel").hidden = !isHome;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
   $("#potPanel").hidden = !isPot;
   $("#dcaPanel").hidden = !isDca;
   $("#livePanel").hidden = !isLive;
+  $("#paperPanel").hidden = !isPaper;
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
   if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
   if (isHome) { renderHome(); return; }
+  // The paper run keeps polling when you leave the tab — a strategy that only
+  // trades while you're watching it isn't testing anything.
+  if (isPaper) { initPaper(); renderPaper(); return; }
   if (isLive) {
     ensureLiveQf();
     initLiveChartInteractions();

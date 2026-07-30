@@ -250,6 +250,15 @@ def validate(doc: object) -> list[str]:
                 not isinstance(max_open, int) or max_open < 1
             ):
                 errors.append("sizing.max_open: must be an integer of at least 1")
+            # Minutes to wait before re-entering a symbol you just exited.
+            # Without one, a broadly-true rule re-buys on the very next tick
+            # after a stop, which is revenge trading with extra steps.
+            cooldown = sizing.get("cooldown_min")
+            if cooldown is not None and (
+                not isinstance(cooldown, (int, float)) or cooldown < 0
+            ):
+                errors.append("sizing.cooldown_min: must be zero or a positive "
+                              "number of minutes")
     return errors
 
 
@@ -340,5 +349,7 @@ TEMPLATE = {
         "stop_loss_pct": 8,
         "take_profit_pct": 15,
     },
-    "sizing": {"notional": 50, "max_open": 3},
+    # cooldown_min: minutes before re-entering a symbol you just exited. Zero
+    # means a rule that stays true will re-buy immediately after a stop.
+    "sizing": {"notional": 50, "max_open": 3, "cooldown_min": 60},
 }

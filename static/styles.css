@@ -858,6 +858,58 @@ body {
 .ltc-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .ltc-tools.ltc-actions { margin-left: auto; }
 
+/* Paper trading — rules on the left, the record on the right. */
+.paper-grid {
+  display: grid; grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr);
+  gap: 18px; align-items: start;
+}
+@media (max-width: 860px) { .paper-grid { grid-template-columns: 1fr; } }
+.paper-label {
+  display: block; margin-bottom: 6px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text-dim); letter-spacing: 0.04em; text-transform: uppercase;
+}
+.paper-rules {
+  width: 100%; resize: vertical; min-height: 300px; padding: 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  color: var(--text); background: rgba(9, 12, 17, 0.85);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.paper-rules:focus {
+  outline: none; border-color: #f5c66b;
+  box-shadow: 0 0 0 2px rgba(245, 198, 107, 0.14);
+}
+.paper-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0;
+}
+.paper-status {
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  margin-left: auto;
+}
+.paper-status.live { color: #4ecb8f; }
+.paper-status.bad { color: #ff6b6b; }
+.paper-validation {
+  font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  padding: 0; color: var(--text-dim);
+}
+.paper-validation.ok { color: #4ecb8f; padding: 8px 0; }
+.paper-validation.bad { color: #ff6b6b; padding: 8px 0; }
+.paper-h3 {
+  margin: 16px 0 8px; font-size: 12px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.paper-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; margin-bottom: 6px;
+  font-family: var(--mono); font-size: 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(15, 20, 27, 0.5);
+}
+.paper-row b { min-width: 62px; }
+.paper-row .muted { color: var(--text-dim); margin-left: auto; }
+.paper-row.win { border-left: 3px solid #4ecb8f; }
+.paper-row.loss { border-left: 3px solid #ff6b6b; }
+
 /* Indicator controls — deliberately quiet. They sit under the tools and read
    as settings, not as actions competing with Mark entry / Trend line. */
 .ltc-indbar {
