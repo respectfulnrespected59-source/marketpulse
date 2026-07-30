@@ -239,6 +239,37 @@ The quick-fill widget became **reusable** and now lives on the **Pot probe** and
 
 ---
 
+# Sprint 3a — The Cockpit
+
+::: hero
+### Sprint 3a · Home Cockpit
+*One screen that pulls it all together.*
+
+**Goal:** A command center — pot, play, and plans at a glance.
+**Status:** LIVE
+:::
+
+## What we built
+
+A new **Home** view, now the default landing screen: it aggregates your **Pot** (equity, win rate, next-probe budget), your active **Live play** (symbol + P&L), and your **saved DCA plans** — plus **Export / Import** to back everything up.
+
+## How it works
+
+- Everything reads from your browser (localStorage), so the cockpit **loads instantly** — no API call, works even if the market feeds are down.
+- **Saved DCA plans:** name and save any plan; Load reopens it, delete removes it.
+- **Export / Import:** back up your pot, plays, and plans to a JSON file and restore them — the data-safety net for a client-side app (chosen over server storage because the free host is ephemeral).
+
+## The receipt
+
+| Check | Result |
+|-------|--------|
+| Home is the default view | Pass |
+| Pot + Live + saved plans aggregate | Pass |
+| Save plan → Load reopens it | Pass |
+| Export produces valid backup | Pass |
+
+---
+
 # Where It Stands Today
 
 > *A real, polished, installable trading app — honest by design,
@@ -248,6 +279,7 @@ The quick-fill widget became **reusable** and now lives on the **Pot probe** and
 
 | Layer | What it does |
 |-------|--------------|
+| Home cockpit | Pot + play + saved plans at a glance, export/import |
 | Installable PWA | Home-screen app, offline-capable |
 | Candlestick charts | Proof + live intraday, timeframe toggle |
 | Quick-fill tickets | Live · Pot · DCA — precise money math |
@@ -262,14 +294,14 @@ The quick-fill widget became **reusable** and now lives on the **Pot probe** and
 
 ::: row
 ::: hero
-### Sprint 3 — The Cockpit
-*Make it persistent.*
+### Sprint 3b — Automation
+*Propose, you approve.*
 
-**Server-side portfolio + DCA plans**
-**Unified Portfolio home**
-**DCA automation scheduler** (propose → you approve)
+**A "due today" checklist for your plans**
+**Mark when you fund a plan**
+**The cockpit flags what's next**
 
-*No license required.*
+*Still no license required.*
 :::
 ::: villain
 ### Sprint 4 — Real Money

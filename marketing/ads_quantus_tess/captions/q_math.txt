@@ -1,0 +1,3 @@
+Most options trades LOSE.
+We built a robot that
+loses small & survives.
