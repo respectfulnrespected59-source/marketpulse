@@ -47,6 +47,8 @@ reports/
 !agent/.env.example
 agent/data/
 agent/HALT
+# The trader's own rules — personal, and never ours to commit or ship.
+agent/strategy.json
 
 # OS
 .DS_Store

@@ -95,8 +95,10 @@ PRO_ONLY = [
     "agent/guardrails.py",
     "agent/broker.py",
     "agent/proposer.py",
+    "agent/strategy.py",          # the rule engine; strategy.json is the USER'S
     "agent/cli.py",
     "tests/test_guardrails.py",   # needs agent/
+    "tests/test_strategy.py",     # needs agent/
 ]
 
 EDITIONS = {

@@ -13,9 +13,14 @@ Usage (from the agent/ directory):
   python cli.py panic  [reason]     engage kill switch (blocks all sends)
   python cli.py resume              release kill switch
   python cli.py audit  [n]          tail the decision log
+  python cli.py strategy init       write a starter rules file you then edit
+  python cli.py strategy validate   check your rules before they trade
+  python cli.py strategy show       print the rules currently in force
+  python cli.py strategy fields     list every field a condition can use
 """
 from __future__ import annotations
 
+import os
 import sys
 from decimal import Decimal
 
@@ -189,6 +194,70 @@ def cmd_audit(n: int) -> None:
         print(f"  {r['ts']}  {r['event']:<14} {r.get('detail', {})}")
 
 
+def cmd_strategy(args: list[str]) -> int:
+    """init / validate / show / fields — the trader's own rules."""
+    import json
+    import strategy
+
+    path = os.path.join(config.HERE, strategy.STRATEGY_FILENAME)
+    sub = (args[0] if args else "show").lower()
+
+    if sub == "fields":
+        print("\nFields you can use in a condition:\n")
+        for name, why in strategy.FIELDS.items():
+            print(f"  {name:<16} {why}")
+        print("\nOperators: " + ", ".join(strategy.OPERATORS))
+        print("Group conditions under 'all' (every one) or 'any' (one is enough).\n")
+        return 0
+
+    if sub == "init":
+        if os.path.exists(path) and "--force" not in args:
+            print(f"{path} already exists. Re-run with --force to overwrite it.")
+            return 2
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(strategy.TEMPLATE, fh, indent=2)
+            fh.write("\n")
+        print(f"Wrote {path}")
+        print("Edit it, then run:  python cli.py strategy validate")
+        print("It is an EXAMPLE, not advice. Backtest it, then paper it.")
+        return 0
+
+    if sub in ("validate", "show"):
+        if not os.path.isfile(path):
+            print(f"No strategy at {path}")
+            print("Run:  python cli.py strategy init")
+            return 2
+        try:
+            doc = strategy.load(path)
+        except strategy.StrategyError as exc:
+            print(str(exc))
+            return 1
+        entry = doc.get("entry") or {}
+        exit_rules = doc.get("exit") or {}
+        sizing = doc.get("sizing") or {}
+        print(f"\n  {doc['name']}  ({doc.get('kind', 'stock')})")
+        print(f"  universe   {', '.join(doc.get('universe', []))}")
+        print(f"  entry      {'all of' if 'all' in entry else 'any of'}:")
+        for cond in entry.get("all") or entry.get("any") or []:
+            print(f"               {cond[0]} {cond[1]} {cond[2]}")
+        if exit_rules:
+            bits = []
+            if exit_rules.get("stop_loss_pct"):
+                bits.append(f"stop -{exit_rules['stop_loss_pct']}%")
+            if exit_rules.get("take_profit_pct"):
+                bits.append(f"target +{exit_rules['take_profit_pct']}%")
+            for cond in exit_rules.get("all") or exit_rules.get("any") or []:
+                bits.append(f"{cond[0]} {cond[1]} {cond[2]}")
+            print("  exit       " + (" · ".join(bits) if bits else "(none)"))
+        print(f"  size       ${sizing.get('notional', config.PER_TRADE_USD)} "
+              f"per trade, max {sizing.get('max_open', '—')} open")
+        print("\n  Valid. Backtest it, then run it on paper before anything else.\n")
+        return 0
+
+    print("usage: cli.py strategy [init|validate|show|fields]")
+    return 2
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         cmd_status()
@@ -210,6 +279,8 @@ def main(argv: list[str]) -> int:
         cmd_resume()
     elif cmd == "audit":
         cmd_audit(int(rest[0]) if rest else 30)
+    elif cmd == "strategy":
+        return cmd_strategy(rest)
     else:
         print(__doc__)
         return 2
