@@ -1296,12 +1296,23 @@ let liveLast = { data: null, kind: "stock", ok: false };
 // `pinned` = true means "keep the right edge glued to the latest bar as new
 // bars arrive"; the moment the user pans back, that latches to false and the
 // poll no longer yanks them forward. Reset whenever symbol or timeframe
-// changes so a fresh tape starts fully fit.
+// changes so the default compact window shows the freshest bars.
 let chartView = { start: null, count: null, pinned: true };
 let lastRenderSym = null, lastRenderTf = null;
-const MIN_VISIBLE_BARS = 6;
-const ZOOM_FACTOR = 1.20;
+const MIN_VISIBLE_BARS = 12;
+// Sensible default "compact" viewport per timeframe — chosen so a new tape
+// opens showing recent context at a comfortable candle width, not the whole
+// loaded array crammed into 1000px. Wheel/pinch zooms out to the full history.
+const DEFAULT_VISIBLE = { "1m": 90, "5m": 78, "10m": 78, "1h": 60 };
 let panDrag = null;  // {startClientX, startBar, moved}
+// Wheel coalescing: many trackpads fire 8-15 wheel events per gesture, each
+// with deltaY ~100. Applying a full step per event compounds into a dizzying
+// zoom. Instead: accumulate the raw delta between frames and apply once per
+// rAF with a gentle exponential factor.
+let _wheelAccum = 0;
+let _wheelAnchorBarFull = null;
+let _wheelIsPan = false;
+let _wheelRaf = 0;
 function resetChartView() { chartView = { start: null, count: null, pinned: true }; }
 // Chart interaction mode: "none" | "mark" | "line".
 // Trend line UX: single click drops a pending gold anchor at the target price
@@ -1502,10 +1513,12 @@ function renderLiveTradeChart(d, kind) {
     lastRenderTf = liveTf;
   }
 
-  // Slice to viewport. `count == null` means "fit all"; otherwise clamp to
+  // Slice to viewport. `count == null` means "use the compact per-tf default"
+  // (much easier to read than the whole loaded array); otherwise clamp to
   // sane bounds. If pinned, glue to the right edge as new bars arrive.
   const nAll = fullOhlc.length;
-  let count = chartView.count == null ? nAll : Math.max(MIN_VISIBLE_BARS, Math.min(nAll, chartView.count));
+  const defaultN = Math.min(nAll, DEFAULT_VISIBLE[liveTf] || 78);
+  let count = chartView.count == null ? defaultN : Math.max(MIN_VISIBLE_BARS, Math.min(nAll, chartView.count));
   let start;
   if (chartView.pinned || chartView.start == null) {
     start = Math.max(0, nAll - count);
@@ -1557,6 +1570,7 @@ function renderLiveTradeChart(d, kind) {
 
   let base = "";
   base += _priceGridSVG(priceRect, c.min, c.max);
+  base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop);
   base += c.markup;
   base += _volumeSVG(volRect, ohlc, volArr);
   base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop);
@@ -1643,6 +1657,47 @@ function _fmtAxisPrice(v) {
   if (Math.abs(v) >= 100) return v.toFixed(1);
   if (Math.abs(v) >= 1) return v.toFixed(2);
   return v.toFixed(4);
+}
+
+/* Vertical divider + tiny date label at every session boundary — every time
+   the calendar day changes bar-to-bar. Draws BEHIND the candles so the price
+   action stays visually dominant, but the eye immediately clocks "new day
+   here" instead of reading the overnight gap as a random blank. */
+function _sessionDividersSVG(rect, ohlc, tsArr, timeAxisTop) {
+  const n = ohlc.length;
+  if (!tsArr || tsArr.length !== n || n < 2) return "";
+  const n1 = Math.max(1, n - 1);
+  const X = (i) => rect.x + (n === 1 ? 0.5 : i / n1) * rect.w;
+  let out = "";
+  let prevKey = null;
+  // Density guard: at deep zoom-out one divider per bar is noise. Cap to
+  // one label every ~55px so labels never overlap.
+  const minLabelPx = 55;
+  const barPx = rect.w / n;
+  const labelStride = Math.max(1, Math.ceil(minLabelPx / Math.max(1, barPx)));
+  let idxSinceLabel = labelStride;
+  const bottom = (timeAxisTop != null ? timeAxisTop : rect.y + rect.h).toFixed(1);
+  for (let i = 0; i < n; i++) {
+    const t = tsArr[i];
+    if (!t) continue;
+    const d = new Date(t * 1000);
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (prevKey !== null && key !== prevKey) {
+      const x = X(i).toFixed(1);
+      out += `<line x1="${x}" y1="${rect.y.toFixed(1)}" x2="${x}" y2="${bottom}"
+        stroke="rgba(120,180,255,0.18)" stroke-width="1" stroke-dasharray="3 5"/>`;
+      if (idxSinceLabel >= labelStride) {
+        const label = d.toLocaleDateString([], { month: "short", day: "numeric" });
+        out += `<text x="${(X(i) + 4).toFixed(1)}" y="${(rect.y + 12).toFixed(1)}"
+          fill="rgba(160,190,230,0.65)" font-family="var(--mono)" font-size="10"
+          font-weight="600" letter-spacing="0.01em">${label}</text>`;
+        idxSinceLabel = 0;
+      }
+    }
+    idxSinceLabel++;
+    prevKey = key;
+  }
+  return out;
 }
 
 function _priceGridSVG(rect, min, max) {
@@ -2252,17 +2307,36 @@ function _onChartWheel(evt) {
   const rect = svg.getBoundingClientRect();
   const relX = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
   const cursorBarInView = Math.round(relX * Math.max(0, g.n - 1));
-  const cursorBarInFull = g.viewStart + cursorBarInView;
-  // Horizontal-dominant wheel or shift+wheel = pan; otherwise zoom.
-  if (evt.shiftKey || Math.abs(evt.deltaX) > Math.abs(evt.deltaY)) {
-    const raw = evt.shiftKey ? evt.deltaY : evt.deltaX;
+  _wheelAnchorBarFull = g.viewStart + cursorBarInView;
+  _wheelIsPan = evt.shiftKey || Math.abs(evt.deltaX) > Math.abs(evt.deltaY);
+  // Accumulate raw delta; a single rAF-scheduled callback drains it. Multiple
+  // wheel events between frames collapse into one gentle step.
+  _wheelAccum += _wheelIsPan
+    ? (evt.shiftKey ? evt.deltaY : evt.deltaX)
+    : evt.deltaY;
+  if (_wheelRaf) return;
+  _wheelRaf = requestAnimationFrame(_drainWheel);
+}
+
+function _drainWheel() {
+  _wheelRaf = 0;
+  const delta = _wheelAccum;
+  _wheelAccum = 0;
+  if (!liveLast.geom) return;
+  const g = liveLast.geom;
+  if (_wheelIsPan) {
+    const svg = $("#liveTradeChart");
+    const rect = svg.getBoundingClientRect();
     const barsPerPx = Math.max(0.02, g.n / rect.width);
-    const step = Math.max(1, Math.round(Math.abs(raw) * barsPerPx / 3));
-    _panBars(raw >= 0 ? step : -step);
+    const step = Math.round(delta * barsPerPx / 3);
+    if (step !== 0) _panBars(step);
     return;
   }
-  const factor = evt.deltaY > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
-  _zoomAtBar(cursorBarInFull, factor);
+  // Gentle exponential zoom: 100 units of delta ≈ 4% zoom step. Multi-event
+  // trackpad bursts still add up smoothly instead of stair-stepping.
+  const factor = Math.exp(delta * 0.0004);
+  const clamped = Math.min(2.5, Math.max(0.4, factor));
+  _zoomAtBar(_wheelAnchorBarFull, clamped);
 }
 
 function _onChartDblClick(evt) {
