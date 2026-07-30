@@ -35,13 +35,41 @@ const TF_GRAIN = {
 const TF_POLL_MS = { "1m": 8000, "5m": 20000, "10m": 30000, "15m": 45000,
                      "30m": 60000, "1h": 60000, "1D": 300000, "1W": 600000 };
 
-// Chart overlay cache: daily EMA(14/21/57) series + TTM squeeze status. Fetched
-// once per symbol, refreshed every ~5 min (daily bars only change once a day).
+/* Indicator settings — the trader's, not ours.
+ *
+ * Read straight from localStorage rather than through app.js's `store`, because
+ * chart.js is evaluated FIRST (see index.html) and `store` doesn't exist yet at
+ * this point. Corrupt settings fall back to defaults instead of throwing: a bad
+ * saved value must never cost someone their chart.
+ */
+const IND_KEY = "mp_chart_indicators";
+const IND_DEFAULTS = {
+  ema: [14, 21, 57],
+  showEma: true,
+  showSqueeze: true,
+  showVolume: true,
+};
+let chartInd = { ...IND_DEFAULTS };
+try {
+  const saved = JSON.parse(localStorage.getItem(IND_KEY) || "null");
+  if (saved && typeof saved === "object") chartInd = { ...IND_DEFAULTS, ...saved };
+  if (!Array.isArray(chartInd.ema) || !chartInd.ema.length) chartInd.ema = [...IND_DEFAULTS.ema];
+} catch (e) { chartInd = { ...IND_DEFAULTS }; }
+
+function saveChartInd() {
+  try { localStorage.setItem(IND_KEY, JSON.stringify(chartInd)); } catch (e) { /* private mode */ }
+}
+
+// Chart overlay cache: EMA series + TTM squeeze, computed on the SAME bars the
+// chart draws. The key carries the timeframe and the periods — it used to be
+// just "kind:symbol", so switching timeframe reused an overlay measured on a
+// completely different scale, which is why the lines looked arbitrary.
 let liveOverlay = null;                  // last payload, or null
-let liveOverlayKey = null;               // "kind:symbol" of what's currently cached
+let liveOverlayKey = null;               // kind:symbol:tf:periods:squeeze
 let liveOverlayAt = 0;                   // ms epoch of last successful fetch
-const OVERLAY_TTL_MS = 5 * 60 * 1000;
-const EMA_COLORS = { ema14: "#f5c66b", ema21: "#5b8def", ema57: "#c471ed" };
+const OVERLAY_TTL_MS = 60 * 1000;
+// Assigned by position, so the first period a trader lists always gets gold.
+const EMA_COLORS = ["#f5c66b", "#5b8def", "#c471ed", "#4ecb8f"];
 
 // In-memory snapshot of the last loaded intraday payload — click handlers use
 // it to convert pixel coords back into (timestamp, price) space.
@@ -157,13 +185,21 @@ async function loadLiveTradeChart() {
 }
 
 async function loadChartOverlay(kind, sym) {
-  const key = `${kind}:${sym.toLowerCase()}`;
+  // Nothing to fetch if the trader has both indicators switched off.
+  if (!chartInd.showEma && !chartInd.showSqueeze) return null;
+
+  const periods = chartInd.ema.join(",");
+  // The timeframe and the periods are part of the identity of an overlay —
+  // leaving them out is what made a 1m chart wear daily EMA lines.
+  const key = `${kind}:${sym.toLowerCase()}:${liveTf}:${periods}:${chartInd.showSqueeze ? 1 : 0}`;
   if (liveOverlayKey === key && Date.now() - liveOverlayAt < OVERLAY_TTL_MS) {
     return liveOverlay;
   }
   try {
-    const r = await fetch(`/api/chart-overlay?symbol=${encodeURIComponent(sym)}&kind=${kind}`);
-    const d = await r.json();
+    const url = `/api/chart-overlay?symbol=${encodeURIComponent(sym)}&kind=${kind}`
+      + `&tf=${encodeURIComponent(liveTf)}&ema=${encodeURIComponent(periods)}`
+      + `&squeeze=${chartInd.showSqueeze ? 1 : 0}`;
+    const d = await (await fetch(url)).json();
     if (d && !d.error) {
       liveOverlay = d;
       liveOverlayKey = key;
@@ -190,62 +226,77 @@ function _emaAt(pairs, ts) {
   return v0 + (v1 - v0) * f;
 }
 
-function _emaOverlaySVG(geom, clampY, emas) {
-  if (!geom || !emas) return "";
-  const { X, Y, ts, n } = geom;
+function _emaOverlaySVG(geom, clampY, overlay) {
+  if (!geom || !overlay || !overlay.emas || !chartInd.showEma) return "";
+  const { X, ts, n } = geom;
   if (!ts || ts.length !== n || n < 2) return "";
   let out = "";
-  const order = ["ema14", "ema21", "ema57"];
-  for (const key of order) {
-    const pairs = emas[key];
-    if (!pairs || pairs.length < 1) continue;
+  // Draw in the order the trader listed their periods, so colours stay put.
+  const order = (overlay.periods || []).map(String);
+  order.forEach((key, idx) => {
+    const pairs = overlay.emas[key];
+    if (!pairs || pairs.length < 1) return;
     const pts = [];
     for (let i = 0; i < n; i++) {
       const v = _emaAt(pairs, ts[i]);
       if (v == null) continue;
       pts.push(`${X(i).toFixed(1)},${clampY(v).toFixed(1)}`);
     }
-    if (pts.length < 2) continue;
-    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="${EMA_COLORS[key]}"
+    if (pts.length < 2) return;
+    const colour = EMA_COLORS[idx % EMA_COLORS.length];
+    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="${colour}"
       stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" opacity="0.9"
-      pointer-events="none"><title>${key.toUpperCase()} (daily)</title></polyline>`;
-  }
+      pointer-events="none"><title>EMA ${key} · ${overlay.tf || ""} bars</title></polyline>`;
+  });
   return out;
 }
 
 function _renderSqueezeChip(overlay) {
   const box = $("#ltcSqz");
   if (!box) return;
+  // The squeeze is now a single reading measured on the chart's own bars, and
+  // it says which timeframe that was. It used to be a weekly value for stocks
+  // and a daily one for crypto, pinned above whatever chart you had open.
   const sq = overlay && overlay.squeeze;
-  const wk = sq && sq.weekly;
-  if (!wk || !wk.state) { box.hidden = true; box.textContent = ""; return; }
-  const state = wk.state;                              // "on" | "fired" | "off"
-  const mom = wk.mom;                                  // "bull" | "bear"
+  if (!chartInd.showSqueeze || !sq || !sq.state) {
+    box.hidden = true; box.textContent = ""; return;
+  }
+  const state = sq.state;                              // "on" | "fired" | "off"
+  const mom = sq.mom;                                  // "bull" | "bear"
   const arrow = mom === "bull"
-    ? (wk.accel === "rising" ? "▲" : "△")
-    : (wk.accel === "falling" ? "▼" : "▽");
-  const grain = sq.grain === "daily" ? "D" : "W";
-  const txt = state === "on" ? `ON·${wk.bars}` : state === "fired" ? "FIRED" : "off";
+    ? (sq.accel === "rising" ? "▲" : "△")
+    : (sq.accel === "falling" ? "▼" : "▽");
+  const grain = sq.grain || (overlay && overlay.tf) || "";
+  const txt = state === "on" ? `ON·${sq.bars}` : state === "fired" ? "FIRED" : "off";
   box.hidden = false;
   box.className = `ltc-sqz ${state} ${mom || ""}`;
   box.innerHTML = `<b>TTM</b> ${grain} ${txt} <span class="ltc-sqz-arr">${arrow}</span>`;
-  box.title = `TTM squeeze ${state} (${grain === "D" ? "daily" : "weekly"} bars) · momentum ${mom || "—"} ${wk.accel || ""}`;
+  box.title = `TTM squeeze ${state} on ${grain} bars · momentum ${mom || "—"} ${sq.accel || ""}`;
 }
 
 function _renderEmaLegend(overlay) {
   const box = $("#ltcEmas");
   if (!box) return;
-  const e = overlay && overlay.emas;
-  const has = e && (e.ema14.length || e.ema21.length || e.ema57.length);
+  const emas = overlay && overlay.emas;
+  const periods = (overlay && overlay.periods) || [];
+  const has = chartInd.showEma && emas
+    && periods.some((p) => (emas[String(p)] || []).length);
   if (!has) { box.hidden = true; box.textContent = ""; return; }
-  const chip = (k, label) => {
-    const arr = e[k];
+
+  // Every value below originates server-side from a fixed vocabulary: periods
+  // are integers this client asked for, and the price is a number. Nothing a
+  // user can type reaches this markup.
+  const chip = (period, idx) => {
+    const arr = emas[String(period)];
     const v = arr && arr.length ? arr[arr.length - 1][1] : null;
     if (v == null) return "";
-    return `<span class="ltc-ema-chip"><i style="background:${EMA_COLORS[k]}"></i>${label}<b>${fmtPrice(v)}</b></span>`;
+    const colour = EMA_COLORS[idx % EMA_COLORS.length];
+    const n = Number(period) || 0;
+    return `<span class="ltc-ema-chip"><i style="background:${colour}"></i>`
+      + `EMA${n}<b>${fmtPrice(v)}</b></span>`;
   };
   box.hidden = false;
-  box.innerHTML = chip("ema14", "EMA14") + chip("ema21", "EMA21") + chip("ema57", "EMA57");
+  box.innerHTML = periods.map(chip).join("");
 }
 
 function renderLiveTradeChart(d, kind) {
@@ -306,8 +357,9 @@ function renderLiveTradeChart(d, kind) {
   const padL = 8, padT = 10;
   const AXIS_R = 58;   // right price ladder width
   const AXIS_B = 22;   // bottom time-label strip height
-  const VOL_H = 46;    // volume histogram height
-  const VOL_GAP = 4;
+  // Volume off gives its height back to the candles rather than leaving a gap.
+  const VOL_H = chartInd.showVolume ? 46 : 0;
+  const VOL_GAP = chartInd.showVolume ? 4 : 0;
   const priceRect = {
     x: padL, y: padT,
     w: W - padL - AXIS_R,
@@ -331,7 +383,7 @@ function renderLiveTradeChart(d, kind) {
   base += _priceGridSVG(priceRect, c.min, c.max);
   base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop);
   base += c.markup;
-  base += _volumeSVG(volRect, ohlc, volArr);
+  if (chartInd.showVolume) base += _volumeSVG(volRect, ohlc, volArr);
   base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop);
   base += _priceAxisSVG(priceRect, c.min, c.max, last, AXIS_R, W);
 
@@ -347,7 +399,9 @@ function renderLiveTradeChart(d, kind) {
   // Daily EMA(14/21/57) polylines — interpolated onto the intraday grid so
   // they span the whole width at any timeframe.
   if (liveOverlay && liveOverlay.emas) {
-    overlay += _emaOverlaySVG(liveLast.geom, clampY, liveOverlay.emas);
+    // Pass the whole overlay: the renderer needs `periods` for draw order and
+    // `tf` for the tooltip, not just the series map.
+    overlay += _emaOverlaySVG(liveLast.geom, clampY, liveOverlay);
   }
   overlay += _userOverlaySVG(d.symbol, liveLast.geom, clampY);
 

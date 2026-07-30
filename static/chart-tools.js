@@ -338,6 +338,97 @@ function _toggleFullscreen() {
   else apply();
 }
 
+/* Indicator controls — EMA on/off and periods, squeeze on/off, volume on/off.
+ *
+ * Settings live in chartInd (chart.js) and persist to localStorage, so a reload
+ * keeps the chart the trader set up. Changing anything drops the cached overlay
+ * and refetches, because the overlay is now measured per timeframe AND per
+ * period — a stale one would draw lines from the previous settings.
+ */
+function _applyIndicatorSettings(refetch) {
+  saveChartInd();
+  if (refetch) {
+    liveOverlay = null;
+    liveOverlayKey = null;
+    liveOverlayAt = 0;
+  }
+  const note = $("#indNote");
+  if (note) {
+    note.textContent = chartInd.showEma
+      ? `measured on ${liveTf} bars`
+      : "EMA off";
+  }
+  if (typeof loadLiveTradeChart === "function") loadLiveTradeChart();
+  else if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+/* Parse "9, 21, 50" the same way the server does, so what you type is what you
+   get. Invalid entries leave the previous periods alone rather than wiping the
+   lines out from under you mid-edit. */
+function _parseEmaPeriods(raw) {
+  const out = [];
+  for (const part of String(raw || "").split(",")) {
+    const n = Number(part.trim());
+    if (!Number.isInteger(n) || n < 2 || n > 400) continue;
+    if (!out.includes(n)) out.push(n);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function initIndicatorControls() {
+  const bar = $("#ltcIndBar");
+  if (!bar || bar.dataset.wired === "1") return;
+  bar.dataset.wired = "1";
+
+  const ema = $("#indEma"), periods = $("#indEmaPeriods");
+  const sqz = $("#indSqueeze"), vol = $("#indVolume"), reset = $("#indReset");
+
+  // Reflect saved settings into the controls on first paint.
+  if (ema) ema.checked = !!chartInd.showEma;
+  if (sqz) sqz.checked = !!chartInd.showSqueeze;
+  if (vol) vol.checked = !!chartInd.showVolume;
+  if (periods) periods.value = chartInd.ema.join(",");
+
+  if (ema) ema.addEventListener("change", () => {
+    chartInd.showEma = ema.checked;
+    _applyIndicatorSettings(ema.checked);
+  });
+  if (sqz) sqz.addEventListener("change", () => {
+    chartInd.showSqueeze = sqz.checked;
+    _applyIndicatorSettings(sqz.checked);
+  });
+  if (vol) vol.addEventListener("change", () => {
+    chartInd.showVolume = vol.checked;
+    _applyIndicatorSettings(false);   // volume needs no server round-trip
+  });
+
+  if (periods) {
+    const commit = () => {
+      const parsed = _parseEmaPeriods(periods.value);
+      if (!parsed.length) { periods.value = chartInd.ema.join(","); return; }
+      if (parsed.join(",") === chartInd.ema.join(",")) return;
+      chartInd.ema = parsed;
+      periods.value = parsed.join(",");   // show exactly what was accepted
+      _applyIndicatorSettings(true);
+    };
+    periods.addEventListener("change", commit);
+    periods.addEventListener("blur", commit);
+    periods.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+    });
+  }
+
+  if (reset) reset.addEventListener("click", () => {
+    chartInd = { ema: [14, 21, 57], showEma: true, showSqueeze: true, showVolume: true };
+    if (ema) ema.checked = true;
+    if (sqz) sqz.checked = true;
+    if (vol) vol.checked = true;
+    if (periods) periods.value = chartInd.ema.join(",");
+    _applyIndicatorSettings(true);
+  });
+}
+
 function initLiveChartInteractions() {
   const svg = $("#liveTradeChart");
   if (!svg || svg.dataset.wired === "1") return;
@@ -375,6 +466,7 @@ function initLiveChartInteractions() {
     resetChartView();
     if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
   });
+  initIndicatorControls();
   window.addEventListener("keydown", (e) => {
     if (e.key === "Alt") { altHeld = true; }
     if (e.key === "Escape") {

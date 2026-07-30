@@ -39,14 +39,17 @@
     return (neg ? "-$" : "$") + s;
   }
 
-  function trimNum(str) {
-    return str.indexOf(".") < 0 ? str : str.replace(/0+$/, "").replace(/\.$/, "");
+  // The symbol comes from a free-text box, and the conversion line below is
+  // written with innerHTML. Escaped locally rather than borrowing app.js's
+  // esc(), because this widget is deliberately self-contained and loads first.
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
 
-  function escHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (ch) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
-    });
+  function trimNum(str) {
+    return str.indexOf(".") < 0 ? str : str.replace(/0+$/, "").replace(/\.$/, "");
   }
 
   function mount(container, opts) {

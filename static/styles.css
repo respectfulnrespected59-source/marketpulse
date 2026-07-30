@@ -857,6 +857,38 @@ body {
 }
 .ltc-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .ltc-tools.ltc-actions { margin-left: auto; }
+
+/* Indicator controls — deliberately quiet. They sit under the tools and read
+   as settings, not as actions competing with Mark entry / Trend line. */
+.ltc-indbar {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 10px;
+  margin: -4px 0 10px; flex-wrap: wrap;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(15, 20, 27, 0.4);
+}
+.ltc-ind {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text-dim); letter-spacing: 0.02em;
+  transition: color 160ms var(--ease);
+}
+.ltc-ind:hover { color: var(--text); }
+.ltc-ind input { accent-color: #f5c66b; cursor: pointer; margin: 0; }
+.ltc-ind-input {
+  width: 92px; padding: 4px 7px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text); background: rgba(9, 12, 17, 0.8);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.ltc-ind-input:focus {
+  outline: none; border-color: #f5c66b;
+  box-shadow: 0 0 0 2px rgba(245, 198, 107, 0.15);
+}
+.ltc-ind-note {
+  font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+  opacity: 0.75; margin-left: auto;
+}
 .ltc-tool {
   padding: 5px 10px; font-family: var(--mono); font-size: 11px; font-weight: 700;
   color: var(--text-dim); background: rgba(15,20,27,0.6); border: 1px solid var(--line);

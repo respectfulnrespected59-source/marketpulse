@@ -136,6 +136,34 @@ _cache = BoundedCache(MAX_CACHE_ENTRIES)
 # chart and pan back through it, small enough to keep the response light.
 MAX_INTRADAY_BARS = 500
 
+# Chart indicator settings the caller may adjust. Bounded on purpose: these
+# arrive from a query string, and an unbounded period or an unbounded number of
+# lines is a way to make the server do arbitrary work per request.
+DEFAULT_EMA_PERIODS = (14, 21, 57)
+MAX_EMA_LINES = 4
+MIN_EMA_PERIOD, MAX_EMA_PERIOD = 2, 400
+
+
+def clean_ema_periods(raw: str | None) -> tuple[int, ...]:
+    """Parse "9,21,50" into a bounded, de-duplicated, ordered tuple.
+
+    Anything unparseable is dropped rather than raising — a bad indicator
+    setting should fall back to the defaults, never break the chart.
+    """
+    if not raw:
+        return DEFAULT_EMA_PERIODS
+    out: list[int] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part.isdigit():
+            continue
+        period = int(part)
+        if MIN_EMA_PERIOD <= period <= MAX_EMA_PERIOD and period not in out:
+            out.append(period)
+        if len(out) >= MAX_EMA_LINES:
+            break
+    return tuple(out) or DEFAULT_EMA_PERIODS
+
 # One fixed sentence for every upstream failure. Detail goes to the log, not
 # to the caller — see Handler._upstream_failed.
 UPSTREAM_ERROR_MESSAGE = "Market data is temporarily unavailable. Try again shortly."
@@ -445,78 +473,63 @@ def _agg_ohlc(ohlc: list, ts: list, vol: list, factor: int) -> tuple[list, list,
     return o2, t2, v2
 
 
-# ---------------------------------------------------- chart overlays
+def chart_overlay(kind: str, symbol: str, tf: str = "wide",
+                  ema_periods: tuple[int, ...] = DEFAULT_EMA_PERIODS,
+                  want_squeeze: bool = True) -> dict:
+    """EMA series + TTM squeeze computed on THE SAME bars the chart draws.
 
-def _daily_bars(kind: str, symbol: str) -> tuple[list[int], list[float], list[float], list[float]]:
-    """Return (ts, highs, lows, closes) of ~120 daily bars for overlay math.
-    Reuses existing fetchers so a hiccup here degrades gracefully to empty."""
-    try:
-        if kind == "crypto":
-            prod = coinbase_product(symbol)
-            if not prod:
-                return [], [], [], []
-            url = f"{COINBASE_API}/products/{prod}/candles?granularity=86400"
-            raw = _get_json(url) or []
-            rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
-            ts = [int(r[0]) for r in rows]
-            highs = [float(r[2]) for r in rows]
-            lows = [float(r[1]) for r in rows]
-            closes = [float(r[4]) for r in rows]
-            return ts, highs, lows, closes
-        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-               "?range=6mo&interval=1d")
-        result = _get_json(url)["chart"]["result"][0]
-        stamps = result.get("timestamp") or []
-        q = result["indicators"]["quote"][0]
-        ts, highs, lows, closes = [], [], [], []
-        for i, (h, l, c) in enumerate(zip(q.get("high", []), q.get("low", []), q.get("close", []))):
-            if None in (h, l, c):
-                continue
-            ts.append(int(stamps[i]) if i < len(stamps) else 0)
-            highs.append(float(h)); lows.append(float(l)); closes.append(float(c))
-        return ts, highs, lows, closes
-    except Exception:  # noqa: BLE001
-        return [], [], [], []
+    This used to compute EMAs on daily bars and the squeeze on weekly bars for
+    stocks but daily for crypto — regardless of the timeframe on screen, and
+    with no `tf` in the cache key. So a 1-minute chart carried daily EMA lines
+    that never moved when you changed timeframe, under a weekly squeeze chip
+    that meant something different for a coin than for a stock. It read as
+    random because it *was* unrelated to what you were looking at.
 
-
-def chart_overlay(kind: str, symbol: str) -> dict:
-    """Daily EMA(14/21/57) series + TTM squeeze status, cached ~5 min.
-    Returns EMAs as [[unix_ts, value], ...] pairs so the client can align
-    them on the intraday chart without knowing anything about calendars."""
-    key = f"overlay:{kind}:{symbol.lower()}"
+    Deriving from fetch_intraday guarantees alignment: the overlay is computed
+    from the identical candles the renderer plots, so a line can never be drawn
+    against a scale it wasn't measured on.
+    """
+    tf = canonical_tf(tf)
+    periods = tuple(ema_periods) or DEFAULT_EMA_PERIODS
+    plist = ",".join(str(p) for p in periods)
+    key = f"overlay:{kind}:{symbol.lower()}:{tf}:{plist}:{int(bool(want_squeeze))}"
     hit = _cache.get(key)
-    if hit and (time.time() - hit[0]) < 300:  # 5-min TTL — daily bars change once/day
+    ttl = 20 if tf == "1m" else (300 if tf in SLOW_TF else QUOTE_TTL)
+    if hit and (time.time() - hit[0]) < ttl:
         return hit[1]
-    ts, highs, lows, closes = _daily_bars(kind, symbol)
-    out: dict = {"symbol": symbol.upper(), "kind": kind, "server_ts": int(time.time()),
-                 "emas": {"ema14": [], "ema21": [], "ema57": []}, "squeeze": None}
-    if closes and len(closes) >= 14:
-        for period, name in ((14, "ema14"), (21, "ema21"), (57, "ema57")):
-            series = indicators.ema_series(closes, period)
-            if not series:
-                continue
-            # ema_series length = len(closes) - period + 1; each value aligns
-            # with the bar at index (period - 1 + i).
-            pairs = []
-            for i, v in enumerate(series):
-                bar_idx = period - 1 + i
-                if bar_idx < len(ts):
-                    pairs.append([ts[bar_idx], _px(v)])
-            out["emas"][name] = pairs
-    # Squeeze: reuse the weekly path for stocks; compute daily-scale for crypto
-    # (crypto has no natural weekly cadence in a 24/7 market).
-    if kind == "crypto":
-        if closes and len(closes) >= 22:
-            try:
-                weekly = indicators.ttm_squeeze(highs, lows, closes)
-                out["squeeze"] = {"weekly": weekly, "biweekly": None,
-                                  "grain": "daily"}
-            except Exception:  # noqa: BLE001
-                out["squeeze"] = None
-    else:
-        out["squeeze"] = _weekly_squeeze(symbol)
-        if out["squeeze"]:
-            out["squeeze"]["grain"] = "weekly"
+
+    base = fetch_intraday(kind, symbol, tf)
+    ohlc = base.get("ohlc") or []
+    ts = base.get("ts") or []
+    highs = [row[1] for row in ohlc]
+    lows = [row[2] for row in ohlc]
+    closes = [row[3] for row in ohlc]
+
+    out: dict = {"symbol": symbol.upper(), "kind": kind, "tf": tf,
+                 "periods": list(periods), "emas": {}, "squeeze": None,
+                 "server_ts": int(time.time())}
+
+    for period in periods:
+        series = indicators.ema_series(closes, period) if closes else None
+        pairs: list[list] = []
+        for i, value in enumerate(series or []):
+            # ema_series length = len(closes) - period + 1; value i belongs to
+            # the bar at (period - 1 + i).
+            bar_idx = period - 1 + i
+            if bar_idx < len(ts):
+                pairs.append([ts[bar_idx], _px(value)])
+        out["emas"][str(period)] = pairs
+
+    if want_squeeze and closes:
+        try:
+            squeeze = indicators.ttm_squeeze(highs, lows, closes)
+        except Exception:  # noqa: BLE001 — a squeeze hiccup must not blank the chart
+            squeeze = None
+        if squeeze:
+            squeeze = dict(squeeze)
+            squeeze["grain"] = tf          # one meaning, and it names itself
+            out["squeeze"] = squeeze
+
     _cache[key] = (time.time(), out)
     return out
 
@@ -922,7 +935,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/chart-overlay":
             try:
                 symbol, kind = self._symbol_and_kind(params)
-                return self._json(chart_overlay(kind, symbol))
+                tf = (params.get("tf", ["wide"])[0]).lower()
+                periods = clean_ema_periods(params.get("ema", [None])[0])
+                # squeeze=0 turns the indicator off entirely rather than
+                # computing it and hiding it client-side.
+                want_squeeze = (params.get("squeeze", ["1"])[0]) not in ("0", "false", "no")
+                return self._json(
+                    chart_overlay(kind, symbol, tf, periods, want_squeeze)
+                )
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001

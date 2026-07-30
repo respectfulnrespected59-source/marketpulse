@@ -269,6 +269,20 @@
           <button type="button" class="ltc-tool ghost" id="ltcFullBtn" title="Fullscreen chart">⛶ Fullscreen</button>
         </div>
       </div>
+      <!-- Indicator controls. Every one of these is measured on the timeframe
+           you're looking at, and the settings persist across reloads. -->
+      <div class="ltc-indbar" id="ltcIndBar" role="group" aria-label="Indicators">
+        <label class="ltc-ind"><input type="checkbox" id="indEma"> EMA</label>
+        <input type="text" id="indEmaPeriods" class="ltc-ind-input"
+               inputmode="numeric" spellcheck="false" maxlength="19"
+               aria-label="EMA periods, comma separated"
+               title="Comma-separated periods, e.g. 9,21,50 — up to 4 lines">
+        <label class="ltc-ind"><input type="checkbox" id="indSqueeze"> TTM squeeze</label>
+        <label class="ltc-ind"><input type="checkbox" id="indVolume"> Volume</label>
+        <button type="button" class="ltc-tool ghost" id="indReset"
+                title="Back to EMA 14/21/57 with squeeze and volume on">Reset</button>
+        <span class="ltc-ind-note" id="indNote"></span>
+      </div>
       <div class="ltc-overlays">
         <span class="ltc-sqz" id="ltcSqz" hidden></span>
         <span class="ltc-emas" id="ltcEmas" hidden></span>

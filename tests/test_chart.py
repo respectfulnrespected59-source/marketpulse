@@ -239,6 +239,75 @@ class TestFetchIntraday:
         assert out["ts"] == []
         assert out["last"] is None
 
+    def test_overlay_is_computed_on_the_same_bars_the_chart_draws(self, monkeypatch):
+        # The bug this exists for: overlays were computed on daily bars (and a
+        # weekly squeeze for stocks) no matter which timeframe was on screen,
+        # with no tf in the cache key. A 1m chart carried daily EMA lines that
+        # never moved when you switched timeframe.
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(120))
+
+        chart = app.fetch_intraday("stock", "AAPL", "5m")
+        overlay = app.chart_overlay("stock", "AAPL", "5m")
+
+        assert overlay["tf"] == "5m"
+        chart_stamps = set(chart["ts"])
+        for period, pairs in overlay["emas"].items():
+            assert pairs, period
+            # Every EMA point must sit on a candle the chart actually plotted.
+            for stamp, _value in pairs:
+                assert stamp in chart_stamps, f"EMA{period} point off-chart"
+
+    def test_each_timeframe_gets_its_own_overlay(self, monkeypatch):
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(120))
+
+        five = app.chart_overlay("stock", "AAPL", "5m")
+        daily = app.chart_overlay("stock", "AAPL", "1D")
+
+        # Different timeframes must not share a cached overlay.
+        assert five["tf"] == "5m"
+        assert daily["tf"] == "1D"
+
+    def test_ema_periods_are_configurable(self, monkeypatch):
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(120))
+
+        overlay = app.chart_overlay("stock", "AAPL", "5m", ema_periods=(9, 20))
+
+        assert overlay["periods"] == [9, 20]
+        assert set(overlay["emas"]) == {"9", "20"}
+
+    def test_ema_alignment_starts_at_the_right_bar(self, monkeypatch):
+        # ema_series(closes, p) has len-p+1 values; value i belongs to bar p-1+i.
+        # Off-by-one here shifts every line sideways against the candles.
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(60))
+
+        chart = app.fetch_intraday("stock", "AAPL", "5m")
+        overlay = app.chart_overlay("stock", "AAPL", "5m", ema_periods=(14,))
+
+        first_stamp = overlay["emas"]["14"][0][0]
+        assert first_stamp == chart["ts"][13]
+
+    def test_squeeze_can_be_switched_off(self, monkeypatch):
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(120))
+
+        on = app.chart_overlay("stock", "AAPL", "5m", want_squeeze=True)
+        off = app.chart_overlay("stock", "AAPL", "5m", want_squeeze=False)
+
+        assert off["squeeze"] is None
+        assert on["squeeze"] is not None
+        # And it names the grain it was measured on, rather than implying one.
+        assert on["squeeze"]["grain"] == "5m"
+
+    def test_overlay_survives_an_empty_chart(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("upstream down")
+
+        monkeypatch.setattr(app, "_get_json", boom)
+
+        overlay = app.chart_overlay("stock", "AAPL", "5m")
+
+        assert overlay["squeeze"] is None
+        assert all(pairs == [] for pairs in overlay["emas"].values())
+
     def test_repeated_calls_do_not_grow_the_cache_without_bound(self, monkeypatch):
         monkeypatch.setattr(app, "_get_json", lambda *a, **k: _yahoo_payload(2))
 
