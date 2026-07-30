@@ -16,17 +16,24 @@
 /* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
 let liveChartTimer = null;
 let liveTf = "5m";
-const TF_ORDER = ["1m", "5m", "10m", "1h"];
+const TF_ORDER = ["1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W"];
 const TF_LABELS = {
-  stock: { "1m": "1m", "5m": "5m", "10m": "10m", "1h": "1h" },
-  crypto: { "1m": "1m", "5m": "5m", "10m": "10m", "1h": "1h" },
+  stock: { "1m": "1m", "5m": "5m", "10m": "10m", "15m": "15m",
+           "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W" },
+  crypto: { "1m": "1m", "5m": "5m", "10m": "10m", "15m": "15m",
+            "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W" },
 };
+// How much history each button actually covers, so the header can say it.
 const TF_GRAIN = {
-  stock: { "1m": "1m · 1D", "5m": "5m · 5D", "10m": "10m · 5D", "1h": "1h · 1M" },
-  crypto: { "1m": "1m · ~5h", "5m": "5m · ~1D", "10m": "10m · ~2D", "1h": "1h · ~12D" },
+  stock: { "1m": "1m · 5D", "5m": "5m · 5D", "10m": "10m · 5D", "15m": "15m · 1M",
+           "30m": "30m · 1M", "1h": "1h · 3M", "1D": "1D · 1Y", "1W": "1W · 5Y" },
+  crypto: { "1m": "1m · ~5h", "5m": "5m · ~1D", "10m": "10m · ~1D", "15m": "15m · ~3D",
+            "30m": "30m · ~3D", "1h": "1h · ~12D", "1D": "1D · ~10M", "1W": "1W · ~10M" },
 };
-// 1m tape needs a much faster poll to feel alive; wider zooms don't.
-const TF_POLL_MS = { "1m": 8000, "5m": 20000, "10m": 30000, "1h": 60000 };
+// 1m tape needs a much faster poll to feel alive; daily and weekly bars only
+// change once a session, so polling them hard just burns upstream quota.
+const TF_POLL_MS = { "1m": 8000, "5m": 20000, "10m": 30000, "15m": 45000,
+                     "30m": 60000, "1h": 60000, "1D": 300000, "1W": 600000 };
 
 // Chart overlay cache: daily EMA(14/21/57) series + TTM squeeze status. Fetched
 // once per symbol, refreshed every ~5 min (daily bars only change once a day).
@@ -51,7 +58,8 @@ const MIN_VISIBLE_BARS = 12;
 // Sensible default "compact" viewport per timeframe — chosen so a new tape
 // opens showing recent context at a comfortable candle width, not the whole
 // loaded array crammed into 1000px. Wheel/pinch zooms out to the full history.
-const DEFAULT_VISIBLE = { "1m": 90, "5m": 78, "10m": 78, "1h": 60 };
+const DEFAULT_VISIBLE = { "1m": 90, "5m": 78, "10m": 78, "15m": 78,
+                          "30m": 70, "1h": 60, "1D": 90, "1W": 60 };
 let panDrag = null;  // {startClientX, startBar, moved}
 // Wheel coalescing: many trackpads fire 8-15 wheel events per gesture, each
 // with deltaY ~100. Applying a full step per event compounds into a dizzying
@@ -283,9 +291,12 @@ function renderLiveTradeChart(d, kind) {
     svg.innerHTML = "";
     $("#ltcLast").textContent = "—";
     $("#ltcChg").textContent = "";
+    // The 1m note used to say Yahoo only serves the current session. That was
+    // true when 1m asked for a one-day range; it now pulls five days, so an
+    // empty 1m chart means the symbol has no tape at all, not that it's early.
     $("#ltcFoot").textContent = kind === "crypto"
-      ? (liveTf === "1m" ? "No 1m tape for this coin — try BTC, ETH, SOL…" : "No intraday candles for this coin (try BTC, ETH, SOL…).")
-      : (liveTf === "1m" ? "No 1m tape right now — Yahoo only serves 1m during the current session." : "No intraday candles right now — market may be closed.");
+      ? "No candles for this coin at this timeframe — try BTC, ETH, SOL…"
+      : "No candles for this symbol at this timeframe — check the ticker.";
     return;
   }
 

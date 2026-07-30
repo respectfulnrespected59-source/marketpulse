@@ -132,6 +132,10 @@ def _cg_headers() -> dict:
 MAX_CACHE_ENTRIES = 512
 _cache = BoundedCache(MAX_CACHE_ENTRIES)
 
+# Most recent candles returned for any intraday timeframe. Enough to fill the
+# chart and pan back through it, small enough to keep the response light.
+MAX_INTRADAY_BARS = 500
+
 # One fixed sentence for every upstream failure. Detail goes to the log, not
 # to the caller — see Handler._upstream_failed.
 UPSTREAM_ERROR_MESSAGE = "Market data is temporarily unavailable. Try again shortly."
@@ -282,12 +286,63 @@ def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
 # Intraday timeframe map. The `10m` slot has no native venue interval on
 # either Yahoo or Coinbase, so the fetch pulls 5m bars and pair-aggregates
 # them into synthesized 10m candles server-side (see _pair_agg_ohlc).
+# Timeframes offered on the chart, in the order the buttons appear.
+TIMEFRAMES = ("1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W")
+
+# How each timeframe is fetched, per venue.
+#   stock  -> (yahoo_range, yahoo_interval, aggregate_factor)
+#   crypto -> (coinbase_granularity_seconds, aggregate_factor)
+#
+# No range asks for a single day. A one-day window holds only the current
+# session, so at 09:32 ET the 1m chart had three candles on it and looked
+# broken — and on a weekend or holiday it would be empty. Every window now has
+# a full tape behind it, and MAX_INTRADAY_BARS trims the response back down.
+#
+# The aggregate factor covers intervals a venue does not publish: Yahoo has no
+# 10m, and Coinbase has no 30m or weekly, so those are folded from the next
+# interval down.
 INTRADAY_TF = {
-    "stock": {"1m": ("1d", "1m"), "5m": ("5d", "5m"), "10m": ("5d", "5m"),
-              "1h": ("1mo", "60m"), "day": ("1d", "5m"), "wide": ("5d", "15m")},
-    "crypto": {"1m": 60, "5m": 300, "10m": 300, "1h": 3600,
-               "day": 300, "wide": 3600},
+    "stock": {
+        "1m":  ("5d",  "1m",  1),
+        "5m":  ("5d",  "5m",  1),
+        "10m": ("5d",  "5m",  2),   # Yahoo has no 10m
+        "15m": ("1mo", "15m", 1),
+        "30m": ("1mo", "30m", 1),
+        "1h":  ("3mo", "60m", 1),
+        "1D":  ("1y",  "1d",  1),
+        "1W":  ("5y",  "1wk", 1),
+        # Legacy presets — older clients and saved links still send these.
+        "day":  ("5d", "5m",  1),
+        "wide": ("5d", "15m", 1),
+    },
+    "crypto": {
+        "1m":  (60,    1),
+        "5m":  (300,   1),
+        "10m": (300,   2),          # Coinbase has no 10m
+        "15m": (900,   1),
+        "30m": (900,   2),          # Coinbase has no 30m
+        "1h":  (3600,  1),
+        "1D":  (86400, 1),
+        "1W":  (86400, 7),          # Coinbase has no weekly
+        "day":  (300,  1),
+        "wide": (3600, 1),
+    },
 }
+
+# Daily and weekly bars change once a session, so they can sit in cache far
+# longer than a live 1m tape.
+SLOW_TF = ("1D", "1W")
+
+# Timeframe names are matched case-insensitively. The route handler lowercases
+# every query parameter, which silently turned "1D" into "1d" and "1W" into
+# "1w" — neither a key — so both fell through to "wide" and quietly served a
+# 15-minute chart under a daily label.
+_TF_CANONICAL = {name.lower(): name for name in INTRADAY_TF["stock"]}
+
+
+def canonical_tf(raw: str | None) -> str:
+    """Resolve a caller's timeframe to a known one, or the default."""
+    return _TF_CANONICAL.get((raw or "").strip().lower(), "wide")
 
 
 def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
@@ -299,11 +354,12 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
       ohlc: [[o,h,l,c], ...]       (unchanged — legacy candle renderer)
       ts:   [unix_seconds, ...]    (parallel to ohlc; empty if source lacks it)
     """
-    tf = tf if tf in INTRADAY_TF["stock"] else "wide"
+    tf = canonical_tf(tf)
     key = f"intraday:{kind}:{symbol.lower()}:{tf}"
     hit = _cache.get(key)
-    # 1-min tape needs a snappier cache so a live poll actually shows new bars.
-    ttl = 20 if tf == "1m" else QUOTE_TTL
+    # 1-min tape needs a snappier cache so a live poll actually shows new bars;
+    # daily and weekly bars only change once a session.
+    ttl = 20 if tf == "1m" else (300 if tf in SLOW_TF else QUOTE_TTL)
     if hit and (time.time() - hit[0]) < ttl:
         return hit[1]
     ohlc: list[list[float]] = []
@@ -313,7 +369,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
         prod = coinbase_product(symbol)
         if prod:
             try:
-                gran = INTRADAY_TF["crypto"][tf]
+                gran, _agg = INTRADAY_TF["crypto"][tf]
                 url = f"{COINBASE_API}/products/{prod}/candles?granularity={gran}"
                 raw = _get_json(url) or []
                 rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
@@ -328,7 +384,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
                 ohlc, ts_arr, vol_arr = [], [], []
     else:
         try:
-            rng, interval = INTRADAY_TF["stock"][tf]
+            rng, interval, _agg = INTRADAY_TF["stock"][tf]
             url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
                    f"?range={rng}&interval={interval}")
             result = _get_json(url)["chart"]["result"][0]
@@ -343,9 +399,19 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
                     vol_arr.append(float(v) if v is not None else 0.0)
         except Exception:  # noqa: BLE001
             ohlc, ts_arr, vol_arr = [], [], []
-    # Synthesize 10m bars by pair-aggregating consecutive 5m bars.
-    if tf == "10m" and ohlc:
-        ohlc, ts_arr, vol_arr = _pair_agg_ohlc(ohlc, ts_arr, vol_arr)
+    # Fold to any interval the venue doesn't publish (10m from 5m, crypto 30m
+    # from 15m, crypto weekly from daily).
+    spec = INTRADAY_TF["crypto" if kind == "crypto" else "stock"][tf]
+    factor = spec[-1]
+    if factor > 1 and ohlc:
+        ohlc, ts_arr, vol_arr = _agg_ohlc(ohlc, ts_arr, vol_arr, factor)
+    # Keep the most recent slice. Five days of 1m bars is ~1,950 candles — far
+    # more than the chart shows and a heavy payload — so send the recent tape
+    # and let the wider timeframes cover the longer view.
+    if len(ohlc) > MAX_INTRADAY_BARS:
+        ohlc = ohlc[-MAX_INTRADAY_BARS:]
+        ts_arr = ts_arr[-MAX_INTRADAY_BARS:]
+        vol_arr = vol_arr[-MAX_INTRADAY_BARS:]
     out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc, "ts": ts_arr,
            "volume": vol_arr,
            "last": ohlc[-1][3] if ohlc else None, "server_ts": int(time.time())}
@@ -353,16 +419,29 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
     return out
 
 
-def _pair_agg_ohlc(ohlc: list, ts: list, vol: list) -> tuple[list, list, list]:
-    """Fold two adjacent bars into one: open = first.o, close = second.c,
-    high = max, low = min, volume = sum, timestamp = first bar's start."""
+def _agg_ohlc(ohlc: list, ts: list, vol: list, factor: int) -> tuple[list, list, list]:
+    """Fold `factor` adjacent bars into one.
+
+    open = first bar's open, close = last bar's close, high/low span the group,
+    volume sums, timestamp is the group's start. A trailing partial group is
+    dropped rather than drawn, because a half-formed candle would read as a
+    real one — the same rule at every factor (10m from 5m, weekly from daily).
+    """
+    if factor <= 1:
+        return ohlc, ts, vol
     o2, t2, v2 = [], [], []
-    n = len(ohlc) - (len(ohlc) % 2)
-    for i in range(0, n, 2):
-        a, b = ohlc[i], ohlc[i + 1]
-        o2.append([a[0], max(a[1], b[1]), min(a[2], b[2]), b[3]])
+    n = len(ohlc) - (len(ohlc) % factor)
+    for i in range(0, n, factor):
+        group = ohlc[i:i + factor]
+        o2.append([
+            group[0][0],
+            max(g[1] for g in group),
+            min(g[2] for g in group),
+            group[-1][3],
+        ])
         t2.append(ts[i] if i < len(ts) else 0)
-        v2.append(round((vol[i] if i < len(vol) else 0) + (vol[i + 1] if i + 1 < len(vol) else 0), 2))
+        v2.append(round(sum(vol[i + j] if i + j < len(vol) else 0
+                            for j in range(factor)), 2))
     return o2, t2, v2
 
 
