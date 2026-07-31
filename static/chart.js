@@ -198,7 +198,9 @@ async function loadLiveTradeChart() {
   if (!raw) return;
   const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
   try {
-    const d = await (await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`)).json();
+    const res = await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`);
+    if (!res.ok) throw new Error(`server said ${res.status}`);
+    const d = await res.json();
     // Fire-and-forget overlay refresh so the chart shows immediately; the
     // next full render (either this call's chain or the next poll) picks up
     // the daily EMAs + squeeze once they land.
@@ -206,7 +208,29 @@ async function loadLiveTradeChart() {
       if (ov) renderLiveTradeChart(d, kind);
     }).catch(() => {});
     renderLiveTradeChart(d, kind);
-  } catch (e) { /* keep the prior chart on a transient error */ }
+  } catch (e) {
+    // A blip must not wipe a tape that's already drawn — but staying silent
+    // when there is NOTHING drawn is how this shows up as "the chart just
+    // doesn't come up". The app shell is a PWA and loads from cache, so the
+    // page looks perfectly healthy while /api/* (network-only, by design) is
+    // unreachable. Say that out loud instead of showing an empty box.
+    if (!liveLast.ok) _showChartUnreachable(sym);
+  }
+}
+
+/* Honest empty-state when we have no tape to draw and the fetch failed. */
+function _showChartUnreachable(sym) {
+  const svg = $("#liveTradeChart");
+  if (svg) svg.innerHTML = "";
+  const last = $("#ltcLast"); if (last) last.textContent = "—";
+  const chg = $("#ltcChg"); if (chg) { chg.textContent = ""; chg.className = "ltc-chg"; }
+  const foot = $("#ltcFoot");
+  if (foot) {
+    foot.textContent = navigator.onLine
+      ? `Can't reach the MarketPulse server for ${sym}. Is it still running? `
+        + `Live prices are never cached, so the page can load from cache while data can't.`
+      : `You're offline. Live prices are never served from cache — reconnect and this fills back in.`;
+  }
 }
 
 async function loadChartOverlay(kind, sym) {
