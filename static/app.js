@@ -317,7 +317,9 @@ function fireAlert(r, a) {
 function toast(kind, title, body) {
   const t = document.createElement("div");
   t.className = `toast ${kind}`;
-  t.innerHTML = `<b>${title}</b><span>${body}</span>`;
+  // A missing body used to render the literal string "undefined" on screen.
+  // Both fields are escaped: some callers pass a symbol the user typed.
+  t.innerHTML = `<b>${esc(title)}</b>` + (body ? `<span>${esc(body)}</span>` : "");
   $("#toasts").appendChild(t);
   setTimeout(() => t.remove(), 7000);
 }

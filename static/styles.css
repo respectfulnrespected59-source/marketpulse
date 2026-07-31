@@ -1061,12 +1061,25 @@ body {
   position: fixed; inset: 0; margin: 0; z-index: 9999;
   border-radius: 0; padding: 18px 24px;
   display: flex; flex-direction: column;
+  /* Opaque, or the page underneath bleeds through: the tab's disclaimer line
+     and the QMM footer were rendering straight across the middle of the chart
+     at full screen, which reads as a glitch on a tool whose whole pitch is
+     that it's precise. Caught while filming the demo. */
+  background: var(--bg);
 }
 .live-chart-card.is-fullscreen .ltc-chart-wrap {
   flex: 1 1 auto; aspect-ratio: auto; height: auto; min-height: 0;
 }
 .live-chart-card.is-fullscreen::before { opacity: 0.85; }
 body.mp-lock-scroll { overflow: hidden; }
+/* The fullscreen card is fixed at z-index 9999, but the page footer sits in a
+   later stacking context and painted straight through it — the site disclaimer
+   and "A Quantum Melanin Media tool" rendered across the middle of the chart,
+   which reads as a rendering glitch on a tool whose whole pitch is precision.
+   An opaque card background does not fix it, because the footer is on top, not
+   behind. Hiding the page chrome for the duration is what actually works.
+   Caught while filming the demo. */
+body.mp-lock-scroll .foot { display: none; }
 /* View-transition tuning — Chromium uses these to cross-fade + morph. */
 ::view-transition-old(mp-live-chart),
 ::view-transition-new(mp-live-chart) {

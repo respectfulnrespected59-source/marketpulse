@@ -86,7 +86,9 @@ function _onChartClick(evt) {
   const sym = (liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim().toUpperCase();
   if (ltcTool === "mark") {
     addUserMark(sym, { ts: p.ts, price: p.price, dir: $("#liveSide").value || "mark", t: Date.now() });
-    if (typeof toast === "function") toast(`◉ Marked @ ${fmtPrice(p.price)}${snap ? " (" + snap.kind + ")" : ""}`, "buy");
+    // toast() is (kind, title, body) — these were passing (title, kind), which
+    // rendered the message as a CSS class and printed "undefined" as the body.
+    if (typeof toast === "function") toast("buy", `◉ Marked @ ${fmtPrice(p.price)}`, snap ? `snapped to ${snap.kind}` : "");
     renderLiveTradeChart(liveLast.data, liveLast.kind);
   } else if (ltcTool === "line") {
     trendAnchor = { ts: p.ts, price: p.price, x: snap ? snap.x : x, y: snap ? snap.y : y };
@@ -149,7 +151,7 @@ function _onChartMouseUp(evt) {
   // Commit an in-flight edit of an existing marker/endpoint.
   if (editState) {
     _commitEdit();
-    if (typeof toast === "function") toast("Adjusted", "buy");
+    if (typeof toast === "function") toast("buy", "Adjusted");
     editState = null; editPreview = null;
     suppressNextClick = true;
     const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
@@ -181,7 +183,7 @@ function _onChartMouseUp(evt) {
       b: { ts: p.ts, price: p.price },
       color: "var(--gold)", t: Date.now(),
     });
-    if (typeof toast === "function") toast("╱ Trend line saved" + (snap ? " (snapped)" : ""), "buy");
+    if (typeof toast === "function") toast("buy", "╱ Trend line saved", snap ? "endpoint snapped to a wick" : "");
   }
   trendDragging = false; trendPreview = null; trendAnchor = null;
   suppressNextClick = true;  // the release will also fire a `click` — swallow it
@@ -504,7 +506,7 @@ function initLiveChartInteractions() {
     const sym = ($("#liveSymbol").value || "").trim().toUpperCase();
     const what = popUserLast(sym);
     if (what && liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
-    if (typeof toast === "function") toast(what ? `Undid ${what}` : "Nothing to undo");
+    if (typeof toast === "function") toast(what ? "buy" : "", what ? `Undid ${what}` : "Nothing to undo");
   });
   const clr = $("#ltcClear");
   if (clr) clr.addEventListener("click", () => {

@@ -1030,7 +1030,7 @@ function _deleteHit(hit, sym) {
     lines.splice(hit.idx, 1);
     _writeArr(k.lines, lines);
   }
-  if (typeof toast === "function") toast("Deleted");
+  if (typeof toast === "function") toast("sell", "Deleted");
 }
 
 function _commitEdit() {
