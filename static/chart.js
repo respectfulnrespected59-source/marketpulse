@@ -109,6 +109,109 @@ let _wheelIsPan = false;
 let _wheelRaf = 0;
 function resetChartView() { chartView = { start: null, count: null, pinned: true, anchorTs: null }; }
 
+/* ---- Session replay -----------------------------------------------------
+ *
+ * Walk a session forward from its open, one candle at a time. The whole day is
+ * already loaded, so replay is purely a question of how much of it we reveal —
+ * no refetching, and stepping backward is free.
+ *
+ * `from` is the session's first bar and `upto` the last revealed one. The axis
+ * is always scaled to the FULL session (see chartSlot's scaleN), so candles
+ * land at fixed x positions and march left to right instead of the tape
+ * restretching on every step.
+ */
+let replay = { on: false, from: 0, upto: 0, end: 0, playing: false, timer: null, speedMs: 400 };
+
+/* First bar of the last calendar day present in the tape.
+ *
+ * Crypto never closes, so a "session" there is a rolling 24h rather than a
+ * bell-to-bell day; falling back to the last day's worth of bars gives the same
+ * replay feel without pretending there's an open. */
+function _sessionStartIdx(tsArr) {
+  if (!tsArr || !tsArr.length) return 0;
+  // On daily and weekly bars every bar is its own day, so "the last calendar
+  // day" would resolve to the final bar and there'd be nothing to replay. The
+  // meaningful unit there is the whole loaded range — play the year forward.
+  if (!TIME_AXIS_TFS.has(liveTf)) return 0;
+  const lastDay = new Date(tsArr[tsArr.length - 1] * 1000);
+  const key = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const want = key(lastDay);
+  for (let i = tsArr.length - 1; i >= 0; i--) {
+    if (key(new Date(tsArr[i] * 1000)) !== want) return i + 1;
+  }
+  return 0;
+}
+
+function _replayStop() {
+  if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
+  replay.playing = false;
+}
+
+function enterReplay() {
+  const d = liveLast.data;
+  if (!d || !d.ts || d.ts.length < 2) return;
+  stopChartPoll();                       // the poll and replay would fight
+  const from = _sessionStartIdx(d.ts);
+  const end = d.ts.length - 1;
+  // One candle at the open is the whole point — start with exactly that.
+  replay = { on: true, from, upto: from, end, playing: false, timer: null,
+             speedMs: replay.speedMs || 400 };
+  _syncReplayUI();
+  renderLiveTradeChart(d, liveLast.kind);
+}
+
+function exitReplay() {
+  _replayStop();
+  replay.on = false;
+  resetChartView();
+  _syncReplayUI();
+  loadLiveTradeChart();
+  startChartPoll();
+}
+
+function replaySeek(idx) {
+  if (!replay.on) return;
+  replay.upto = Math.max(replay.from, Math.min(replay.end, Math.round(idx)));
+  if (replay.upto >= replay.end) _replayStop();   // ran out of day
+  _syncReplayUI();
+  renderLiveTradeChart(liveLast.data, liveLast.kind);
+}
+
+function replayStep(n) { replaySeek(replay.upto + n); }
+
+function replayPlayPause() {
+  if (!replay.on) return;
+  if (replay.playing) { _replayStop(); _syncReplayUI(); return; }
+  if (replay.upto >= replay.end) replay.upto = replay.from;   // replay from the top
+  replay.playing = true;
+  replay.timer = setInterval(() => replayStep(1), replay.speedMs);
+  _syncReplayUI();
+}
+
+function _syncReplayUI() {
+  const ctr = $("#rpControls"), tog = $("#rpToggle");
+  if (tog) tog.classList.toggle("is-active", replay.on);
+  if (ctr) ctr.hidden = !replay.on;
+  if (!replay.on) return;
+  const play = $("#rpPlay");
+  if (play) play.textContent = replay.playing ? "⏸" : "▶";
+  const scrub = $("#rpScrub");
+  if (scrub) {
+    scrub.min = String(replay.from);
+    scrub.max = String(replay.end);
+    scrub.value = String(replay.upto);
+  }
+  const clock = $("#rpClock");
+  const ts = liveLast.data && liveLast.data.ts && liveLast.data.ts[replay.upto];
+  if (clock) {
+    const shown = replay.upto - replay.from + 1;
+    const total = replay.end - replay.from + 1;
+    clock.textContent = ts
+      ? `${_fmtAxisTime(new Date(ts * 1000), liveTf)} · ${shown}/${total}`
+      : `${shown}/${total}`;
+  }
+}
+
 /* Index of `ts` in a sorted timestamp array, or the closest bar at/after it.
    Returns -1 only when the anchor has aged out of the rolling window entirely,
    which genuinely means that data is no longer on the client. */
@@ -369,7 +472,8 @@ function _playRoll(slotW, fullTs, sym) {
   const sameTape = _rollKey === key;
   _rollKey = key;
   _rollLastTs = newestTs;
-  if (!sameTape || !chartView.pinned) return;      // new tape, or user panned back
+  // Replay drives its own stepping; the live roll would fight it.
+  if (replay.on || !sameTape || !chartView.pinned) return;
   // How many bars did the tape advance? Measured in TIME, because once the
   // rolling window is full the array length stops changing and a length-based
   // check would silently never fire again on the 1m tape.
@@ -413,33 +517,54 @@ function renderLiveTradeChart(d, kind) {
   // (much easier to read than the whole loaded array); otherwise clamp to
   // sane bounds. If pinned, glue to the right edge as new bars arrive.
   const nAll = fullOhlc.length;
-  const defaultN = Math.min(nAll, DEFAULT_VISIBLE[liveTf] || 78);
-  let count = chartView.count == null ? defaultN : Math.max(MIN_VISIBLE_BARS, Math.min(nAll, chartView.count));
-  let start;
-  if (chartView.pinned || chartView.start == null) {
-    start = Math.max(0, nAll - count);
+
+  let start, end;
+  // How many slots the x-axis is scaled for, and which bars set the price
+  // range. Both equal the drawn window in normal use; replay widens them.
+  let scaleN = null, priceFrom = null, priceTo = null;
+
+  if (replay.on && nAll > 1) {
+    // Replay owns the window outright. Reveal [from..upto], but scale the axis
+    // to the WHOLE session so revealed candles hold fixed x positions and march
+    // left to right, and price-scale to the whole session too so the ladder
+    // doesn't lurch on every step — you're watching price move, not the chart
+    // rescale under it.
+    start = Math.max(0, Math.min(replay.from, nAll - 1));
+    end = Math.max(start + 1, Math.min(replay.upto + 1, nAll));
+    scaleN = Math.max(1, Math.min(replay.end, nAll - 1) - start + 1);
+    priceFrom = start;
+    priceTo = Math.min(replay.end + 1, nAll);
   } else {
-    // Re-locate the left edge by TIMESTAMP. Using the stored index here is what
-    // let the tape slide: the index is stable but the data under it is not.
-    let idx = chartView.start;
-    if (chartView.anchorTs && fullTs.length === nAll) {
-      const found = _indexOfTs(fullTs, chartView.anchorTs);
-      if (found >= 0) idx = found;
-      // found < 0 → the anchor aged out of the window; fall back to the index
-      // and clamp, which parks the user at the oldest bar we still hold.
+    const defaultN = Math.min(nAll, DEFAULT_VISIBLE[liveTf] || 78);
+    const count = chartView.count == null ? defaultN : Math.max(MIN_VISIBLE_BARS, Math.min(nAll, chartView.count));
+    if (chartView.pinned || chartView.start == null) {
+      start = Math.max(0, nAll - count);
+    } else {
+      // Re-locate the left edge by TIMESTAMP. Using the stored index here is what
+      // let the tape slide: the index is stable but the data under it is not.
+      let idx = chartView.start;
+      if (chartView.anchorTs && fullTs.length === nAll) {
+        const found = _indexOfTs(fullTs, chartView.anchorTs);
+        if (found >= 0) idx = found;
+        // found < 0 → the anchor aged out of the window; fall back to the index
+        // and clamp, which parks the user at the oldest bar we still hold.
+      }
+      start = Math.max(0, Math.min(nAll - count, idx));
     }
-    start = Math.max(0, Math.min(nAll - count, idx));
+    end = start + count;
+    // Record where we actually landed so the next poll can find this bar again.
+    chartView.start = start;
+    chartView.anchorTs = (fullTs.length === nAll && fullTs[start]) || null;
   }
-  const end = start + count;
-  // Record where we actually landed so the next poll can find this bar again.
-  chartView.start = start;
-  chartView.anchorTs = (fullTs.length === nAll && fullTs[start]) || null;
   const ohlc = fullOhlc.slice(start, end);
   const tsArr = fullTs.slice(start, end);
   const volArr = fullVol.slice(start, end);
 
-  liveLast = { data: d, kind, ok: ohlc.length >= 2 };
-  if (ohlc.length < 2) {
+  // Live needs two bars before a chart means anything. Replay legitimately
+  // starts with ONE — the opening candle, alone on the left, is the point.
+  const minBars = replay.on ? 1 : 2;
+  liveLast = { data: d, kind, ok: ohlc.length >= minBars };
+  if (ohlc.length < minBars) {
     svg.innerHTML = "";
     $("#ltcLast").textContent = "—";
     $("#ltcChg").textContent = "";
@@ -469,7 +594,8 @@ function renderLiveTradeChart(d, kind) {
   const volRect = { x: padL, y: priceRect.y + priceRect.h + VOL_GAP, w: priceRect.w, h: VOL_H };
   const timeAxisTop = volRect.y + volRect.h;
 
-  const c = candlesInRect(ohlc, priceRect);
+  const c = candlesInRect(ohlc, priceRect, scaleN,
+    priceFrom != null ? fullOhlc.slice(priceFrom, priceTo) : null);
   const clampY = (v) => Math.max(priceRect.y, Math.min(priceRect.y + priceRect.h, c.Y(v)));
   const last = ohlc[ohlc.length - 1][3];
   liveLast.geom = {
@@ -479,7 +605,7 @@ function renderLiveTradeChart(d, kind) {
     // Shared slot mapping — pan, zoom, snap and hit-test all invert through it.
     slot: c.slot,
     // Viewport bookkeeping so wheel/drag can operate against the full tape.
-    fullOhlc, fullTs, fullVol, viewStart: start, viewCount: count, viewEnd: end, nAll,
+    fullOhlc, fullTs, fullVol, viewStart: start, viewCount: end - start, viewEnd: end, nAll,
   };
 
   // STATIC layer — anchored to the frame. The price ladder and grid must not
@@ -494,10 +620,16 @@ function renderLiveTradeChart(d, kind) {
   // translate when a new candle arrives, so the tape visibly travels instead
   // of teleporting one bar to the left.
   let base = "";
-  base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop);
+  // In replay the axis labels the whole session and the volume pane keeps the
+  // session's max, so neither rescales as candles are revealed.
+  const axisTs = priceFrom != null ? fullTs.slice(priceFrom, priceTo) : null;
+  const volMax = priceFrom != null
+    ? Math.max(...fullVol.slice(priceFrom, priceTo).map((v) => v || 0), 1)
+    : null;
+  base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop, c.slot);
   base += c.markup;
-  if (chartInd.showVolume) base += _volumeSVG(volRect, ohlc, volArr);
-  base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop);
+  if (chartInd.showVolume) base += _volumeSVG(volRect, ohlc, volArr, c.slot, volMax);
+  base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop, c.slot, axisTs);
 
   let overlay = "";
   const p = getLive();
@@ -571,8 +703,15 @@ function renderLiveTradeChart(d, kind) {
  */
 const RIGHT_PAD_SLOTS = 6;
 
-function chartSlot(rect, n) {
-  const slots = Math.max(1, n + RIGHT_PAD_SLOTS);
+/* `scaleN` decouples "how many bars are DRAWN" from "how many the axis is
+ * scaled for". They are the same in normal use, but replay needs them apart:
+ * the day's full bar count sets the slot width once, and revealed candles then
+ * appear at fixed positions marching left to right. Scaling to the revealed
+ * count instead would restretch the whole tape on every step, which reads as
+ * the chart breathing rather than the session playing forward.
+ */
+function chartSlot(rect, n, scaleN) {
+  const slots = Math.max(1, (scaleN == null ? n : scaleN) + RIGHT_PAD_SLOTS);
   const w = rect.w / slots;
   return {
     w,
@@ -584,11 +723,14 @@ function chartSlot(rect, n) {
   };
 }
 
-function candlesInRect(ohlc, rect) {
-  const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
+function candlesInRect(ohlc, rect, scaleN, priceBars) {
+  // `priceBars` lets the price range span more than what's drawn — replay uses
+  // the whole session so the ladder holds still while candles appear.
+  const pb = (priceBars && priceBars.length) ? priceBars : ohlc;
+  const highs = pb.map((b) => b[1]), lows = pb.map((b) => b[2]);
   const min = Math.min(...lows), max = Math.max(...highs), span = max - min || 1;
   const n = ohlc.length;
-  const sg = chartSlot(rect, n);
+  const sg = chartSlot(rect, n, scaleN);
   const X = sg.X;
   const Y = (v) => rect.y + (1 - (v - min) / span) * rect.h;
   const slot = sg.w;
@@ -622,10 +764,10 @@ function _fmtAxisPrice(v) {
    the calendar day changes bar-to-bar. Draws BEHIND the candles so the price
    action stays visually dominant, but the eye immediately clocks "new day
    here" instead of reading the overnight gap as a random blank. */
-function _sessionDividersSVG(rect, ohlc, tsArr, timeAxisTop) {
+function _sessionDividersSVG(rect, ohlc, tsArr, timeAxisTop, slotGeom) {
   const n = ohlc.length;
   if (!tsArr || tsArr.length !== n || n < 2) return "";
-  const sg = chartSlot(rect, n);
+  const sg = slotGeom || chartSlot(rect, n);
   const X = sg.X;
   let out = "";
   let prevKey = null;
@@ -691,23 +833,38 @@ function _priceAxisSVG(rect, min, max, last, axisRW, W) {
   return out;
 }
 
+// Intraday bars get a CLOCK; only daily and weekly get a date. This used to
+// key off `tf === "1m"` (plus a "day" value that no longer exists), so a 5m
+// chart covering one 6.5-hour session printed "Jul 30" at all six ticks —
+// six identical labels that tell you nothing about where you are in the day.
+// The date still gets said once per session change, by _sessionDividersSVG.
+const TIME_AXIS_TFS = new Set(["1m", "5m", "10m", "15m", "30m", "1h"]);
+
 function _fmtAxisTime(dt, tf) {
-  if (tf === "1m" || tf === "day") {
+  if (TIME_AXIS_TFS.has(tf)) {
     return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   }
   return dt.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function _timeAxisSVG(rect, ohlc, tsArr, tf, kind, top) {
+function _timeAxisSVG(rect, ohlc, tsArr, tf, kind, top, slotGeom, axisTs) {
   const n = ohlc.length;
   if (!tsArr || tsArr.length !== n) return "";
-  const steps = 5;
-  const sg = chartSlot(rect, n);
+  const sg = slotGeom || chartSlot(rect, n);
+  // `axisTs` labels the FULL scaled span rather than just what's drawn. Replay
+  // needs it: with 7 of 79 candles revealed, spreading six ticks across the
+  // drawn bars crushes every label into the leftmost inch. The axis should show
+  // the whole session and let candles fill in underneath it.
+  const labelTs = (axisTs && axisTs.length) ? axisTs : tsArr;
+  const labelN = labelTs.length;
   let out = `<line x1="${rect.x}" y1="${top.toFixed(1)}" x2="${rect.x + rect.w}" y2="${top.toFixed(1)}"
     stroke="rgba(120,150,190,0.14)" stroke-width="1"/>`;
+  // With a single bar (replay's first candle) six evenly-spaced ticks would all
+  // resolve to index 0 and stack on top of each other.
+  const steps = labelN < 2 ? 0 : 5;
   for (let i = 0; i <= steps; i++) {
-    const idx = Math.round((n - 1) * i / steps);
-    const ts = tsArr[idx];
+    const idx = steps === 0 ? 0 : Math.round((labelN - 1) * i / steps);
+    const ts = labelTs[idx];
     if (!ts) continue;
     const x = sg.X(idx);
     const label = _fmtAxisTime(new Date(ts * 1000), tf);
@@ -719,12 +876,15 @@ function _timeAxisSVG(rect, ohlc, tsArr, tf, kind, top) {
   return out;
 }
 
-function _volumeSVG(rect, ohlc, volume) {
+function _volumeSVG(rect, ohlc, volume, slotGeom, maxOverride) {
   if (!volume || volume.length !== ohlc.length || volume.every((v) => !v)) return "";
-  const max = Math.max(...volume) || 1;
+  // maxOverride keeps the pane scaled to the whole session during replay, so
+  // early bars don't shrink each time a bigger one is revealed.
+  const max = maxOverride || Math.max(...volume) || 1;
   const n = volume.length;
   // Same slots as the candles, or the histogram walks out from under them.
-  const sg = chartSlot(rect, n);
+  // volRect shares priceRect's x and width, so the candles' geometry fits.
+  const sg = slotGeom || chartSlot(rect, n);
   const bw = Math.max(1, Math.min(sg.w * 0.7, 9));
   let out = `<line x1="${rect.x}" y1="${rect.y.toFixed(1)}" x2="${rect.x + rect.w}" y2="${rect.y.toFixed(1)}"
     stroke="rgba(120,150,190,0.10)" stroke-width="1" stroke-dasharray="2 4"/>`;

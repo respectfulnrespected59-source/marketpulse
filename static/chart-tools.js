@@ -456,6 +456,33 @@ function initIndicatorControls() {
   });
 }
 
+/* Replay controls — step, scrub, play through a session from its open.
+ *
+ * Deliberately not persisted: a scrub position is a thing you're doing right
+ * now, not a preference, and restoring someone into the middle of yesterday's
+ * replay on load would be worse than useless.
+ */
+function initReplayControls() {
+  const bar = $("#ltcReplayBar");
+  if (!bar || bar.dataset.wired === "1") return;
+  bar.dataset.wired = "1";
+
+  const on = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
+
+  on("#rpToggle", "click", () => (replay.on ? exitReplay() : enterReplay()));
+  on("#rpExit", "click", exitReplay);
+  on("#rpPlay", "click", replayPlayPause);
+  on("#rpBack", "click", () => replayStep(-1));
+  on("#rpFwd", "click", () => replayStep(1));
+  on("#rpScrub", "input", (e) => replaySeek(Number(e.target.value)));
+  on("#rpSpeed", "change", (e) => {
+    replay.speedMs = Number(e.target.value) || 400;
+    // Restart the timer so a speed change takes effect immediately rather than
+    // after the current tick.
+    if (replay.playing) { replayPlayPause(); replayPlayPause(); }
+  });
+}
+
 function initLiveChartInteractions() {
   const svg = $("#liveTradeChart");
   if (!svg || svg.dataset.wired === "1") return;
@@ -494,6 +521,7 @@ function initLiveChartInteractions() {
     if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
   });
   initIndicatorControls();
+  initReplayControls();
   window.addEventListener("keydown", (e) => {
     if (e.key === "Alt") { altHeld = true; }
     if (e.key === "Escape") {
@@ -507,6 +535,15 @@ function initLiveChartInteractions() {
     }
     if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
     if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
+    // Replay: arrows step a candle, space plays/pauses. Only while replay is on,
+    // so these keys stay free for the page otherwise.
+    if (replay.on) {
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowRight") { e.preventDefault(); replayStep(1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); replayStep(-1); }
+      if (e.key === " ") { e.preventDefault(); replayPlayPause(); }
+    }
   });
   window.addEventListener("keyup", (e) => {
     if (e.key === "Alt") { altHeld = false; }
