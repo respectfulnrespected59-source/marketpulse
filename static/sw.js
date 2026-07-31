@@ -12,7 +12,7 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v11";
+const SHELL_VERSION = "mp-shell-v12";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -20,6 +20,7 @@ const SHELL_ASSETS = [
   "/app.js",
   "/chart.js",
   "/chart-tools.js",
+  "/learn.js",
   "/panels.js",
   "/home.js",
   "/wizards.js",

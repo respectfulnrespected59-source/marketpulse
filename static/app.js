@@ -417,7 +417,8 @@ function setView(v) {
   const isDca = v === "dca";
   const isLive = v === "live";
   const isPaper = v === "paper";
-  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper;
+  const isCoach = v === "coach";
+  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper || isCoach;
   $("#homePanel").hidden = !isHome;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
@@ -425,11 +426,15 @@ function setView(v) {
   $("#dcaPanel").hidden = !isDca;
   $("#livePanel").hidden = !isLive;
   $("#paperPanel").hidden = !isPaper;
+  $("#coachPanel").hidden = !isCoach;
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
   if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
   if (isHome) { renderHome(); return; }
+  // Recomputed on every visit rather than cached: the record changes whenever
+  // a call is made on the Live tab, and a stale grade is worse than none.
+  if (isCoach) { renderCoach(); return; }
   // The paper run keeps polling when you leave the tab — a strategy that only
   // trades while you're watching it isn't testing anything.
   if (isPaper) { initPaper(); renderPaper(); return; }

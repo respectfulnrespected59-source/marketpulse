@@ -55,6 +55,7 @@ BASE = [
     "static/app.js",
     "static/chart.js",
     "static/chart-tools.js",
+    "static/learn.js",
     "static/panels.js",
     "static/home.js",
     "static/wizards.js",

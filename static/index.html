@@ -36,6 +36,7 @@
       <button class="tab" data-view="options">⛓ Options</button>
       <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
       <button class="tab" data-view="pot">🫙 Pot</button>
+      <button class="tab" data-view="coach">🧭 Coach</button>
       <button class="tab" data-view="dca">🌱 DCA</button>
       <button class="tab" data-view="live">🔴 Live</button>
       <button class="tab" data-view="paper">📝 Paper</button>
@@ -222,6 +223,20 @@
     </div>
   </section>
 
+  <!-- Coach: what your own calls say about your reading. Grades the PROCESS,
+       never an instrument — nothing here is a suggestion to buy or sell. -->
+  <section class="coach" id="coachPanel" hidden>
+    <div class="coach-head">
+      <div>
+        <h2>🧭 Coach</h2>
+        <p>Rewind the live chart, call the next move before it prints, and this keeps score.
+          It grades how you read — not what to buy. Everything stays on this device.</p>
+      </div>
+      <button class="add-btn ghost" id="coachReset" type="button">Clear my record</button>
+    </div>
+    <div id="coachBody"></div>
+  </section>
+
   <!-- Live Tracker: pin a real timestamped entry, watch real prices prove it -->
   <section class="live" id="livePanel" hidden>
     <div class="live-head">
@@ -255,7 +270,7 @@
     <div class="live-chart-card" id="liveTradeCard">
       <div class="ltc-head">
         <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span><span class="ltc-tf" id="ltcTf"></span></div>
-        <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span></div>
+        <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span><span class="ltc-asof" id="ltcAsOf" hidden></span></div>
       </div>
       <div class="ltc-toolbar" id="ltcToolbar">
         <div class="ltc-tools" role="group" aria-label="Chart tools">
@@ -284,13 +299,15 @@
                 title="Back to EMA 14/21/57 with squeeze and volume on">Reset</button>
         <span class="ltc-ind-note" id="indNote"></span>
       </div>
-      <!-- Replay. Walk the session forward from the open one candle at a time,
-           the way you'd study it after the close. Pauses the live poll while
-           it's on, because the two would fight over the same chart. -->
+      <!-- Replay. Walk the session one candle at a time, the way you'd study it
+           after the close — except the dial stays unlocked while the market is
+           open. Scrubbing back hides everything after the cursor (you read the
+           bar with no lookahead) while the live poll keeps running behind it,
+           so GO LIVE snaps you straight back to current. -->
       <div class="ltc-replaybar" id="ltcReplayBar" role="group" aria-label="Session replay">
         <button type="button" class="ltc-tool" id="rpToggle"
-                title="Replay this session from the open">⏮ Replay</button>
-        <span class="rp-controls" id="rpControls" hidden>
+                title="Jump to the open and walk the session forward">⏮ Replay</button>
+        <span class="rp-controls" id="rpControls">
           <button type="button" class="ltc-tool ghost" id="rpBack" title="Back one candle">◀</button>
           <button type="button" class="ltc-tool" id="rpPlay" title="Play / pause">▶</button>
           <button type="button" class="ltc-tool ghost" id="rpFwd" title="Forward one candle">▶|</button>
@@ -302,8 +319,24 @@
             <option value="200">2x</option>
             <option value="80">5x</option>
           </select>
+          <button type="button" class="ltc-tool rp-live" id="rpLive"
+                  title="Snap back to the live edge">● LIVE</button>
           <span class="rp-clock" id="rpClock"></span>
-          <button type="button" class="ltc-tool ghost" id="rpExit" title="Back to live">✕ Live</button>
+        </span>
+        <!-- Learning Mode. Commit a read BEFORE stepping forward; the next ten
+             candles settle it. "Stand aside" is a real answer, not a cop-out —
+             scoring only directional calls would teach overtrading. -->
+        <span class="rp-call" id="rpCall" hidden>
+          <span class="rp-call-label">your read:</span>
+          <button type="button" class="ltc-tool call-up" data-call="up" title="Price closes higher, after costs">▲ UP</button>
+          <button type="button" class="ltc-tool call-down" data-call="down" title="Price closes lower, after costs">▼ DOWN</button>
+          <button type="button" class="ltc-tool call-stand" data-call="stand" title="Nothing worth taking here">◼ STAND</button>
+          <select id="rpConf" class="ltc-ind-input rp-conf" aria-label="How confident are you?">
+            <option value="1">low</option>
+            <option value="2" selected>medium</option>
+            <option value="3">high</option>
+          </select>
+          <span class="rp-call-result" id="rpCallResult" role="status" aria-live="polite"></span>
         </span>
       </div>
       <div class="ltc-overlays">
@@ -457,6 +490,9 @@
        reaches into every file above it. -->
   <script src="chart.js"></script>
   <script src="chart-tools.js"></script>
+  <!-- Learning Mode. Loads after chart.js so `replay`, `liveLast`, `liveTf`
+       and `chartInd` already exist when a Call is recorded. -->
+  <script src="learn.js"></script>
   <script src="panels.js"></script>
   <script src="home.js"></script>
   <script src="wizards.js"></script>

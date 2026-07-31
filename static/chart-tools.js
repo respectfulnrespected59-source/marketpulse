@@ -472,7 +472,7 @@ function initReplayControls() {
   const on = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
 
   on("#rpToggle", "click", () => (replay.on ? exitReplay() : enterReplay()));
-  on("#rpExit", "click", exitReplay);
+  on("#rpLive", "click", goLive);
   on("#rpPlay", "click", replayPlayPause);
   on("#rpBack", "click", () => replayStep(-1));
   on("#rpFwd", "click", () => replayStep(1));

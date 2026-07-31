@@ -119,27 +119,41 @@ function resetChartView() { chartView = { start: null, count: null, pinned: true
  * is always scaled to the FULL session (see chartSlot's scaleN), so candles
  * land at fixed x positions and march left to right instead of the tape
  * restretching on every step.
+ *
+ * The dial is NOT a mode you enter — it stays unlocked while the market is
+ * open. `on` means "the cursor is parked behind the live edge": bars after
+ * `upto` are hidden so a bar is read with no lookahead, while the poll keeps
+ * running and `end` keeps growing behind the curtain. `cursorTs` is what holds
+ * the cursor still on a rolling tape — see _syncCursorRange.
  */
-let replay = { on: false, from: 0, upto: 0, end: 0, playing: false, timer: null, speedMs: 400 };
+let replay = { on: false, from: 0, upto: 0, end: 0, cursorTs: null, fromTs: null,
+               playing: false, timer: null, speedMs: 400 };
 
 /* First bar of the last calendar day present in the tape.
  *
  * Crypto never closes, so a "session" there is a rolling 24h rather than a
  * bell-to-bell day; falling back to the last day's worth of bars gives the same
  * replay feel without pretending there's an open. */
-function _sessionStartIdx(tsArr) {
+/* First bar of the calendar day CONTAINING `at`. Generalised from "the last
+ * day" so a drill can rewind into an earlier session in the loaded tape — a
+ * drill that could only ever replay today would run out of material fast. */
+function _sessionStartIdxAt(tsArr, at) {
   if (!tsArr || !tsArr.length) return 0;
-  // On daily and weekly bars every bar is its own day, so "the last calendar
-  // day" would resolve to the final bar and there'd be nothing to replay. The
-  // meaningful unit there is the whole loaded range — play the year forward.
+  // On daily and weekly bars every bar is its own day, so "the day containing
+  // this bar" would resolve to the bar itself and there'd be nothing to replay.
+  // The meaningful unit there is the whole loaded range — play the year forward.
   if (!TIME_AXIS_TFS.has(liveTf)) return 0;
-  const lastDay = new Date(tsArr[tsArr.length - 1] * 1000);
+  const anchor = Math.max(0, Math.min(at, tsArr.length - 1));
   const key = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-  const want = key(lastDay);
-  for (let i = tsArr.length - 1; i >= 0; i--) {
+  const want = key(new Date(tsArr[anchor] * 1000));
+  for (let i = anchor; i >= 0; i--) {
     if (key(new Date(tsArr[i] * 1000)) !== want) return i + 1;
   }
   return 0;
+}
+
+function _sessionStartIdx(tsArr) {
+  return _sessionStartIdxAt(tsArr, (tsArr && tsArr.length ? tsArr.length : 1) - 1);
 }
 
 function _replayStop() {
@@ -147,52 +161,112 @@ function _replayStop() {
   replay.playing = false;
 }
 
+/* Keep the cursor coherent with a tape that is still growing.
+ *
+ * Two rules make an unlocked dial safe on a live chart. A cursor parked behind
+ * the edge must NOT be dragged forward by new bars — that would yank you out of
+ * the moment you're studying. A cursor at the edge must follow, because that IS
+ * live. The parked cursor is held by TIMESTAMP, not index: on the fast tapes
+ * old bars roll off the front, and an index would silently drift you forward
+ * through the session while you sat still.
+ */
+function _syncCursorRange(d) {
+  const ts = (d && d.ts) || [];
+  const n = ts.length;
+  if (n < 2) return;
+  // A drill parks you in an earlier session, so the dial's window follows the
+  // day being drilled rather than today's. Held by timestamp like the cursor,
+  // because the index shifts as the tape rolls.
+  let from = _sessionStartIdx(ts);
+  if (replay.on && replay.fromTs) {
+    const f = _indexOfTs(ts, replay.fromTs);
+    if (f >= 0) from = f;
+    else replay.fromTs = null;   // that day has rolled off the client
+  }
+  replay.from = from;
+  replay.end = n - 1;
+  if (!replay.on) {                       // pinned to the edge = live
+    replay.upto = replay.end;
+    replay.cursorTs = null;
+    replay.fromTs = null;
+    return;
+  }
+  if (replay.cursorTs) {
+    const found = _indexOfTs(ts, replay.cursorTs);
+    if (found >= 0) replay.upto = found;
+    // found < 0 → that bar has aged off the client entirely; the clamp below
+    // parks the user on the oldest bar we still hold rather than guessing.
+  }
+  replay.upto = Math.max(replay.from, Math.min(replay.upto, replay.end));
+  replay.cursorTs = ts[replay.upto] || null;
+}
+
+/* Jump to the open and walk forward — the "study the session" entry point. */
 function enterReplay() {
   const d = liveLast.data;
   if (!d || !d.ts || d.ts.length < 2) return;
-  stopChartPoll();                       // the poll and replay would fight
-  const from = _sessionStartIdx(d.ts);
-  const end = d.ts.length - 1;
+  _replayStop();
+  replay.on = true;
+  replay.from = _sessionStartIdx(d.ts);
+  replay.end = d.ts.length - 1;
   // One candle at the open is the whole point — start with exactly that.
-  replay = { on: true, from, upto: from, end, playing: false, timer: null,
-             speedMs: replay.speedMs || 400 };
+  replay.upto = replay.from;
+  replay.cursorTs = d.ts[replay.upto] || null;
   _syncReplayUI();
   renderLiveTradeChart(d, liveLast.kind);
 }
 
-function exitReplay() {
+/* Snap back to the live edge. The poll was never stopped, so "live" is one
+ * render away — no refetch needed to be current. */
+function goLive() {
   _replayStop();
   replay.on = false;
+  replay.cursorTs = null;
+  replay.fromTs = null;   // leaving a drill drops its session window too
   resetChartView();
   _syncReplayUI();
-  loadLiveTradeChart();
-  startChartPoll();
+  if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
 }
 
+/* Kept for the toggle button's existing binding in chart-tools.js. */
+function exitReplay() { goLive(); }
+
 function replaySeek(idx) {
-  if (!replay.on) return;
-  replay.upto = Math.max(replay.from, Math.min(replay.end, Math.round(idx)));
-  if (replay.upto >= replay.end) _replayStop();   // ran out of day
+  const d = liveLast.data;
+  if (!d || !d.ts || d.ts.length < 2) return;
+  const want = Math.round(idx);
+  // Dragging to the right-hand end means "catch me up", not "reveal the last
+  // bar" — otherwise the dial would strand you one bar behind a moving edge.
+  if (want >= replay.end) return goLive();
+  replay.on = true;
+  replay.upto = Math.max(replay.from, Math.min(replay.end, want));
+  replay.cursorTs = d.ts[replay.upto] || null;
   _syncReplayUI();
-  renderLiveTradeChart(liveLast.data, liveLast.kind);
+  renderLiveTradeChart(d, liveLast.kind);
 }
 
 function replayStep(n) { replaySeek(replay.upto + n); }
 
 function replayPlayPause() {
-  if (!replay.on) return;
   if (replay.playing) { _replayStop(); _syncReplayUI(); return; }
-  if (replay.upto >= replay.end) replay.upto = replay.from;   // replay from the top
+  // Hitting play while live rewinds to the open rather than doing nothing —
+  // "play" on a chart that is already at the edge can only mean "run it again".
+  if (!replay.on || replay.upto >= replay.end) { enterReplay(); }
   replay.playing = true;
   replay.timer = setInterval(() => replayStep(1), replay.speedMs);
   _syncReplayUI();
 }
 
 function _syncReplayUI() {
-  const ctr = $("#rpControls"), tog = $("#rpToggle");
+  const ctr = $("#rpControls"), tog = $("#rpToggle"), liveBtn = $("#rpLive");
   if (tog) tog.classList.toggle("is-active", replay.on);
-  if (ctr) ctr.hidden = !replay.on;
-  if (!replay.on) return;
+  // The dial is unlocked at all times now; it never hides.
+  if (ctr) ctr.hidden = false;
+  if (liveBtn) {
+    liveBtn.classList.toggle("is-behind", replay.on);
+    liveBtn.disabled = !replay.on;
+    liveBtn.textContent = replay.on ? "● GO LIVE" : "● LIVE";
+  }
   const play = $("#rpPlay");
   if (play) play.textContent = replay.playing ? "⏸" : "▶";
   const scrub = $("#rpScrub");
@@ -201,14 +275,21 @@ function _syncReplayUI() {
     scrub.max = String(replay.end);
     scrub.value = String(replay.upto);
   }
+  // Learning Mode's call row follows the dial: a read only means something
+  // while the rest of the day is hidden.
+  if (typeof learnSyncUI === "function") learnSyncUI();
   const clock = $("#rpClock");
   const ts = liveLast.data && liveLast.data.ts && liveLast.data.ts[replay.upto];
   if (clock) {
     const shown = replay.upto - replay.from + 1;
     const total = replay.end - replay.from + 1;
-    clock.textContent = ts
-      ? `${_fmtAxisTime(new Date(ts * 1000), liveTf)} · ${shown}/${total}`
-      : `${shown}/${total}`;
+    if (!replay.on) {
+      clock.textContent = "live";
+    } else {
+      clock.textContent = ts
+        ? `${_fmtAxisTime(new Date(ts * 1000), liveTf)} · ${shown}/${total}`
+        : `${shown}/${total}`;
+    }
   }
 }
 
@@ -509,9 +590,18 @@ function renderLiveTradeChart(d, kind) {
   const sym = d && d.symbol;
   if (sym !== lastRenderSym || liveTf !== lastRenderTf) {
     resetChartView();
+    // A cursor is a position within ONE tape. Changing symbol or timeframe
+    // makes it meaningless, so drop it rather than carry a stale index across.
+    replay.on = false;
+    replay.cursorTs = null;
+    replay.fromTs = null;
+    _replayStop();
     lastRenderSym = sym;
     lastRenderTf = liveTf;
   }
+
+  // Re-seat the cursor against this tape before anything reads from/upto/end.
+  _syncCursorRange(d);
 
   // Slice to viewport. `count == null` means "use the compact per-tf default"
   // (much easier to read than the whole loaded array); otherwise clamp to
@@ -564,6 +654,10 @@ function renderLiveTradeChart(d, kind) {
   // starts with ONE — the opening candle, alone on the left, is the point.
   const minBars = replay.on ? 1 : 2;
   liveLast = { data: d, kind, ok: ohlc.length >= minBars };
+  // The dial is a live control now, not a replay-mode artefact: its range has
+  // to track the growing tape on EVERY render, or it sits at 0..0 and can't be
+  // dragged at all. Runs after liveLast so the clock can read the cursor bar.
+  _syncReplayUI();
   if (ohlc.length < minBars) {
     svg.innerHTML = "";
     $("#ltcLast").textContent = "—";
@@ -682,8 +776,25 @@ function renderLiveTradeChart(d, kind) {
   const chgEl = $("#ltcChg");
   chgEl.textContent = (chg >= 0 ? "▲ " : "▼ ") + Math.abs(chg).toFixed(2) + "%";
   chgEl.className = "ltc-chg " + (chg >= 0 ? "up" : "down");
+
+  // A scrubbed-back price is NOT the market price. In a trading app that
+  // confusion is the expensive kind, so say it in the header rather than
+  // relying on the user noticing the dial isn't at the end.
+  const asOf = $("#ltcAsOf");
+  const cursorTs = replay.on && fullTs[replay.upto];
+  if (asOf) {
+    asOf.hidden = !replay.on;
+    asOf.textContent = cursorTs
+      ? `as of ${_fmtAxisTime(new Date(cursorTs * 1000), liveTf)} · not live`
+      : "not live";
+  }
+  const card = $("#liveTradeCard");
+  if (card) card.classList.toggle("is-rewound", !!replay.on);
+
   const cadence = TF_POLL_MS[liveTf] / 1000;
-  $("#ltcFoot").textContent = `Live candles · gold line = your entry · refreshes ~${cadence}s · Mark drops entries, Trend line = click target + drag · educational, not advice`;
+  $("#ltcFoot").textContent = replay.on
+    ? `Rewound to an earlier bar — later candles hidden, price above is NOT current. Live data still updating; hit GO LIVE to catch up · educational, not advice`
+    : `Live candles · gold line = your entry · refreshes ~${cadence}s · Mark drops entries, Trend line = click target + drag · educational, not advice`;
 }
 
 /* ---- Webull-style chart primitives ---- */
