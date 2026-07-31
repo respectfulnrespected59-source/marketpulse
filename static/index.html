@@ -284,6 +284,28 @@
                 title="Back to EMA 14/21/57 with squeeze and volume on">Reset</button>
         <span class="ltc-ind-note" id="indNote"></span>
       </div>
+      <!-- Replay. Walk the session forward from the open one candle at a time,
+           the way you'd study it after the close. Pauses the live poll while
+           it's on, because the two would fight over the same chart. -->
+      <div class="ltc-replaybar" id="ltcReplayBar" role="group" aria-label="Session replay">
+        <button type="button" class="ltc-tool" id="rpToggle"
+                title="Replay this session from the open">⏮ Replay</button>
+        <span class="rp-controls" id="rpControls" hidden>
+          <button type="button" class="ltc-tool ghost" id="rpBack" title="Back one candle">◀</button>
+          <button type="button" class="ltc-tool" id="rpPlay" title="Play / pause">▶</button>
+          <button type="button" class="ltc-tool ghost" id="rpFwd" title="Forward one candle">▶|</button>
+          <input type="range" id="rpScrub" class="rp-scrub" min="0" max="0" value="0"
+                 aria-label="Scrub through the session">
+          <select id="rpSpeed" class="ltc-ind-input rp-speed" aria-label="Replay speed">
+            <option value="800">0.5x</option>
+            <option value="400" selected>1x</option>
+            <option value="200">2x</option>
+            <option value="80">5x</option>
+          </select>
+          <span class="rp-clock" id="rpClock"></span>
+          <button type="button" class="ltc-tool ghost" id="rpExit" title="Back to live">✕ Live</button>
+        </span>
+      </div>
       <div class="ltc-overlays">
         <span class="ltc-sqz" id="ltcSqz" hidden></span>
         <span class="ltc-emas" id="ltcEmas" hidden></span>

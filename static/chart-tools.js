@@ -23,12 +23,29 @@ function _svgEventToChart(evt) {
   return { x, y, W, H, pxPerSvgX: rect.width / W, pxPerSvgY: rect.height / H };
 }
 
+/* One slot in real screen pixels, and its reciprocal.
+ *
+ * `domW` is the SVG's on-screen width; the candle area is only priceRect.w of
+ * the 1000-unit viewBox, and each bar owns one slot of that (plus the
+ * right-hand headroom). Every pan path must agree on this or dragging and
+ * wheel-panning move by different amounts for the same gesture.
+ */
+function _barsPerPx(g, domW) {
+  const w = Math.max(1, domW);
+  if (!g || !g.priceRect || !g.slot) return (g && g.n ? g.n : 1) / w;
+  const candleDomW = w * (g.priceRect.w / g.W);   // strip the price ladder
+  const slotDomPx = candleDomW / g.slot.slots;    // one bar, in screen px
+  return 1 / Math.max(0.0001, slotDomPx);
+}
+
 function _pixelToTsPrice(x, y) {
   const g = liveLast.geom;
   if (!g) return null;
   const r = g.priceRect || { x: g.pad, y: g.pad, w: g.W - g.pad * 2, h: g.H - g.pad * 2 };
-  const t = Math.max(0, Math.min(1, (x - r.x) / r.w));
-  const idx = Math.round(t * (g.n - 1));
+  // Invert through the shared slot mapping so a click lands on the candle the
+  // cursor is actually over, not half a bar off.
+  const raw = g.slot ? g.slot.barAt(x) : ((x - r.x) / r.w) * (g.n - 1);
+  const idx = Math.max(0, Math.min(g.n - 1, Math.round(raw)));
   const ts = (g.ts && g.ts[idx]) || Math.floor(Date.now() / 1000);
   const min = g.priceMin != null ? g.priceMin : Math.min(...g.ohlc.map((b) => b[2]));
   const max = g.priceMax != null ? g.priceMax : Math.max(...g.ohlc.map((b) => b[1]));
@@ -193,11 +210,15 @@ function _onChartMove(evt) {
     }
     if (panDrag.moved) {
       const g = liveLast.geom;
-      const barsPerPx = g.n / Math.max(1, rect.width);
+      // Bars-per-pixel has to be measured against the CANDLE AREA, not the whole
+      // SVG: the price ladder eats ~6% of the width, so dividing by rect.width
+      // made the tape lag the cursor — you'd drag an inch and the chart moved
+      // slightly less, which is what "it doesn't follow my hand" feels like.
+      const barsPerPx = _barsPerPx(g, rect.width);
       const deltaBars = -Math.round(dxPx * barsPerPx);
       const nAll = g.nAll || (g.fullOhlc || []).length;
       const newStart = Math.max(0, Math.min(Math.max(0, nAll - g.viewCount), panDrag.startBar + deltaBars));
-      chartView = { start: newStart, count: g.viewCount, pinned: (newStart + g.viewCount) >= nAll };
+      chartView = { start: newStart, count: g.viewCount, pinned: (newStart + g.viewCount) >= nAll, anchorTs: null };
       _scheduleDragRedraw();
     }
     return;
@@ -257,7 +278,8 @@ function _panBars(deltaBars) {
   const count = g.viewCount || g.n;
   if (!nAll || !count) return;
   const newStart = Math.max(0, Math.min(Math.max(0, nAll - count), g.viewStart + deltaBars));
-  chartView = { start: newStart, count, pinned: (newStart + count) >= nAll };
+  // anchorTs null = "this start is authoritative"; render re-derives the anchor.
+  chartView = { start: newStart, count, pinned: (newStart + count) >= nAll, anchorTs: null };
   renderLiveTradeChart(liveLast.data, liveLast.kind);
 }
 
@@ -273,7 +295,7 @@ function _zoomAtBar(anchorBarFull, factor) {
   const relCursor = oldCount <= 1 ? 0.5 : (anchorBarFull - g.viewStart) / (oldCount - 1);
   const newStart = Math.max(0, Math.min(Math.max(0, nAll - newCount),
     Math.round(anchorBarFull - relCursor * (newCount - 1))));
-  chartView = { start: newStart, count: newCount, pinned: (newStart + newCount) >= nAll };
+  chartView = { start: newStart, count: newCount, pinned: (newStart + newCount) >= nAll, anchorTs: null };
   renderLiveTradeChart(liveLast.data, liveLast.kind);
 }
 
@@ -283,8 +305,12 @@ function _onChartWheel(evt) {
   const g = liveLast.geom;
   const svg = $("#liveTradeChart");
   const rect = svg.getBoundingClientRect();
-  const relX = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
-  const cursorBarInView = Math.round(relX * Math.max(0, g.n - 1));
+  // Convert the cursor to an SVG x, then to a bar through the shared slots, so
+  // wheel-zoom keeps the candle under the pointer pinned in place.
+  const svgX = ((evt.clientX - rect.left) / Math.max(1, rect.width)) * g.W;
+  const rawBar = g.slot ? g.slot.barAt(svgX)
+    : ((svgX - g.priceRect.x) / g.priceRect.w) * Math.max(0, g.n - 1);
+  const cursorBarInView = Math.max(0, Math.min(g.n - 1, Math.round(rawBar)));
   _wheelAnchorBarFull = g.viewStart + cursorBarInView;
   _wheelIsPan = evt.shiftKey || Math.abs(evt.deltaX) > Math.abs(evt.deltaY);
   // Accumulate raw delta; a single rAF-scheduled callback drains it. Multiple
@@ -305,8 +331,9 @@ function _drainWheel() {
   if (_wheelIsPan) {
     const svg = $("#liveTradeChart");
     const rect = svg.getBoundingClientRect();
-    const barsPerPx = Math.max(0.02, g.n / rect.width);
-    const step = Math.round(delta * barsPerPx / 3);
+    // Same bars-per-pixel as drag-pan, so a trackpad swipe and a hand-drag of
+    // the same distance move the tape the same number of bars.
+    const step = Math.round(delta * _barsPerPx(g, rect.width) / 3);
     if (step !== 0) _panBars(step);
     return;
   }
@@ -429,6 +456,33 @@ function initIndicatorControls() {
   });
 }
 
+/* Replay controls — step, scrub, play through a session from its open.
+ *
+ * Deliberately not persisted: a scrub position is a thing you're doing right
+ * now, not a preference, and restoring someone into the middle of yesterday's
+ * replay on load would be worse than useless.
+ */
+function initReplayControls() {
+  const bar = $("#ltcReplayBar");
+  if (!bar || bar.dataset.wired === "1") return;
+  bar.dataset.wired = "1";
+
+  const on = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
+
+  on("#rpToggle", "click", () => (replay.on ? exitReplay() : enterReplay()));
+  on("#rpExit", "click", exitReplay);
+  on("#rpPlay", "click", replayPlayPause);
+  on("#rpBack", "click", () => replayStep(-1));
+  on("#rpFwd", "click", () => replayStep(1));
+  on("#rpScrub", "input", (e) => replaySeek(Number(e.target.value)));
+  on("#rpSpeed", "change", (e) => {
+    replay.speedMs = Number(e.target.value) || 400;
+    // Restart the timer so a speed change takes effect immediately rather than
+    // after the current tick.
+    if (replay.playing) { replayPlayPause(); replayPlayPause(); }
+  });
+}
+
 function initLiveChartInteractions() {
   const svg = $("#liveTradeChart");
   if (!svg || svg.dataset.wired === "1") return;
@@ -467,6 +521,7 @@ function initLiveChartInteractions() {
     if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
   });
   initIndicatorControls();
+  initReplayControls();
   window.addEventListener("keydown", (e) => {
     if (e.key === "Alt") { altHeld = true; }
     if (e.key === "Escape") {
@@ -480,6 +535,15 @@ function initLiveChartInteractions() {
     }
     if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
     if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
+    // Replay: arrows step a candle, space plays/pauses. Only while replay is on,
+    // so these keys stay free for the page otherwise.
+    if (replay.on) {
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowRight") { e.preventDefault(); replayStep(1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); replayStep(-1); }
+      if (e.key === " ") { e.preventDefault(); replayPlayPause(); }
+    }
   });
   window.addEventListener("keyup", (e) => {
     if (e.key === "Alt") { altHeld = false; }

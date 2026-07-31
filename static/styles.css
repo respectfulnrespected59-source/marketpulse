@@ -995,6 +995,24 @@ body {
 }
 /* Default cursor is "grab" — the whole chart is scroll/zoom surface by
    default (Webull-style: drag to pan, wheel to zoom, double-click to fit). */
+/* Session replay bar. `.ltc-tool.is-active` already exists above and is what
+   marks the Replay button as engaged — deliberately not redefined here. */
+.ltc-replaybar {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin: 6px 0 2px;
+}
+.rp-controls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rp-scrub {
+  width: clamp(120px, 26vw, 320px);
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+.rp-speed { width: 68px; padding: 2px 4px; }
+.rp-clock {
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--gold); letter-spacing: 0.04em; min-width: 96px;
+}
+
 #liveTradeChart { width: 100%; height: 100%; display: block; cursor: grab; }
 #liveTradeChart:active { cursor: grabbing; }
 .ltc-cursor-readout { display: none; }

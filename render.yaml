@@ -18,10 +18,18 @@ services:
     envVars:
       - key: HOST
         value: 0.0.0.0
-      # The public demo is the FREE edition. Without this the hosted app runs
-      # whatever tier config.py ships with — which is "pro" — and hands the
-      # paid product to anyone holding the link.
+      # DELIBERATELY PRO while the product is research-only.
+      #
+      # Real-money trading is not legally available to us yet, so every edition
+      # is paper/research regardless of tier. Holding Pro back during that
+      # window buys nothing and costs reach — so the hosted demo serves the full
+      # feature set and we trade it for attention and real usage data.
+      #
+      # config.py still fails closed: a public host with NO MP_TIER set falls
+      # back to "free". This line is the explicit override, and flipping it to
+      # "free" is the single switch that re-gates the demo on the day this
+      # becomes a paid platform.
       - key: MP_TIER
-        value: free
+        value: pro
       - key: PYTHON_VERSION
         value: "3.11.9"
