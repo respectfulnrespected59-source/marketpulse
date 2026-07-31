@@ -80,7 +80,17 @@ let liveLast = { data: null, kind: "stock", ok: false };
 // bars arrive"; the moment the user pans back, that latches to false and the
 // poll no longer yanks them forward. Reset whenever symbol or timeframe
 // changes so the default compact window shows the freshest bars.
-let chartView = { start: null, count: null, pinned: true };
+// `anchorTs` is what actually holds the view still. /api/intraday returns a
+// ROLLING window (MAX_INTRADAY_BARS=500), so on a 1m tape the array length
+// stops growing and the CONTENT shifts left instead. A saved array index then
+// points at newer data every poll — pan back to study a setup, take your hands
+// off, and the tape creeps forward under you. Anchoring to the left-edge
+// timestamp pins the view to the DATA rather than to an array position.
+//
+// Contract: anchorTs === null means "start is authoritative — adopt it and
+// record its timestamp". Non-null means "re-locate start by timestamp". Pan and
+// zoom therefore null it out; the next render fills it back in.
+let chartView = { start: null, count: null, pinned: true, anchorTs: null };
 let lastRenderSym = null, lastRenderTf = null;
 const MIN_VISIBLE_BARS = 12;
 // Sensible default "compact" viewport per timeframe — chosen so a new tape
@@ -97,7 +107,22 @@ let _wheelAccum = 0;
 let _wheelAnchorBarFull = null;
 let _wheelIsPan = false;
 let _wheelRaf = 0;
-function resetChartView() { chartView = { start: null, count: null, pinned: true }; }
+function resetChartView() { chartView = { start: null, count: null, pinned: true, anchorTs: null }; }
+
+/* Index of `ts` in a sorted timestamp array, or the closest bar at/after it.
+   Returns -1 only when the anchor has aged out of the rolling window entirely,
+   which genuinely means that data is no longer on the client. */
+function _indexOfTs(tsArr, ts) {
+  if (!tsArr || !tsArr.length || !ts) return -1;
+  if (ts < tsArr[0]) return -1;
+  if (ts >= tsArr[tsArr.length - 1]) return tsArr.length - 1;
+  let lo = 0, hi = tsArr.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (tsArr[mid] <= ts) lo = mid; else hi = mid;
+  }
+  return tsArr[lo] === ts ? lo : hi;
+}
 // Chart interaction mode: "none" | "mark" | "line".
 // Trend line UX: single click drops a pending gold anchor at the target price
 // (visible ring + dashed price rule). Then press-and-drag ANYWHERE on the
@@ -299,6 +324,46 @@ function _renderEmaLegend(overlay) {
   box.innerHTML = periods.map(chip).join("");
 }
 
+/* The "travel" — when a new candle lands while the view is pinned to the right
+ * edge, the window slides forward one bar. Redrawn cold that reads as a jump:
+ * the whole tape teleports left and the new candle is just suddenly there.
+ *
+ * So we start the rolling group one slot to the RIGHT (where the tape was a
+ * moment ago) and let it settle back to zero. Same pixels, but the eye reads
+ * candles marching left as fresh ones form in the right-hand gap.
+ *
+ * Transform-only, so it stays on the compositor and never triggers layout.
+ */
+let _rollKey = null;      // sym|tf this counter belongs to
+let _rollLastTs = 0;      // newest bar's timestamp at the previous render
+const ROLL_MS = 420;
+
+function _playRoll(slotW, fullTs, sym) {
+  const key = `${sym || ""}|${liveTf}`;
+  const newestTs = (fullTs && fullTs.length) ? fullTs[fullTs.length - 1] : 0;
+  const prevTs = _rollLastTs;
+  const sameTape = _rollKey === key;
+  _rollKey = key;
+  _rollLastTs = newestTs;
+  if (!sameTape || !chartView.pinned) return;      // new tape, or user panned back
+  // How many bars did the tape advance? Measured in TIME, because once the
+  // rolling window is full the array length stops changing and a length-based
+  // check would silently never fire again on the 1m tape.
+  if (!prevTs || !newestTs || newestTs <= prevTs) return;
+  const prevIdx = _indexOfTs(fullTs, prevTs);
+  if (prevIdx < 0) return;                         // gapped too far to animate
+  const grew = (fullTs.length - 1) - prevIdx;
+  if (grew < 1 || grew > 3) return;                // first paint, or a big refill
+  const g = $("#ltcBase");
+  if (!g || typeof g.animate !== "function") return;
+  // Honour the OS-level motion preference — this is decoration, not data.
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  g.animate(
+    [{ transform: `translateX(${(slotW * grew).toFixed(2)}px)` }, { transform: "translateX(0px)" }],
+    { duration: ROLL_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+}
+
 function renderLiveTradeChart(d, kind) {
   const svg = $("#liveTradeChart");
   const fullOhlc = (d && d.ohlc) || [];
@@ -330,9 +395,21 @@ function renderLiveTradeChart(d, kind) {
   if (chartView.pinned || chartView.start == null) {
     start = Math.max(0, nAll - count);
   } else {
-    start = Math.max(0, Math.min(nAll - count, chartView.start));
+    // Re-locate the left edge by TIMESTAMP. Using the stored index here is what
+    // let the tape slide: the index is stable but the data under it is not.
+    let idx = chartView.start;
+    if (chartView.anchorTs && fullTs.length === nAll) {
+      const found = _indexOfTs(fullTs, chartView.anchorTs);
+      if (found >= 0) idx = found;
+      // found < 0 → the anchor aged out of the window; fall back to the index
+      // and clamp, which parks the user at the oldest bar we still hold.
+    }
+    start = Math.max(0, Math.min(nAll - count, idx));
   }
   const end = start + count;
+  // Record where we actually landed so the next poll can find this bar again.
+  chartView.start = start;
+  chartView.anchorTs = (fullTs.length === nAll && fullTs[start]) || null;
   const ohlc = fullOhlc.slice(start, end);
   const tsArr = fullTs.slice(start, end);
   const volArr = fullVol.slice(start, end);
@@ -375,22 +452,30 @@ function renderLiveTradeChart(d, kind) {
     W, H, pad: padL, X: c.X, Y: c.Y, n: ohlc.length, ohlc, ts: tsArr,
     priceRect, volRect, timeAxisTop, axisR: AXIS_R,
     priceMin: c.min, priceMax: c.max,
+    // Shared slot mapping — pan, zoom, snap and hit-test all invert through it.
+    slot: c.slot,
     // Viewport bookkeeping so wheel/drag can operate against the full tape.
     fullOhlc, fullTs, fullVol, viewStart: start, viewCount: count, viewEnd: end, nAll,
   };
 
+  // STATIC layer — anchored to the frame. The price ladder and grid must not
+  // slide when the tape rolls, or the whole chart looks like it's sloshing.
+  let staticLayer = "";
+  staticLayer += _priceGridSVG(priceRect, c.min, c.max);
+  staticLayer += _priceAxisSVG(priceRect, c.min, c.max, last, AXIS_R, W);
+  staticLayer += `<line x1="${priceRect.x}" y1="${clampY(last).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(last).toFixed(1)}"
+    stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>`;
+
+  // ROLLING layer — everything pinned to a bar position. This is the group we
+  // translate when a new candle arrives, so the tape visibly travels instead
+  // of teleporting one bar to the left.
   let base = "";
-  base += _priceGridSVG(priceRect, c.min, c.max);
   base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop);
   base += c.markup;
   if (chartInd.showVolume) base += _volumeSVG(volRect, ohlc, volArr);
   base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop);
-  base += _priceAxisSVG(priceRect, c.min, c.max, last, AXIS_R, W);
 
-  // Overlays live on top of the chart & axes.
   let overlay = "";
-  overlay += `<line x1="${priceRect.x}" y1="${clampY(last).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(last).toFixed(1)}"
-    stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 3" opacity="0.5"/>`;
   const p = getLive();
   if (p && p.sym && d.symbol && p.sym.toUpperCase() === String(d.symbol).toUpperCase()) {
     overlay += `<line x1="${priceRect.x}" y1="${clampY(p.entry).toFixed(1)}" x2="${priceRect.x + priceRect.w}" y2="${clampY(p.entry).toFixed(1)}"
@@ -425,7 +510,15 @@ function renderLiveTradeChart(d, kind) {
 
   // ltcCrosshair is updated separately in _drawCrosshair — no full redraw on hover.
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.innerHTML = _neonDefsSVG() + `<g id="ltcBase">${base}${overlay}</g><g id="ltcCrosshair" pointer-events="none"></g>`;
+  // The rolling group is clipped to the candle area so a mid-roll translate
+  // can never bleed under the price ladder.
+  const clipW = priceRect.w + c.slot.w * RIGHT_PAD_SLOTS;
+  svg.innerHTML = _neonDefsSVG()
+    + `<clipPath id="ltcRollClip"><rect x="${priceRect.x}" y="0" width="${Math.min(clipW, W - priceRect.x - AXIS_R + 2).toFixed(1)}" height="${H}"/></clipPath>`
+    + `<g id="ltcStatic">${staticLayer}</g>`
+    + `<g id="ltcRoll" clip-path="url(#ltcRollClip)"><g id="ltcBase">${base}${overlay}</g></g>`
+    + `<g id="ltcCrosshair" pointer-events="none"></g>`;
+  _playRoll(c.slot.w, fullTs, sym);
 
   const first = ohlc[0][3];
   const chg = first ? (last - first) / first * 100 : 0;
@@ -439,13 +532,42 @@ function renderLiveTradeChart(d, kind) {
 
 /* ---- Webull-style chart primitives ---- */
 
+/* Slot geometry — the single source of truth for "where does bar i sit".
+ *
+ * The old mapping was `i / (n - 1) * rect.w`, which stretches the FIRST and
+ * LAST bars onto the rect's edges. Two things a trader feels immediately:
+ * bar 0 is sliced in half by the left edge, and the newest bar is pinned under
+ * the price ladder with its right half clipped — so the candle that is still
+ * forming is the one you can't actually see.
+ *
+ * Webull instead gives every bar its own slot, centred, and leaves a few EMPTY
+ * slots at the right edge. That gap is what the live candle forms in and
+ * travels across before the tape rolls left. Without it a new bar has nowhere
+ * to appear except on top of the axis.
+ */
+const RIGHT_PAD_SLOTS = 6;
+
+function chartSlot(rect, n) {
+  const slots = Math.max(1, n + RIGHT_PAD_SLOTS);
+  const w = rect.w / slots;
+  return {
+    w,
+    slots,
+    // Centre of bar i. Valid past n-1 too — that range is the headroom.
+    X: (i) => rect.x + (i + 0.5) * w,
+    // Inverse: pixel x back to a fractional bar index.
+    barAt: (x) => (x - rect.x) / w - 0.5,
+  };
+}
+
 function candlesInRect(ohlc, rect) {
   const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
   const min = Math.min(...lows), max = Math.max(...highs), span = max - min || 1;
   const n = ohlc.length;
-  const X = (i) => rect.x + (n === 1 ? 0.5 : i / (n - 1)) * rect.w;
+  const sg = chartSlot(rect, n);
+  const X = sg.X;
   const Y = (v) => rect.y + (1 - (v - min) / span) * rect.h;
-  const slot = rect.w / n;
+  const slot = sg.w;
   const bw = Math.max(1, Math.min(slot * 0.7, 9));
   const wick = Math.max(0.6, Math.min(bw * 0.28, 2));
   let out = "";
@@ -461,7 +583,7 @@ function candlesInRect(ohlc, rect) {
     out += `<line x1="${x.toFixed(1)}" y1="${yH.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yL.toFixed(1)}" stroke="${col}" stroke-width="${wick.toFixed(2)}"/>`;
     out += `<rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${col}" rx="0.5"/>`;
   }
-  return { markup: out, X, Y, min, max };
+  return { markup: out, X, Y, min, max, slot: sg };
 }
 
 function _fmtAxisPrice(v) {
@@ -479,14 +601,14 @@ function _fmtAxisPrice(v) {
 function _sessionDividersSVG(rect, ohlc, tsArr, timeAxisTop) {
   const n = ohlc.length;
   if (!tsArr || tsArr.length !== n || n < 2) return "";
-  const n1 = Math.max(1, n - 1);
-  const X = (i) => rect.x + (n === 1 ? 0.5 : i / n1) * rect.w;
+  const sg = chartSlot(rect, n);
+  const X = sg.X;
   let out = "";
   let prevKey = null;
   // Density guard: at deep zoom-out one divider per bar is noise. Cap to
   // one label every ~55px so labels never overlap.
   const minLabelPx = 55;
-  const barPx = rect.w / n;
+  const barPx = sg.w;
   const labelStride = Math.max(1, Math.ceil(minLabelPx / Math.max(1, barPx)));
   let idxSinceLabel = labelStride;
   const bottom = (timeAxisTop != null ? timeAxisTop : rect.y + rect.h).toFixed(1);
@@ -556,13 +678,14 @@ function _timeAxisSVG(rect, ohlc, tsArr, tf, kind, top) {
   const n = ohlc.length;
   if (!tsArr || tsArr.length !== n) return "";
   const steps = 5;
+  const sg = chartSlot(rect, n);
   let out = `<line x1="${rect.x}" y1="${top.toFixed(1)}" x2="${rect.x + rect.w}" y2="${top.toFixed(1)}"
     stroke="rgba(120,150,190,0.14)" stroke-width="1"/>`;
   for (let i = 0; i <= steps; i++) {
     const idx = Math.round((n - 1) * i / steps);
     const ts = tsArr[idx];
     if (!ts) continue;
-    const x = rect.x + (n === 1 ? 0.5 : idx / (n - 1)) * rect.w;
+    const x = sg.X(idx);
     const label = _fmtAxisTime(new Date(ts * 1000), tf);
     out += `<line x1="${x.toFixed(1)}" y1="${top.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(top + 4).toFixed(1)}"
       stroke="var(--text-dim)" stroke-width="1"/>`;
@@ -576,13 +699,14 @@ function _volumeSVG(rect, ohlc, volume) {
   if (!volume || volume.length !== ohlc.length || volume.every((v) => !v)) return "";
   const max = Math.max(...volume) || 1;
   const n = volume.length;
-  const slot = rect.w / n;
-  const bw = Math.max(1, Math.min(slot * 0.7, 9));
+  // Same slots as the candles, or the histogram walks out from under them.
+  const sg = chartSlot(rect, n);
+  const bw = Math.max(1, Math.min(sg.w * 0.7, 9));
   let out = `<line x1="${rect.x}" y1="${rect.y.toFixed(1)}" x2="${rect.x + rect.w}" y2="${rect.y.toFixed(1)}"
     stroke="rgba(120,150,190,0.10)" stroke-width="1" stroke-dasharray="2 4"/>`;
   for (let i = 0; i < n; i++) {
     const h = (volume[i] / max) * rect.h;
-    const x = rect.x + (n === 1 ? 0.5 : i / (n - 1)) * rect.w;
+    const x = sg.X(i);
     const y = rect.y + rect.h - h;
     const [o, , , c] = ohlc[i];
     const col = c >= o ? "rgba(47,209,128,0.42)" : "rgba(255,93,108,0.42)";
@@ -658,8 +782,9 @@ function _getSnapCandidate(x, y) {
   const thX = SNAP_PHYS_PX / (g.pxPerSvgX || 1);
   const thY = SNAP_PHYS_PX / (g.pxPerSvgY || 1);
   const r = g.priceRect;
-  const relX = Math.max(0, Math.min(1, (x - r.x) / r.w));
-  const nearest = Math.max(0, Math.min(g.n - 1, Math.round(relX * (g.n - 1))));
+  // Invert through the SAME slot mapping the candles were drawn with.
+  const raw = g.slot ? g.slot.barAt(x) : ((x - r.x) / r.w) * (g.n - 1);
+  const nearest = Math.max(0, Math.min(g.n - 1, Math.round(raw)));
   const indices = [nearest - 1, nearest, nearest + 1].filter((i) => i >= 0 && i < g.n);
   let best = null, bestD = Infinity;
   for (const idx of indices) {
@@ -760,20 +885,6 @@ function _neonDefsSVG() {
   </defs>`;
 }
 
-function _gridSVG(W, H, pad, ohlc) {
-  const highs = ohlc.map((b) => b[1]), lows = ohlc.map((b) => b[2]);
-  const min = Math.min(...lows), max = Math.max(...highs);
-  const step = (max - min) / 4 || 1;
-  let g = "";
-  for (let i = 1; i < 4; i++) {
-    const v = min + step * i;
-    const y = pad + (1 - (v - min) / (max - min || 1)) * (H - pad * 2);
-    g += `<line x1="${pad}" y1="${y.toFixed(1)}" x2="${W - pad}" y2="${y.toFixed(1)}"
-      stroke="rgba(120,150,190,0.08)" stroke-width="1"/>`;
-  }
-  return g;
-}
-
 // Convert a stored (ts, price) point to (x, y) using current geometry. Falls
 // back to first/last candle when the ts is outside the visible tape.
 function _tsToXY(geom, ts, price) {
@@ -838,7 +949,7 @@ function _userOverlaySVG(symbol, geom, clampY) {
       stroke="${col}" stroke-width="1" stroke-dasharray="2 5" opacity="0.35"/>`;
     out += `<circle cx="${p.x.toFixed(1)}" cy="${y.toFixed(1)}" r="${editingMe ? 7 : 5.5}" fill="${editingMe ? col : "none"}" fill-opacity="${editingMe ? 0.4 : 1}"
       stroke="${col}" stroke-width="${editingMe ? 2.8 : 2.2}" filter="url(#${filt})">
-      <title>${m.note || (m.dir || "mark") + " @ " + m.price} — drag to move, Alt-click to delete</title></circle>`;
+      <title>${esc(m.note || (m.dir || "mark") + " @ " + m.price)} — drag to move, Alt-click to delete</title></circle>`;
   }
   return out;
 }
