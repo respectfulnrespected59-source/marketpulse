@@ -572,6 +572,17 @@ body {
 .dc-val.down { color: var(--sell); }
 .dc-sub { margin-top: 8px; font-family: var(--mono); font-size: 13px; color: var(--text); }
 .dc-sub b { color: var(--gold); }
+/* Profit carries its own sign colour; has to out-specify `.dc-sub b`. */
+.dc-sub b.up { color: var(--buy); }
+.dc-sub b.down { color: var(--sell); }
+/* The return % is the SECONDARY read now — it is identical at every
+   contribution size, so it rides as a quiet chip beside the dollars. */
+.dc-ret {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; background: var(--surface-2); color: var(--text-dim);
+}
+.dc-ret.up { color: var(--buy); }
+.dc-ret.down { color: var(--sell); }
 .dc-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); }
 
 .dca-vbox {
@@ -590,6 +601,14 @@ body {
 .dv-tilt b { color: var(--text); font-family: var(--mono); }
 .dv-truth { font-size: 12.5px; color: var(--text-faint); line-height: 1.5; margin-top: 8px; font-style: italic; }
 .dv-truth.sub { opacity: 0.85; }
+/* Answers the question the numbers provoke: "why didn't anything change when
+   I changed my amount?" Gold rail because it is a teaching note, not a warning. */
+.dv-scale {
+  margin-top: 12px; padding: 10px 12px; border-radius: 9px; font-size: 12.5px;
+  line-height: 1.55; color: var(--text-dim);
+  background: var(--surface-2); border-left: 3px solid var(--gold);
+}
+.dv-scale b { color: var(--text); }
 
 .dca-proj { margin-top: 10px; }
 .pj-head { font-size: 13.5px; color: var(--text-dim); margin-bottom: 10px; }

@@ -16,12 +16,28 @@ const DCA_LABEL = { plain: "Plain DCA", tilt: "Signal-Tilt DCA", lump: "Lump Sum
 
 // QuickFill for the DCA per-period contribution — readout shows annualized $.
 let dcaMonthlyQf = null;
+
+/* The amount used to be inert until you pressed "Build plan" again, so the
+ * cards kept showing the OLD budget while the input said something else — the
+ * wizard read as if it were ignoring you entirely. The dial drives the numbers
+ * now. Debounced, so typing "1000" is one rebuild instead of four, and any
+ * explicit load cancels a pending one (home.js sets the amount and then calls
+ * loadDca itself — without the cancel that would fetch the same plan twice). */
+let dcaRerunTimer = null;
+const DCA_RERUN_MS = 550;
+function dcaScheduleRerun() {
+  if (!dcaLoaded) return;   // still mounting; the first load is about to fire
+  clearTimeout(dcaRerunTimer);
+  dcaRerunTimer = setTimeout(loadDca, DCA_RERUN_MS);
+}
+
 function ensureDcaQf() {
   if (dcaMonthlyQf || typeof QuickFill === "undefined") return;
   const el = $("#dcaMonthlyQf");
   if (!el) return;
   dcaMonthlyQf = QuickFill.mount(el, {
     amount: 200, chips: [50, 100, 200, 500, 1000], step: 25, min: 10,
+    onChange: dcaScheduleRerun,
     convert: (amt) => {
       const cad = $("#dcaCadence").value;
       const perYr = cad === "weekly" ? 52 : cad === "biweekly" ? 26 : 12;
@@ -29,10 +45,14 @@ function ensureDcaQf() {
       return `$${Math.round(amt)} ${cad} = <b>$${annual.toLocaleString()}/yr</b> invested`;
     },
   });
-  $("#dcaCadence").addEventListener("change", () => dcaMonthlyQf && dcaMonthlyQf.refreshConversion());
+  $("#dcaCadence").addEventListener("change", () => {
+    if (dcaMonthlyQf) dcaMonthlyQf.refreshConversion();
+    dcaScheduleRerun();
+  });
 }
 
 async function loadDca() {
+  clearTimeout(dcaRerunTimer);   // an explicit load supersedes a pending one
   const symbol = ($("#dcaSymbol").value.trim() || "NVDA");
   const kind = $("#dcaKind").value;
   const monthly = dcaMonthlyQf ? dcaMonthlyQf.getAmount() : 200;
@@ -54,13 +74,23 @@ async function loadDca() {
   }
 }
 
+/* The headline is the DOLLAR outcome, not the return %.
+ *
+ * Return % is mathematically identical at every contribution size — double the
+ * buy and you double the dollars, not the rate. Leading with % therefore made
+ * the whole wizard look broken: change $200 to $2,000 and the big number on
+ * every card stayed put. The dollars are what your amount actually moves, so
+ * the dollars lead and the (invariant) rate rides shotgun. */
 function dcaCard(key, x, win) {
   const rc = (x.return_pct ?? 0) >= 0 ? "up" : "down";
   const ret = x.return_pct == null ? "—" : `${x.return_pct > 0 ? "+" : ""}${x.return_pct}%`;
+  const prof = x.profit == null ? "—"
+    : `${x.profit >= 0 ? "+" : "−"}${potMoney(Math.abs(x.profit))}`;
   return `<div class="dca-card ${win ? "win" : ""}">
     <div class="dc-name">${DCA_LABEL[key]}${win ? ` <span class="dc-crown">▲ won</span>` : ""}</div>
-    <div class="dc-val ${rc}">${ret}</div>
-    <div class="dc-sub">${potMoney(x.invested)} in → <b>${potMoney(x.final_value)}</b></div>
+    <div class="dc-val ${rc}">${potMoney(x.final_value)}</div>
+    <div class="dc-sub">${potMoney(x.invested)} in → <b class="${rc}">${prof}</b>
+      <span class="dc-ret ${rc}">${ret}</span></div>
     <div class="dc-meta">avg cost ${fmtPrice(x.avg_cost)} · ${x.periods} buy${x.periods === 1 ? "" : "s"} · worst paper dip ${x.max_paper_dd_pct}%</div>
   </div>`;
 }
@@ -97,6 +127,15 @@ function renderDca(d) {
         : "the tilt did NOT beat plain DCA here (the engine’s “cheap” kept moving the same way)."}</div>
     <div class="dv-truth">${esc(v.honest_truth)}</div>
     <div class="dv-truth sub">${esc(v.same_dollars_note)}</div>
+    <div class="dv-scale">📐 <b>Why the percentages don't move when you change your amount.</b>
+      At ${potMoney(p.per_period)} every ${esc(p.cadence)}, this window put
+      <b>${potMoney(b.plain.invested)}</b> to work. Change that to
+      ${potMoney(p.per_period * 10)} and every dollar figure above scales by 10× —
+      but the return %, the winner, and the read stay <i>exactly</i> the same.
+      DCA is linear in the contribution: your amount sets <b>how much money</b> is
+      at stake, the asset and the window set <b>the rate</b>. That's the math, not
+      a stuck calculator — change the <b>symbol</b>, <b>cadence</b> or <b>window</b>
+      to move the percentages.</div>
   </div>`;
 
   renderMoneyMap(d.series, b);
