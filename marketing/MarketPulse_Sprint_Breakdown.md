@@ -47,12 +47,12 @@ Every sprint runs the same repeatable loop. This is the cycle the whole project 
 <tr><td>1 · RESEARCH</td><td>Search proven open-source before writing anything new</td></tr>
 <tr><td>2 · BUILD</td><td>Ship the smallest increment that delivers real value</td></tr>
 <tr><td>3 · VERIFY</td><td>Run tests + drive the real UI in a browser; 0 errors</td></tr>
-<tr><td>4 · SHIP</td><td>Branch → commit → PR → merge → auto-deploy to Render</td></tr>
-<tr><td>5 · PROVE</td><td>Verify on the live HTTPS URL — receipts, not claims</td></tr>
+<tr><td>4 · SHIP</td><td>Branch → commit → PR → merge → <b>promote by hand</b> to Render</td></tr>
+<tr><td>5 · PROVE</td><td>Audit the <b>live artifact</b>, not the commit log — receipts, not claims</td></tr>
 <tr><td>6 · REPEAT</td><td>Lock the lesson, pick the next increment</td></tr>
 </table>
 
-{: .center .muted } Live app · marketpulse-22bi.onrender.com · auto-deploys on every merge to main
+{: .center .muted } Live app · marketpulse-22bi.onrender.com · deploys are promoted by hand, never on merge
 
 ---
 

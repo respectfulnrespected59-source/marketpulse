@@ -124,7 +124,7 @@ for options) — this is a research tool, not a live trading terminal.
 - **Backend:** pure Python **standard library** HTTP server (`app.py`). No Flask, no requests, no `pip install`. Just Python 3.
 - **Frontend:** vanilla JavaScript + hand-rolled SVG charts. No React, no chart library. Fast to load, easy to hack.
 - **State:** browser `localStorage` — your Pot, your Live pins, your marks and trend lines never leave your machine.
-- **Deploy:** auto-deploys from `main` to Render on push.
+- **Deploy:** Render, **promoted by hand** — `autoDeploy` is off in `render.yaml`. Once people rely on what the demo shows, a routine push must not change the product underneath them, so shipping is a decision rather than a side effect of a merge. `python tools/audit_deployed.py` checks what the live host is *actually* serving.
 
 ---
 
