@@ -677,6 +677,14 @@ function renderLiveTradeChart(d, kind) {
   _renderSqueezeChip(liveOverlay);
   _renderEmaLegend(liveOverlay);
 
+  // Resolve any live forward calls the tape has now caught up with. Runs on
+  // every refresh so a call made this morning settles itself without anyone
+  // having to remember it — a record that depends on being remembered ends up
+  // a record of the memorable trades only.
+  if (typeof learnSettlePending === "function") {
+    try { learnSettlePending(); } catch (e) { /* never let scoring break the chart */ }
+  }
+
   // Reset the viewport whenever the identity of the tape changes so a fresh
   // symbol / timeframe starts with all bars visible (not stuck on a stale window).
   const sym = d && d.symbol;

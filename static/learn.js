@@ -271,6 +271,125 @@ function learnRecordCall(dir, conf) {
   return rec;
 }
 
+/* ---- live forward calls: log now, settle later ------------------------ */
+/*
+ * learnRecordCall above requires replay, because it settles the call instantly
+ * from tape that already exists. That is the right design for practice — the
+ * rest of the day is hidden, so you cannot cheat.
+ *
+ * It cannot do the other thing: make a call on the LIVE bar, right now, with
+ * nobody knowing what happens next, and find out twenty minutes later. That is
+ * the only version that tests a read against a genuinely unknown future, and
+ * it is what a few weeks of honest logging needs.
+ *
+ * So pending calls live in their own list. They are deliberately NOT in
+ * `calls`, because every stat function downstream assumes a settled record —
+ * an unsettled one in that array would quietly poison the win rate.
+ */
+const LEARN_MAX_PENDING = 200;
+
+
+function learnPendingList() {
+  const s = getLearn();
+  return Array.isArray(s.pending) ? s.pending : [];
+}
+
+
+/* Record a call on the CURRENT live bar. No outcome yet — that is the point. */
+function learnRecordLiveCall(dir, conf) {
+  if (!["up", "down", "stand"].includes(dir)) return { error: "bad direction" };
+  const d = liveLast && liveLast.data;
+  if (!d || !d.ohlc || !d.ohlc.length) return { error: "no chart loaded" };
+  if (typeof replay === "object" && replay.on) {
+    return { error: "Go live first — a forward call has to be made on the live bar." };
+  }
+
+  const idx = d.ohlc.length - 1;
+  const state = getLearn();
+  if (!Array.isArray(state.pending)) state.pending = [];
+
+  const rec = {
+    id: learnNewId(),
+    sym: (d.symbol || "").toUpperCase(),
+    kind: (liveLast.kind === "crypto") ? "crypto" : "stock",
+    tf: typeof liveTf === "string" ? liveTf : "",
+    barTs: (d.ts && d.ts[idx]) || 0,          // unix SECONDS, matches the tape
+    dir,
+    conf: Math.max(1, Math.min(3, Number(conf) || 2)),
+    horizon: DEFAULT_HORIZON,
+    // The setup as it looked AT THE MOMENT of the call. Captured now because
+    // it cannot be reconstructed honestly later — the tags would be read off
+    // bars the caller had not seen.
+    tags: learnTagsAt(d, idx, 0),
+    entryPrice: d.ohlc[idx][3],
+    at: Math.floor(Date.now() / 1000),
+  };
+  state.pending.push(rec);
+  if (state.pending.length > LEARN_MAX_PENDING) {
+    state.pending = state.pending.slice(-LEARN_MAX_PENDING);
+  }
+  saveLearn(state);
+  return rec;
+}
+
+
+/* Settle any pending calls the tape has now caught up with.
+ *
+ * A call settles only once `horizon` bars have printed AFTER its bar, and it is
+ * matched by TIMESTAMP rather than by index — the intraday window rolls, so
+ * index 400 today is a different bar tomorrow. */
+function learnSettlePending() {
+  const state = getLearn();
+  const pending = Array.isArray(state.pending) ? state.pending : [];
+  if (!pending.length) return 0;
+
+  const d = liveLast && liveLast.data;
+  if (!d || !d.ohlc || !d.ts || !d.ts.length) return 0;
+
+  const sym = (d.symbol || "").toUpperCase();
+  const tf = typeof liveTf === "string" ? liveTf : "";
+  const still = [];
+  let settled = 0;
+
+  for (const p of pending) {
+    // Only settle against the chart the call was actually made on.
+    if (p.sym !== sym || p.tf !== tf) {
+      still.push(p);
+      continue;
+    }
+    const idx = d.ts.indexOf(p.barTs);
+    if (idx < 0) {
+      // The bar has rolled off the client's window. Keep it — a later load may
+      // still resolve it. Dropping a call because it scrolled away would
+      // quietly delete exactly the ones nobody wants to face.
+      still.push(p);
+      continue;
+    }
+    const out = learnSettle(d, idx, p.dir, p.horizon, p.kind);
+    if (!out) {
+      still.push(p);                 // not enough tape past it yet
+      continue;
+    }
+    state.calls.push({
+      ...p,
+      entry: out.entry,
+      exit: out.exit,
+      movePct: out.movePct,
+      frictionPct: out.frictionPct,
+      outcome: out.outcome,
+      live: true,                    // a real forward call, not replay practice
+      settledAt: Math.floor(Date.now() / 1000),
+    });
+    settled += 1;
+  }
+
+  if (settled) {
+    state.pending = still;
+    saveLearn(state);
+  }
+  return settled;
+}
+
 /* ---- stats: the honest mirror ----------------------------------------- */
 
 /* Sample floors. Below these we say "not enough yet" instead of printing a
@@ -463,11 +582,26 @@ function learnWireUI() {
   row.querySelectorAll("[data-call]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const conf = document.querySelector("#rpConf");
-      const rec = learnRecordCall(btn.dataset.call, conf ? conf.value : 2);
+      const live = !(typeof replay === "object" && replay.on);
+      // Same two buttons, both modes. In replay the call settles instantly
+      // from tape already on the client; live, it goes on the pending list and
+      // settles when the market gets there. Making the trader pick the right
+      // function would just be a way to record calls in the wrong bucket.
+      const rec = live
+        ? learnRecordLiveCall(btn.dataset.call, conf ? conf.value : 2)
+        : learnRecordCall(btn.dataset.call, conf ? conf.value : 2);
       if (!out) return;
       if (rec.error) {
         out.textContent = rec.error;
         out.className = "rp-call-result is-warn";
+        return;
+      }
+      if (live) {
+        const n = learnPendingList().length;
+        out.textContent = `Logged ${rec.dir.toUpperCase()} on ${rec.sym} at `
+          + `${rec.entryPrice} · settles in ${rec.horizon} bars · `
+          + `${n} call${n === 1 ? "" : "s"} pending`;
+        out.className = "rp-call-result is-pending";
         return;
       }
       out.textContent = learnResultText(rec);
