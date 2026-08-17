@@ -437,7 +437,13 @@ function setView(v) {
   if (isCoach) { renderCoach(); return; }
   // The paper run keeps polling when you leave the tab — a strategy that only
   // trades while you're watching it isn't testing anything.
-  if (isPaper) { initPaper(); renderPaper(); return; }
+  if (isPaper) {
+    initPaper(); renderPaper();
+    // The options book lives on the same tab and marks on its own timer, so
+    // an open spread keeps being priced whether or not you are looking at it.
+    if (typeof initOptBook === "function") { initOptBook(); renderOptBook(); }
+    return;
+  }
   if (isLive) {
     ensureLiveQf();
     initLiveChartInteractions();

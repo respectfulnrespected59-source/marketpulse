@@ -446,6 +446,42 @@
         <div id="paperClosed"></div>
       </div>
     </div>
+
+    <!-- The options book. The Options tab builds a spread; this proves it. -->
+    <h2 class="panel-title">⛓ Options paper book</h2>
+    <p class="panel-sub">
+      Test a real spread against the live chain. Entries fill at the
+      <b>ask</b>, exits at the <b>bid</b>, and commission is charged on every
+      leg both ways — so a fresh spread starts slightly down, exactly like the
+      real one would. Size is <b>your call</b>: the $300 pot on the Options tab
+      is a starter recommendation, not a ceiling. The chain is ~15 minutes
+      delayed. <b>Log the losers too.</b>
+    </p>
+
+    <div class="paper-actions">
+      <label class="paper-label" for="optBookSymbol">Symbol</label>
+      <input id="optBookSymbol" class="pot-input" type="text" value="TSLA"
+             maxlength="8" spellcheck="false" autocomplete="off">
+      <label class="paper-label" for="optBookContracts">Contracts</label>
+      <input id="optBookContracts" class="pot-input" type="number" value="1"
+             min="1" step="1">
+      <label class="paper-label" for="optBookBankroll">Bankroll $</label>
+      <input id="optBookBankroll" class="pot-input" type="number" value="10000"
+             min="1" step="100">
+      <button type="button" class="ltc-tool" id="optBookLoadBtn">⛓ Load the signal's spread</button>
+      <button type="button" class="ltc-tool" id="optBookOpenBtn">▶ Open paper position</button>
+      <button type="button" class="ltc-tool" id="optBookExportBtn"
+              title="Park the book on disk so the daily Obsidian journal can read it">⤓ Export to journal</button>
+      <button type="button" class="ltc-tool ghost" id="optBookResetBtn">↺ Reset book</button>
+      <span class="paper-status" id="optBookStatus">no open positions</span>
+    </div>
+    <div id="optBookDraft"></div>
+
+    <div class="pot-stats" id="optBookStats"></div>
+    <h3 class="paper-h3">Open options positions</h3>
+    <div id="optBookOpen"></div>
+    <h3 class="paper-h3">Closed options trades</h3>
+    <div id="optBookClosed"></div>
   </section>
 
   <footer class="foot">
@@ -497,6 +533,7 @@
   <script src="home.js"></script>
   <script src="wizards.js"></script>
   <script src="paper.js"></script>
+  <script src="options-paper.js"></script>
   <script src="app.js"></script>
   <script>
   /* PWA: register the service worker + drive the install affordance.

@@ -31,6 +31,11 @@ marketing/thumbnail.png
 # Generated reports (dated, regenerable)
 reports/
 
+# The exported options paper book + the daily runner's logs. Local trading
+# state — regenerable, personal, and nobody else's business.
+paper_positions.json
+logs/
+
 # Binary media (regenerable / large)
 *.m4a
 *.wav

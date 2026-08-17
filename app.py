@@ -44,6 +44,13 @@ try:
     import options
 except ModuleNotFoundError:
     options = None
+# The paper position model ships alongside options.py. Kept as its own
+# optional import so an older pack that has options.py but not this module
+# still serves the chain — it just cannot mark a paper book.
+try:
+    import options_paper
+except ModuleNotFoundError:
+    options_paper = None
 
 _INSTALLED = {
     "proof": backtest is not None,
@@ -55,6 +62,18 @@ _INSTALLED = {
 def _enabled(feature: str) -> bool:
     """True only if the tier grants the feature AND its module shipped."""
     return bool(config.features().get(feature)) and _INSTALLED.get(feature, True)
+
+
+def _options_paper_enabled() -> bool:
+    """The options paper book rides the `options` tier grant.
+
+    Deliberately NOT its own feature key: config.PRO/FREE decide what a buyer
+    paid for, and inventing a key there that the tier table never defines
+    makes features().get() return None — which reads as "locked" forever, on
+    every tier. It needs the extra module check because options_paper.py is
+    Pro-only and absent from the free pack.
+    """
+    return _enabled("options") and options_paper is not None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -295,6 +314,243 @@ def paper_scan(strategy_doc: dict, open_symbols: dict | None = None) -> dict:
         })
 
     return {"kind": kind, "server_ts": int(time.time()), "decisions": decisions}
+
+
+# A book this size is already more than anyone should be running on paper,
+# and each distinct expiry costs an upstream chain fetch.
+MAX_MARK_POSITIONS = 20
+
+
+def options_mark(positions: list[dict] | None, today=None) -> dict:
+    """Mark open options positions against the live chain.
+
+    The counterpart to paper_scan, and deliberately just as passive: it says
+    what each held position is worth right now and never opens, closes or
+    sizes anything. The browser owns the record.
+
+    Three things it refuses to do, all for the same reason — a paper book that
+    quietly looks better than it is will get someone's money taken:
+
+      * It never marks at the mid. Closing sells the longs at the bid and buys
+        the shorts back at the ask, via options_paper.
+      * When a leg has no quote it reports `unquoted` rather than a number.
+        An unmarked position is honest; a guessed one hides a loss.
+      * Past expiry it settles on intrinsic value instead of marking, because
+        there is no quote left to mark against.
+    """
+    book = [p for p in (positions or []) if isinstance(p, dict)][:MAX_MARK_POSITIONS]
+    if not book:
+        return {"server_ts": int(time.time()), "marks": []}
+
+    # Group by symbol+expiry so ten positions on one expiry cost one fetch.
+    groups: dict[tuple, list[dict]] = {}
+    broken: list[dict] = []
+    for pos in book:
+        try:
+            sym = clean_symbol(pos.get("symbol") or "")
+            expiry = str(pos["expiry"])
+            if not pos.get("legs"):
+                raise KeyError("legs")
+        except (InvalidSymbol, KeyError, TypeError):
+            # Malformed row: report it, never let it cost the whole batch.
+            broken.append(pos)
+            continue
+        groups.setdefault((sym, expiry), []).append(pos)
+
+    def unquoted(pos: dict, why: str) -> dict:
+        return {"id": pos.get("id"), "symbol": pos.get("symbol"),
+                "expiry": pos.get("expiry"), "status": "unquoted", "why": why,
+                "mark": None, "gross_usd": None, "net_usd": None,
+                "pct_of_max": None, "spot": None, "greeks": {}}
+
+    marks: list[dict] = [unquoted(p, "malformed position") for p in broken]
+
+    for (sym, expiry), held in groups.items():
+        key = f"optmark:{sym.lower()}:{expiry}"
+        chain = _cached(key)
+        if chain is None:
+            try:
+                chain = _store(key, options.chain(sym, expiry))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[error] options_mark {sym}: {exc}", file=sys.stderr)
+                chain = {"error": "chain fetch failed"}
+        if chain.get("error"):
+            marks.extend(unquoted(p, chain["error"]) for p in held)
+            continue
+
+        index = options_paper.chain_index(chain)
+        spot = chain.get("spot")
+        expired = options_paper.is_expired(expiry, today)
+
+        for pos in held:
+            base = {
+                "id": pos.get("id"), "symbol": sym, "expiry": expiry,
+                "spot": spot,
+                "dte": options_paper.days_to_expiry(expiry, today),
+                "contracts": pos.get("contracts", 1),
+                "entry_debit": pos.get("entry_debit"),
+                "max_profit_usd": options_paper.max_profit_usd(pos),
+                "max_loss_usd": options_paper.max_loss_usd(pos),
+                "breakeven": options_paper.breakeven(pos),
+                "width": options_paper.spread_width(pos),
+            }
+            if expired:
+                if spot is None:
+                    marks.append({**base, **unquoted(pos, "no spot to settle against")})
+                    continue
+                s = options_paper.settle(pos, spot)
+                marks.append({**base, "status": "expired", "mark": s["value"],
+                              "gross_usd": s["gross_usd"], "net_usd": s["net_usd"],
+                              "pct_of_max": None, "greeks": {}, "why": "expired"})
+                continue
+
+            pnl = options_paper.position_pnl(pos, index)
+            marks.append({
+                **base,
+                "status": "unquoted" if pnl["unquoted"] else "open",
+                "why": "a leg has no quote" if pnl["unquoted"] else "",
+                "mark": pnl["mark"], "gross_usd": pnl["gross_usd"],
+                "net_usd": pnl["net_usd"], "pct_of_max": pnl["pct_of_max"],
+                "greeks": options_paper.net_greeks(pos, index),
+            })
+
+    return {"server_ts": int(time.time()), "marks": marks}
+
+
+# Verticals are 2 legs, condors 4, butterflies 3-4. Beyond this it is either
+# a mistake or someone probing the endpoint.
+MAX_LEGS = 8
+
+# Where the browser's options book gets parked so the scheduled journal can
+# read it. FIXED on purpose — see export_book.
+POSITIONS_PATH = os.path.join(HERE, "paper_positions.json")
+
+# Only these survive an export. Everything else the browser happens to be
+# carrying is dropped.
+_POS_FIELDS = ("id", "symbol", "expiry", "contracts", "entry_debit", "cost_usd",
+               "commission", "opened", "spot_at_entry", "max_profit_usd",
+               "max_loss_usd", "breakeven", "risk_reward")
+_LEG_FIELDS = ("right", "strike", "side", "qty", "entry")
+
+
+def export_book(positions, path: str | None = None) -> dict:
+    """Write the browser's options book to disk for the scheduled journal.
+
+    The book lives in localStorage, which a cron job cannot read, so without
+    this the daily note reports `open_positions: unknown` forever.
+
+    Two deliberate refusals:
+
+      * The path is chosen HERE, never taken from the request. An endpoint
+        that writes wherever the caller points is a whole-disk write primitive,
+        and this server answers unauthenticated POSTs.
+      * Only whitelisted fields are kept. The browser can carry anything in
+        localStorage; none of it belongs in a file a scheduled job will parse.
+
+    An empty list is a valid export — "I hold nothing" is a real state, and
+    recording it as 0 is different from the "unknown" a missing file means.
+    """
+    target = path or POSITIONS_PATH
+    if not isinstance(positions, list):
+        return {"error": "positions must be a list"}
+
+    clean: list[dict] = []
+    for pos in positions[:MAX_MARK_POSITIONS]:
+        if not isinstance(pos, dict) or not pos.get("symbol"):
+            continue          # a junk row must not cost the whole snapshot
+        row = {k: pos[k] for k in _POS_FIELDS if k in pos}
+        legs = []
+        for leg in (pos.get("legs") or []):
+            if isinstance(leg, dict) and leg.get("strike") is not None:
+                legs.append({k: leg[k] for k in _LEG_FIELDS if k in leg})
+        if not legs:
+            continue          # a position without legs cannot be marked later
+        row["legs"] = legs
+        clean.append(row)
+
+    payload = {"exported_ts": int(time.time()), "open": clean}
+    try:
+        # Write-then-replace: a job reading mid-write must never see half a file.
+        tmp = target + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, target)
+    except OSError as exc:
+        print(f"[error] export_book: {exc}", file=sys.stderr)
+        return {"error": "could not write the snapshot"}
+    return {"ok": True, "count": len(clean), "path": target}
+
+
+def options_open(symbol: str, expiry: str, legs: list[dict] | None,
+                 contracts: int = 1) -> dict:
+    """Price a new options paper position off the live chain.
+
+    The browser sends only WHICH contracts it wants — right, strike, side.
+    Every price comes from here, through the same options_paper fills the
+    mark loop uses. That is deliberate: if the client priced its own entries
+    it would eventually disagree with the marks, and a book whose entry and
+    exit math disagree can show a profit that was never available.
+
+    Returns {"position": ...} or {"error": ...}. Never raises at the caller.
+    """
+    spec = [l for l in (legs or []) if isinstance(l, dict)]
+    if not spec:
+        return {"error": "a position needs at least one leg"}
+    if len(spec) > MAX_LEGS:
+        return {"error": f"too many legs (max {MAX_LEGS})"}
+    try:
+        n = int(contracts)
+    except (TypeError, ValueError):
+        return {"error": "contracts must be a whole number"}
+    if n < 1:
+        return {"error": "contracts must be at least 1"}
+
+    try:
+        sym = clean_symbol(symbol)
+    except InvalidSymbol as exc:
+        return {"error": str(exc)}
+
+    key = f"optmark:{sym.lower()}:{expiry}"
+    chain = _cached(key)
+    if chain is None:
+        try:
+            chain = _store(key, options.chain(sym, expiry))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[error] options_open {sym}: {exc}", file=sys.stderr)
+            return {"error": "chain fetch failed"}
+    if chain.get("error"):
+        return {"error": chain["error"]}
+
+    index = options_paper.chain_index(chain)
+    priced: list[dict] = []
+    for leg in spec:
+        try:
+            right = leg["right"]
+            strike = float(leg["strike"])
+        except (KeyError, TypeError, ValueError):
+            return {"error": "each leg needs a right and a strike"}
+        quote = index.get((right, strike))
+        if quote is None:
+            return {"error": f"{right} {strike} is not on the {expiry} chain"}
+        priced.append({"right": right, "strike": strike,
+                       "side": "short" if leg.get("side") == "short" else "long",
+                       "quote": quote})
+
+    try:
+        pos = options_paper.open_position(
+            symbol=sym, expiry=chain.get("expiry", expiry),
+            legs=priced, contracts=n, opened=int(time.time() * 1000))
+    except (options_paper.Unfillable, ValueError) as exc:
+        return {"error": str(exc)}
+
+    # Record the underlying at entry so the payoff chart has an anchor and the
+    # ledger can show how far the thesis had to travel.
+    pos["spot_at_entry"] = chain.get("spot")
+    pos["max_profit_usd"] = options_paper.max_profit_usd(pos)
+    pos["max_loss_usd"] = options_paper.max_loss_usd(pos)
+    pos["breakeven"] = options_paper.breakeven(pos)
+    pos["risk_reward"] = options_paper.risk_reward(pos)
+    return {"position": pos}
 
 
 def search_symbols(query: str, limit: int = 12) -> list[dict]:
@@ -600,6 +856,26 @@ def chart_overlay(kind: str, symbol: str, tf: str = "wide",
             squeeze = dict(squeeze)
             squeeze["grain"] = tf          # one meaning, and it names itself
             out["squeeze"] = squeeze
+
+        # The drawable form of the same reading: the Bollinger/Keltner lines,
+        # a compressed flag per bar for the dots, and the momentum histogram.
+        # Timestamped here rather than client-side so the renderer never has to
+        # guess which bar a value belongs to — the alignment bug this whole
+        # function exists to prevent.
+        try:
+            series = indicators.ttm_squeeze_series(highs, lows, closes)
+        except Exception:  # noqa: BLE001 — never blank the chart over an overlay
+            series = None
+        if series:
+            drawn = {"length": series["length"]}
+            for name in ("basis", "bb_upper", "bb_lower", "kc_upper", "kc_lower"):
+                drawn[name] = [[ts[i], _px(v)] for i, v in enumerate(series[name])
+                               if v is not None and i < len(ts)]
+            drawn["on"] = [ts[i] for i, flag in enumerate(series["on"])
+                           if flag and i < len(ts)]
+            drawn["mom"] = [[ts[i], round(v, 6)] for i, v in enumerate(series["mom"])
+                            if v is not None and i < len(ts)]
+            out["squeeze_series"] = drawn
 
     _cache[key] = (time.time(), out)
     return out
@@ -949,7 +1225,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/paper/scan", "/api/strategy/validate"):
+        if path not in ("/api/paper/scan", "/api/strategy/validate",
+                        "/api/options/mark", "/api/options/open",
+                        "/api/options/book/export"):
             return self._send(404, b"Not found", "text/plain")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -968,6 +1246,33 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/strategy/validate":
                 problems = rules_engine.validate(body.get("strategy"))
                 return self._json({"ok": not problems, "problems": problems})
+
+            if path == "/api/options/mark":
+                if not _options_paper_enabled():
+                    return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                       "error": "Options paper trading is a Pro feature."},
+                                      code=402)
+                positions = body.get("positions")
+                if not isinstance(positions, list):
+                    return self._json({"error": "positions must be a list"}, code=400)
+                return self._json(options_mark(positions))
+
+            if path == "/api/options/open":
+                if not _options_paper_enabled():
+                    return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                       "error": "Options paper trading is a Pro feature."},
+                                      code=402)
+                out = options_open(body.get("symbol") or "", body.get("expiry") or "",
+                                   body.get("legs"), body.get("contracts", 1))
+                return self._json(out, code=400 if out.get("error") else 200)
+
+            if path == "/api/options/book/export":
+                if not _options_paper_enabled():
+                    return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                       "error": "Options paper trading is a Pro feature."},
+                                      code=402)
+                out = export_book(body.get("positions"))
+                return self._json(out, code=400 if out.get("error") else 200)
 
             open_symbols = body.get("open") if isinstance(body.get("open"), dict) else {}
             return self._json(paper_scan(body.get("strategy") or {}, open_symbols))

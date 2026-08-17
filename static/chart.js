@@ -484,6 +484,77 @@ function _emaOverlaySVG(geom, clampY, overlay) {
   return out;
 }
 
+/* The TTM squeeze, drawn instead of summarised.
+ *
+ * The chip says "ON·2". This is the thing a trader actually reads: the
+ * Bollinger band (solid) contracting INSIDE the Keltner channel (dashed).
+ * When the solid pair sits within the dashed pair, price is coiling — that
+ * is the squeeze, and it is visible bar by bar rather than as one word.
+ *
+ * Dots along the bottom carry the same reading in binary form:
+ *   red   = compressed on that bar
+ *   green = the bar it released on (the fire)
+ *
+ * Both come from indicators.ttm_squeeze_series, which is pinned by test to
+ * agree with ttm_squeeze — so the dots can never contradict the badge.
+ */
+function _squeezeOverlaySVG(geom, clampY, overlay, rect) {
+  if (!chartInd.showSqueeze) return "";
+  const s = overlay && overlay.squeeze_series;
+  if (!s || !geom || !rect) return "";
+  const { X, ts, n } = geom;
+  if (!ts || ts.length !== n || n < 2) return "";
+
+  // Unlike the EMA renderer this does NOT clamp past the ends of the series.
+  // Clamping would paint a flat band across every warmup bar — a channel drawn
+  // where none was ever computed, which is worse than a gap.
+  const band = (pairs, stroke, dash, width, label) => {
+    if (!pairs || pairs.length < 2) return "";
+    const first = pairs[0][0], last = pairs[pairs.length - 1][0];
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      if (ts[i] < first || ts[i] > last) continue;
+      const v = _emaAt(pairs, ts[i]);
+      if (v == null) continue;
+      pts.push(`${X(i).toFixed(1)},${clampY(v).toFixed(1)}`);
+    }
+    if (pts.length < 2) return "";
+    return `<polyline points="${pts.join(" ")}" fill="none" stroke="${stroke}"
+      stroke-width="${width}" stroke-linejoin="round" stroke-linecap="round"
+      ${dash ? `stroke-dasharray="${dash}"` : ""} opacity="0.75"
+      pointer-events="none"><title>${label}</title></polyline>`;
+  };
+
+  const KC = "rgba(148,163,184,0.85)";   // slate — the outer channel
+  const BB = "rgba(56,189,248,0.95)";    // cyan  — the inner band
+  let out = "";
+  out += band(s.kc_upper, KC, "5 4", 1.1, "Keltner upper (1.5 ATR)");
+  out += band(s.kc_lower, KC, "5 4", 1.1, "Keltner lower (1.5 ATR)");
+  out += band(s.bb_upper, BB, "", 1.3, "Bollinger upper (2 sigma)");
+  out += band(s.bb_lower, BB, "", 1.3, "Bollinger lower (2 sigma)");
+
+  // Dots: exact timestamp match, because the server stamped them from the
+  // same bar array this grid is drawn from.
+  const onSet = new Set(s.on || []);
+  if (onSet.size) {
+    const y = (rect.y + rect.h - 7).toFixed(1);
+    let dots = "";
+    for (let i = 0; i < n; i++) {
+      const isOn = onSet.has(ts[i]);
+      const wasOn = i > 0 && onSet.has(ts[i - 1]);
+      if (isOn) {
+        dots += `<circle cx="${X(i).toFixed(1)}" cy="${y}" r="2.1"
+          fill="#f87171" opacity="0.95"><title>squeeze ON — coiling</title></circle>`;
+      } else if (wasOn) {
+        dots += `<circle cx="${X(i).toFixed(1)}" cy="${y}" r="2.6"
+          fill="#4ade80"><title>squeeze FIRED — released here</title></circle>`;
+      }
+    }
+    out += dots;
+  }
+  return out;
+}
+
 function _renderSqueezeChip(overlay) {
   const box = $("#ltcSqz");
   if (!box) return;
@@ -680,13 +751,23 @@ function renderLiveTradeChart(d, kind) {
   // Volume off gives its height back to the candles rather than leaving a gap.
   const VOL_H = chartInd.showVolume ? 46 : 0;
   const VOL_GAP = chartInd.showVolume ? 4 : 0;
+  // The TTM momentum histogram rides with the rest of the squeeze indicator:
+  // bands, dots and histogram are one reading, so one toggle governs them.
+  // Only claims height when there is actually a series to draw — an empty pane
+  // stealing 44px from the candles would be a worse chart, not a fuller one.
+  const _momPairs = (chartInd.showSqueeze && liveOverlay && liveOverlay.squeeze_series)
+    ? liveOverlay.squeeze_series.mom : null;
+  const hasMom = !!(_momPairs && _momPairs.length > 1);
+  const MOM_H = hasMom ? 44 : 0;
+  const MOM_GAP = hasMom ? 4 : 0;
   const priceRect = {
     x: padL, y: padT,
     w: W - padL - AXIS_R,
-    h: H - padT - AXIS_B - VOL_H - VOL_GAP,
+    h: H - padT - AXIS_B - VOL_H - VOL_GAP - MOM_H - MOM_GAP,
   };
   const volRect = { x: padL, y: priceRect.y + priceRect.h + VOL_GAP, w: priceRect.w, h: VOL_H };
-  const timeAxisTop = volRect.y + volRect.h;
+  const momRect = { x: padL, y: volRect.y + volRect.h + MOM_GAP, w: priceRect.w, h: MOM_H };
+  const timeAxisTop = momRect.y + momRect.h;
 
   const c = candlesInRect(ohlc, priceRect, scaleN,
     priceFrom != null ? fullOhlc.slice(priceFrom, priceTo) : null);
@@ -694,7 +775,7 @@ function renderLiveTradeChart(d, kind) {
   const last = ohlc[ohlc.length - 1][3];
   liveLast.geom = {
     W, H, pad: padL, X: c.X, Y: c.Y, n: ohlc.length, ohlc, ts: tsArr,
-    priceRect, volRect, timeAxisTop, axisR: AXIS_R,
+    priceRect, volRect, momRect, timeAxisTop, axisR: AXIS_R,
     priceMin: c.min, priceMax: c.max,
     // Shared slot mapping — pan, zoom, snap and hit-test all invert through it.
     slot: c.slot,
@@ -723,6 +804,7 @@ function renderLiveTradeChart(d, kind) {
   base += _sessionDividersSVG(priceRect, ohlc, tsArr, timeAxisTop, c.slot);
   base += c.markup;
   if (chartInd.showVolume) base += _volumeSVG(volRect, ohlc, volArr, c.slot, volMax);
+  if (hasMom) base += _momentumSVG(momRect, _momPairs, tsArr, c.slot);
   base += _timeAxisSVG(priceRect, ohlc, tsArr, liveTf, kind, timeAxisTop, c.slot, axisTs);
 
   let overlay = "";
@@ -738,6 +820,9 @@ function renderLiveTradeChart(d, kind) {
     // `tf` for the tooltip, not just the series map.
     overlay += _emaOverlaySVG(liveLast.geom, clampY, liveOverlay);
   }
+  // Drawn after the EMAs so the coil is legible on top of them, and before the
+  // user's own lines so nothing they placed gets buried.
+  overlay += _squeezeOverlaySVG(liveLast.geom, clampY, liveOverlay, priceRect);
   overlay += _userOverlaySVG(d.symbol, liveLast.geom, clampY);
 
   if (trendAnchor) {
@@ -1009,6 +1094,69 @@ function _volumeSVG(rect, ohlc, volume, slotGeom, maxOverride) {
   }
   out += `<text x="${(rect.x + 4).toFixed(1)}" y="${(rect.y + 11).toFixed(1)}"
     fill="var(--text-faint)" font-family="var(--mono)" font-size="9" letter-spacing="0.14em">VOL</text>`;
+  return out;
+}
+
+/* TTM momentum histogram — the half of the squeeze that says which WAY.
+ *
+ * The dots tell you energy is building; they are direction-agnostic on
+ * purpose. This pane is what you read alongside them, and it carries the
+ * standard four colours, because the slope matters as much as the sign:
+ *
+ *   above zero, rising   bright aqua   pressure building upward
+ *   above zero, falling   dim blue     still positive but losing steam
+ *   below zero, falling   bright red   pressure building downward
+ *   below zero, rising    dim maroon   still negative but recovering
+ *
+ * A trader watching a coil waits for the first bar where the histogram
+ * changes colour — that fade is usually earlier than the release itself.
+ *
+ * Values come from indicators.ttm_squeeze_series, stamped server-side with the
+ * bar they belong to, so they are matched by exact timestamp rather than
+ * interpolated. A histogram bar drawn between two bars would be a lie about
+ * when the momentum turned.
+ */
+function _momentumSVG(rect, pairs, tsArr, slotGeom) {
+  if (!rect || !rect.h || !pairs || pairs.length < 2 || !tsArr) return "";
+  const byTs = new Map(pairs.map((p) => [p[0], p[1]]));
+  const n = tsArr.length;
+  const sg = slotGeom || chartSlot(rect, n);
+
+  // Scale to the bars ON SCREEN, not the whole tape. The series spans far more
+  // history than the viewport, so scaling to its global peak lets one old spike
+  // flatten every visible bar into a 1px smear — the pane would be present and
+  // unreadable, which is the worst of both.
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    const v = byTs.get(tsArr[i]);
+    if (v != null) peak = Math.max(peak, Math.abs(v));
+  }
+  if (!peak) return "";
+
+  const zeroY = rect.y + rect.h / 2;
+  const bw = Math.max(1, Math.min(sg.w * 0.7, 9));
+  // Zero line first, so the bars sit on top of it.
+  let out = `<line x1="${rect.x}" y1="${zeroY.toFixed(1)}" x2="${rect.x + rect.w}" y2="${zeroY.toFixed(1)}"
+    stroke="rgba(120,150,190,0.22)" stroke-width="1"/>`;
+
+  let prev = null;
+  for (let i = 0; i < n; i++) {
+    const v = byTs.get(tsArr[i]);
+    if (v == null) { prev = null; continue; }   // warmup: a gap, not a zero bar
+    const rising = prev == null ? v >= 0 : v > prev;
+    const col = v >= 0
+      ? (rising ? "rgba(45,212,191,0.95)" : "rgba(59,130,246,0.65)")
+      : (rising ? "rgba(190,60,80,0.60)" : "rgba(248,113,113,0.95)");
+    const h = Math.max(1, (Math.abs(v) / peak) * (rect.h / 2 - 2));
+    const y = v >= 0 ? zeroY - h : zeroY;
+    out += `<rect x="${(sg.X(i) - bw / 2).toFixed(1)}" y="${y.toFixed(1)}"
+      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+    prev = v;
+  }
+
+  out += `<text x="${(rect.x + 4).toFixed(1)}" y="${(rect.y + 11).toFixed(1)}"
+    fill="var(--text-faint)" font-family="var(--mono)" font-size="9"
+    letter-spacing="0.14em">TTM MOM</text>`;
   return out;
 }
 

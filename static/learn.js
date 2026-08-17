@@ -91,7 +91,18 @@ function learnReset() {
  * That constraint is the whole point: a tag computed with a peek at later bars
  * would quietly launder hindsight into the score. */
 
-function _emaAt(closes, period, idx) {
+/* Renamed from _emaAt (2026-08-17). chart.js:448 declares its OWN _emaAt with a
+ * completely different signature — (pairs, ts), for interpolating an overlay
+ * value at a timestamp. These files are classic scripts sharing one global
+ * scope and learn.js loads AFTER chart.js, so this declaration hoisted over the
+ * chart's and every EMA overlay call landed here with the wrong arguments and
+ * returned 0. The result: every EMA line on the live chart drew flat along the
+ * bottom of the price pane, and nothing errored.
+ *
+ * Same family as the `const esc` collision in docs/VERIFICATION_2026-07-31.md —
+ * see the prefixing note at the bottom of this file. Anything declared here
+ * must be uniquely named. */
+function _learnEmaAt(closes, period, idx) {
   if (idx < period - 1) return null;
   const k = 2 / (period + 1);
   let ema = 0;
@@ -168,7 +179,7 @@ function learnTagsAt(data, idx, sessionFrom) {
   const periods = (typeof chartInd === "object" && Array.isArray(chartInd.ema) && chartInd.ema.length >= 3)
     ? [...chartInd.ema].slice(0, 3).sort((a, b) => a - b)
     : [14, 21, 57];
-  const [fast, mid, slow] = periods.map((p) => _emaAt(closes, p, idx));
+  const [fast, mid, slow] = periods.map((p) => _learnEmaAt(closes, p, idx));
   if (fast != null && mid != null && slow != null) {
     if (fast > mid && mid > slow) tags.push("stack_bull");
     else if (fast < mid && mid < slow) tags.push("stack_bear");

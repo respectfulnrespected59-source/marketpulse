@@ -60,6 +60,10 @@ BASE = [
     "static/home.js",
     "static/wizards.js",
     "static/paper.js",
+    # Ships in BOTH editions even though the options engine is Pro: index.html
+    # loads it unconditionally, so a Pro-only placement would 404 the free
+    # build. The feature gate is server-side — /api/options/* returns 402.
+    "static/options-paper.js",
     "static/quickfill.js",
     "static/vendor/big.min.js",
     # PWA shell — index.html links the manifest and registers the worker.
@@ -87,10 +91,12 @@ FREE_ONLY = [
 PRO_ONLY = [
     "EULA.md",            # commercial terms for the paid edition
     "options.py",
+    "options_paper.py",   # position model + live mark for the options paper book
     "backtest.py",
     "dca.py",
     # tests that exercise the Pro modules (they would fail to import in FREE)
     "tests/test_options.py",
+    "tests/test_options_paper.py",
     "tests/test_dca.py",
     # --- optional advanced: paper-first propose-and-approve agent (NO secrets/state) ---
     # Product call: the trading agent ships PRO-only. Move these into BASE if

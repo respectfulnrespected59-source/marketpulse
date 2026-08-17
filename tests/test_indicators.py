@@ -191,3 +191,118 @@ def test_ttm_squeeze_expanded_market_is_off():
     lows = [c - 0.01 for c in closes]
     out = ind.ttm_squeeze(highs, lows, closes)
     assert out["state"] in ("off", "fired")
+
+
+# ------------------------------------------------- TTM squeeze, per bar
+#
+# ttm_squeeze() answers "what is it doing right now" in one dict. Drawing it
+# needs the same reading at EVERY bar: the Bollinger/Keltner lines you watch
+# pinch together, a dot per bar saying whether it was compressed, and the
+# momentum histogram underneath.
+#
+# The load-bearing test in here is the agreement one. The chart and the chip
+# are two renderings of one truth, and if the series ever disagreed with
+# ttm_squeeze() the screen would argue with itself — dots showing a coil while
+# the badge says off. So the series is checked against the existing function
+# as the authority, not against my own re-derivation of the same formula.
+
+def _coiled_bars(n=60):
+    """Flat range = Bollinger bands sit inside the Keltner channel."""
+    return [105.0] * n, [95.0] * n, [100.0] * n
+
+
+def _expanded_bars(n=60):
+    closes = [float(i) for i in range(n)]
+    return [c + 0.01 for c in closes], [c - 0.01 for c in closes], closes
+
+
+class TestTtmSqueezeSeries:
+    def test_too_little_history_is_none(self):
+        assert ind.ttm_squeeze_series([1.0] * 5, [1.0] * 5, [1.0] * 5) is None
+
+    def test_every_series_is_bar_aligned(self):
+        h, l, c = _coiled_bars()
+        out = ind.ttm_squeeze_series(h, l, c)
+        for key in ("bb_upper", "bb_lower", "kc_upper", "kc_lower", "basis", "on", "mom"):
+            assert len(out[key]) == len(c), key
+
+    def test_warmup_bars_are_none_not_zero(self):
+        # A zero band would draw a line across the chart at price 0.
+        h, l, c = _coiled_bars()
+        out = ind.ttm_squeeze_series(h, l, c)
+        assert out["bb_upper"][0] is None
+        assert out["basis"][0] is None
+        assert out["on"][0] is None
+
+    def test_the_last_reading_agrees_with_ttm_squeeze(self):
+        # THE contract: chart and chip must never disagree.
+        for bars in (_coiled_bars(), _expanded_bars()):
+            h, l, c = bars
+            scalar = ind.ttm_squeeze(h, l, c)
+            series = ind.ttm_squeeze_series(h, l, c)
+            assert series["on"][-1] is (scalar["state"] == "on")
+
+    def test_the_bar_count_agrees_with_ttm_squeeze(self):
+        # Consecutive compressed dots must equal the "ON·N" the badge shows.
+        h, l, c = _coiled_bars()
+        scalar = ind.ttm_squeeze(h, l, c)
+        series = ind.ttm_squeeze_series(h, l, c)
+        run = 0
+        for flag in reversed(series["on"]):
+            if flag:
+                run += 1
+            else:
+                break
+        assert run == scalar["bars"]
+
+    def test_a_coiled_market_marks_the_dots_on(self):
+        h, l, c = _coiled_bars()
+        assert ind.ttm_squeeze_series(h, l, c)["on"][-1] is True
+
+    def test_an_expanded_market_marks_the_dots_off(self):
+        h, l, c = _expanded_bars()
+        assert ind.ttm_squeeze_series(h, l, c)["on"][-1] is False
+
+    def test_when_compressed_the_bollinger_band_sits_inside_the_keltner(self):
+        # This IS the squeeze definition — the visual the trader is watching.
+        h, l, c = _coiled_bars()
+        out = ind.ttm_squeeze_series(h, l, c)
+        i = len(c) - 1
+        assert out["bb_upper"][i] < out["kc_upper"][i]
+        assert out["bb_lower"][i] > out["kc_lower"][i]
+
+    def test_bands_are_ordered_wherever_they_are_drawn(self):
+        h, l, c = _expanded_bars()
+        out = ind.ttm_squeeze_series(h, l, c)
+        for i in range(len(c)):
+            if out["bb_upper"][i] is None:
+                continue
+            assert out["bb_upper"][i] >= out["basis"][i] >= out["bb_lower"][i]
+            assert out["kc_upper"][i] >= out["basis"][i] >= out["kc_lower"][i]
+
+    def test_the_histogram_has_values_on_recent_bars(self):
+        h, l, c = _expanded_bars()
+        mom = ind.ttm_squeeze_series(h, l, c)["mom"]
+        assert mom[-1] is not None
+        assert any(v is not None for v in mom)
+
+    def test_a_rising_market_ends_with_positive_momentum(self):
+        # Sign drives the histogram's colour, so it has to be right.
+        h, l, c = _expanded_bars()
+        assert ind.ttm_squeeze_series(h, l, c)["mom"][-1] > 0
+
+    def test_a_falling_market_ends_with_negative_momentum(self):
+        closes = [float(60 - i) for i in range(60)]
+        highs = [x + 0.01 for x in closes]
+        lows = [x - 0.01 for x in closes]
+        assert ind.ttm_squeeze_series(highs, lows, closes)["mom"][-1] < 0
+
+    def test_dead_flat_data_does_not_divide_by_zero(self):
+        n = 60
+        out = ind.ttm_squeeze_series([100.0] * n, [100.0] * n, [100.0] * n)
+        assert out is not None
+        assert out["bb_upper"][-1] is not None
+
+    def test_it_reports_the_length_it_used(self):
+        h, l, c = _coiled_bars()
+        assert ind.ttm_squeeze_series(h, l, c)["length"] == 20

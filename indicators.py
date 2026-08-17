@@ -333,3 +333,70 @@ def ttm_squeeze(highs, lows, closes, length: int = 20,
         mom, accel = "bear", ("falling" if val < prev else "fading")
     state = "on" if on_now else ("fired" if on_prev else "off")
     return {"state": state, "bars": bars_on, "mom": mom, "accel": accel}
+
+
+def ttm_squeeze_series(highs, lows, closes, length: int = 20,
+                       bb_mult: float = 2.0, kc_mult: float = 1.5) -> dict | None:
+    """The same squeeze, measured at EVERY bar, for drawing it.
+
+    ttm_squeeze() collapses the indicator to one reading. That is all a badge
+    needs, but it is not what a trader looks at: the signal you actually watch
+    is the Bollinger band contracting INSIDE the Keltner channel, bar after
+    bar, until it releases. That needs the lines and a per-bar flag.
+
+    Returns arrays aligned 1:1 with the input bars, `None` on warmup bars so
+    the caller draws a gap rather than a line through zero:
+
+        basis / bb_upper / bb_lower / kc_upper / kc_lower : the lines
+        on   : True while compressed  -> the dots on the zero line
+        mom  : momentum histogram     -> the bars under the chart
+
+    The compression test is character-for-character the one in
+    _squeeze_on_at, so the dots can never disagree with the badge. True ranges
+    are computed once here instead of per-bar, which is the only difference
+    and a pure speed one.
+    """
+    n = len(closes)
+    if n < 2 * length + 2:
+        return None
+
+    trs = _true_ranges(highs, lows, closes)
+    basis: list = [None] * n
+    bb_u: list = [None] * n
+    bb_l: list = [None] * n
+    kc_u: list = [None] * n
+    kc_l: list = [None] * n
+    on: list = [None] * n
+    raw: list = [None] * n
+
+    # Starts at `length`, not `length - 1`, to match ttm_squeeze's `k > length`
+    # guard exactly. That guard skips the earliest computable bar, so counting
+    # from one bar earlier here would draw 41 dots under a badge reading
+    # "ON·40". Skipping it is also the safer read: the first bar's true range
+    # has no previous close to work from.
+    for i in range(length, n):
+        win = closes[i - length + 1:i + 1]
+        mid = sum(win) / length
+        dev = bb_mult * _stdev(win)
+        rng = sum(trs[i - length + 1:i + 1]) / length
+        basis[i] = mid
+        bb_u[i], bb_l[i] = mid + dev, mid - dev
+        kc_u[i], kc_l[i] = mid + kc_mult * rng, mid - kc_mult * rng
+        # Identical to _squeeze_on_at: bands strictly inside the channel.
+        on[i] = (mid - dev) > (mid - kc_mult * rng) and (mid + dev) < (mid + kc_mult * rng)
+        hh = max(highs[i - length + 1:i + 1])
+        ll = min(lows[i - length + 1:i + 1])
+        raw[i] = closes[i] - ((hh + ll) / 2 + mid) / 2
+
+    # The histogram is a linear-regression fit over the trailing raw values,
+    # which is why it needs a second warmup window before it can be drawn.
+    mom: list = [None] * n
+    for i in range(2 * length - 1, n):
+        window = raw[i - length + 1:i + 1]
+        if any(v is None for v in window):
+            continue
+        mom[i] = _linreg_value(window)
+
+    return {"length": length, "bb_mult": bb_mult, "kc_mult": kc_mult,
+            "basis": basis, "bb_upper": bb_u, "bb_lower": bb_l,
+            "kc_upper": kc_u, "kc_lower": kc_l, "on": on, "mom": mom}
