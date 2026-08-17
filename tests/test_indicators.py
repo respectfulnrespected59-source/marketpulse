@@ -216,6 +216,56 @@ def _expanded_bars(n=60):
     return [c + 0.01 for c in closes], [c - 0.01 for c in closes], closes
 
 
+class TestSqueezeProximity:
+    """How FAR is the squeeze from forming — not just whether it has.
+
+    The chip can say on / off / fired, which means it only ever reports a
+    squeeze that already exists. A trader watching the bands pinch can see it
+    coming a few bars out; the indicator could not say so. These gaps are that
+    reading: the distance each Bollinger band still has to travel before it
+    closes inside the Keltner channel.
+
+    Sign convention is chosen so both gaps mean the same thing:
+        positive = still outside, squeeze has NOT formed
+        negative = inside, compressed
+    """
+
+    def test_an_expanded_market_reports_positive_gaps(self):
+        h, l, c = _expanded_bars()
+        out = ind.ttm_squeeze(h, l, c)
+        assert out["gap_upper"] > 0 or out["gap_lower"] > 0
+
+    def test_a_coiled_market_reports_negative_gaps(self):
+        h, l, c = _coiled_bars()
+        out = ind.ttm_squeeze(h, l, c)
+        assert out["gap_upper"] < 0
+        assert out["gap_lower"] < 0
+
+    def test_the_gaps_agree_with_the_state_it_reports(self):
+        # The proximity numbers and the on/off verdict are two views of one
+        # measurement; if they ever disagree the chip contradicts itself.
+        for bars in (_coiled_bars(), _expanded_bars()):
+            out = ind.ttm_squeeze(*bars)
+            compressed = out["gap_upper"] < 0 and out["gap_lower"] < 0
+            assert compressed is (out["state"] == "on")
+
+    def test_it_reports_the_worst_of_the_two_gaps(self):
+        # A squeeze needs BOTH bands inside, so the binding constraint is
+        # whichever side is further out.
+        out = ind.ttm_squeeze(*_expanded_bars())
+        assert out["gap"] == max(out["gap_upper"], out["gap_lower"])
+
+    def test_it_reports_the_band_width(self):
+        out = ind.ttm_squeeze(*_expanded_bars())
+        assert out["width"] > 0
+
+    def test_a_flat_market_does_not_divide_by_zero(self):
+        n = 60
+        out = ind.ttm_squeeze([100.0] * n, [100.0] * n, [100.0] * n)
+        assert out is not None
+        assert "gap" in out
+
+
 class TestTtmSqueezeSeries:
     def test_too_little_history_is_none(self):
         assert ind.ttm_squeeze_series([1.0] * 5, [1.0] * 5, [1.0] * 5) is None

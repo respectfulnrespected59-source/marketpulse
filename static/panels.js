@@ -125,6 +125,31 @@ function renderNudge(n) {
   </div>`;
 }
 
+/* How far price must move before the trade is merely back to zero.
+ *
+ * A spread can be right about direction and still lose: a round trip crosses
+ * the bid-ask four times and pays commission on every leg both ways. On a
+ * cheap contract that friction can be bigger than the move being bet on — the
+ * $300-pot sizer recommends the cheapest probes, and those have the WORST
+ * cost-to-move ratio of anything on the board.
+ *
+ * Shown next to max profit and breakeven because it belongs in the same
+ * glance: a setup whose required move exceeds what the name normally does in
+ * the holding period is dead on arrival, however good the signal reads.
+ */
+function _costLine(cost) {
+  if (!cost || cost.pct_needed == null) return "";
+  const pct = Number(cost.pct_needed);
+  const heavy = pct >= 0.75;   // more than a typical intraday swing
+  return `<div class="strat-math ${heavy ? "cost-heavy" : ""}">
+      <span>Costs <b>$${Number(cost.total_usd).toFixed(2)}</b>
+        <i>(spread $${Number(cost.crossing_usd).toFixed(2)} + fees $${Number(cost.commission_usd).toFixed(2)})</i></span>
+      <span>Net delta <b>${Number(cost.net_delta).toFixed(2)}</b></span>
+      <span>Needs a move of <b>${pct.toFixed(2)}%</b>
+        <i>(${Number(cost.points_needed).toFixed(2)} pts) just to break even</i></span>
+    </div>`;
+}
+
 function renderStrategy(d) {
   const box = $("#optStrategy");
   const cards = [];
@@ -158,6 +183,7 @@ function renderStrategy(d) {
       <div class="strat-title"><b>Signal ${esc(d.lean.label)} → ${esc(s.type.toUpperCase())}</b></div>
       <div class="strat-legs">
         <span class="leg long">BUY ${fmtPrice(s.long.strike)} <i>${(+s.long.delta).toFixed(2)}Δ</i></span>
+        <!-- cost line renders below via _costLine(d.cost) -->
         <span class="leg short">SELL ${fmtPrice(s.short.strike)} <i>${(+s.short.delta).toFixed(2)}Δ</i></span>
       </div>
       <div class="strat-math">
@@ -167,6 +193,7 @@ function renderStrategy(d) {
         <span>Breakeven <b>${fmtPrice(s.breakeven)}</b></span>
         <span>R:R <b>${s.risk_reward ?? "—"}</b></span>
       </div>
+      ${_costLine(d.cost)}
       <div class="strat-note">Defined risk — worst case is the debit. Check earnings before this expiry. Educational, not advice.</div>
     </div>`);
   }

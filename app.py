@@ -1432,6 +1432,11 @@ class Handler(BaseHTTPRequestHandler):
                     ch["nudge"] = options.direction_nudge(ch)
                     # $-pot Probe→Read→Escalate sizer scaled to the stock's price.
                     ch["probe_plan"] = options.probe_plan(ch, pot)
+                    # How far price must travel just to clear the bid-ask and
+                    # commission. A setup whose required move exceeds what the
+                    # name typically does in the holding period is dead on
+                    # arrival, however good the signal looks.
+                    ch["cost"] = options.cost_to_breakeven(ch, ch.get("spread"))
                 return self._json(_store(key, ch))
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)

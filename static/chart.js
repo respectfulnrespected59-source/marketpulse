@@ -571,11 +571,32 @@ function _renderSqueezeChip(overlay) {
     ? (sq.accel === "rising" ? "▲" : "△")
     : (sq.accel === "falling" ? "▼" : "▽");
   const grain = sq.grain || (overlay && overlay.tf) || "";
-  const txt = state === "on" ? `ON·${sq.bars}` : state === "fired" ? "FIRED" : "off";
+  // Never the word "off" here. The indicator's own checkbox is also labelled
+  // on/off, so a chip reading "TTM off" next to a ticked box looks like a
+  // contradiction — one means "not drawing", the other means "not compressed".
+  // Say what the STATE is instead: coiled, fired, or expanded.
+  const txt = state === "on" ? `COILED·${Number(sq.bars) || 0}`
+    : state === "fired" ? "FIRED" : "no coil";
+  // Distance still to travel before the bands close inside the channel. The
+  // state alone can only describe a squeeze that already exists — this is what
+  // lets you see one coming instead of being told after the fact. Shown only
+  // when it is genuinely close, or it is noise on every quiet chart.
+  let near = "";
+  if (state === "off" && sq.gap != null && sq.width) {
+    const pct = (Number(sq.gap) / Number(sq.width)) * 100;
+    if (isFinite(pct) && pct <= 40) {
+      near = ` <span class="ltc-sqz-near">· ${Number(sq.gap).toFixed(2)} to coil</span>`;
+    }
+  }
   box.hidden = false;
   box.className = `ltc-sqz ${state} ${mom || ""}`;
-  box.innerHTML = `<b>TTM</b> ${grain} ${txt} <span class="ltc-sqz-arr">${arrow}</span>`;
-  box.title = `TTM squeeze ${state} on ${grain} bars · momentum ${mom || "—"} ${sq.accel || ""}`;
+  box.innerHTML = `<b>TTM</b> ${grain} ${txt} <span class="ltc-sqz-arr">${arrow}</span>${near}`;
+  box.title = `TTM squeeze ${state} on ${grain} bars · momentum ${mom || "—"} ${sq.accel || ""}`
+    + (sq.gap != null
+       ? `\nbands are ${Number(sq.gap).toFixed(3)} from closing inside the Keltner channel`
+         + ` (upper ${Number(sq.gap_upper).toFixed(3)}, lower ${Number(sq.gap_lower).toFixed(3)})`
+         + `\nnegative = compressed`
+       : "");
 }
 
 function _renderEmaLegend(overlay) {

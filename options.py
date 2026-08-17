@@ -335,6 +335,80 @@ def decision_read(ch: dict, sig: dict) -> dict | None:
     }
 
 
+COMMISSION_PER_CONTRACT = 0.65
+
+
+def cost_to_breakeven(ch: dict, spread: dict | None) -> dict | None:
+    """How far the underlying must move before the trade is merely at zero.
+
+    A spread can be right about direction and still lose, because a round trip
+    crosses the bid-ask FOUR times — pay the ask and receive the bid on the way
+    in, then give it all back on the way out — and commission is charged on
+    every leg both ways. On a cheap contract that friction can be larger than
+    the move being bet on.
+
+    Until now the app said "check earnings & use defined risk" and never told
+    anyone the one number that decides whether a setup is worth taking at all.
+
+    Uses the chain's REAL bid/ask rather than a modelled spread, because the
+    gap the mid price hides IS the cost. Returns every input alongside the
+    answer so the figure can be argued with instead of trusted.
+
+    None when it cannot be computed honestly — a missing strike or a zero net
+    delta, which would divide by zero and print an infinite required move.
+    """
+    if not spread or not isinstance(ch, dict):
+        return None
+    direction = spread.get("direction")
+    legs = ch.get("puts") if direction == "put" else ch.get("calls")
+    spot = ch.get("spot") or 0
+    if not legs or not spot:
+        return None
+
+    def find(strike):
+        for c in legs:
+            if c.get("strike") is not None and abs(c["strike"] - strike) < 1e-6:
+                return c
+        return None
+
+    try:
+        long_leg = find(float((spread.get("long") or {}).get("strike")))
+        short_leg = find(float((spread.get("short") or {}).get("strike")))
+    except (TypeError, ValueError):
+        return None
+    if not long_leg or not short_leg:
+        return None
+
+    def spread_of(c):
+        bid, ask = c.get("bid"), c.get("ask")
+        if bid is None or ask is None or ask <= 0:
+            return None
+        return max(ask - bid, 0.0)
+
+    ls, ss = spread_of(long_leg), spread_of(short_leg)
+    if ls is None or ss is None:
+        return None
+
+    crossing = (ls + ss) * 100                       # one round trip, both legs
+    commission = COMMISSION_PER_CONTRACT * 2 * 2     # 2 legs, in and out
+    total = crossing + commission
+
+    net_delta = abs(long_leg.get("delta") or 0) - abs(short_leg.get("delta") or 0)
+    if net_delta <= 0.01:
+        return None                                  # never divide by ~zero
+
+    points = total / 100 / net_delta
+    return {
+        "crossing_usd": round(crossing, 2),
+        "commission_usd": round(commission, 2),
+        "total_usd": round(total, 2),
+        "net_delta": round(net_delta, 4),
+        "points_needed": round(points, 4),
+        "pct_needed": round(points / spot * 100, 3),
+        "direction": direction,
+    }
+
+
 def probe_plan(ch: dict, pot: float = 300, probe_frac: float = 0.20,
                min_delta: float = 0.25) -> dict | None:
     """The $X-pot Probe→Read→Escalate sizer, scaled to the stock's ACTUAL price.

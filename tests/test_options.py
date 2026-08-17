@@ -285,3 +285,100 @@ def test_decision_read_no_edge_recommends_standing_aside():
     sig = {"label": "NEUTRAL", "rsi": 50, "htf": 0, "reasons": ["RSI 50"]}
     read = opt.decision_read(ch, sig)
     assert "aside" in read["bottom_line"].lower()
+
+
+# ------------------------------------------------- cost to break even
+#
+# A spread can be directionally correct and still lose, because the bid-ask is
+# crossed FOUR times on a round trip and commission is charged on every leg both
+# ways. On a cheap contract that friction can exceed the move the trade is
+# betting on. The app used to say "check earnings & use defined risk" and never
+# told anyone how far price had to travel just to get back to zero.
+#
+# Computed from the chain's REAL quotes rather than a modelled spread, because
+# the whole point is the gap the mid price hides.
+
+def _leg(strike, bid, ask, delta):
+    return {"strike": strike, "bid": bid, "ask": ask, "delta": delta}
+
+
+def a_chain_for_cost():
+    """The live TSLA numbers this was derived from: 340P 4.20/4.30 (-0.42),
+    332.5P 1.76/1.83 (-0.22), spot 340."""
+    return {
+        "symbol": "TSLA", "spot": 340.0,
+        "puts": [_leg(340.0, 4.20, 4.30, -0.4216),
+                 _leg(332.5, 1.76, 1.83, -0.2242)],
+        "calls": [],
+    }
+
+
+def a_spread():
+    return {"type": "put debit spread", "direction": "put",
+            "long": {"strike": 340.0, "delta": -0.4216},
+            "short": {"strike": 332.5, "delta": -0.2242}}
+
+
+class TestCostToBreakeven:
+    def test_it_charges_the_spread_on_both_legs(self):
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        # (4.30-4.20) + (1.83-1.76) = 0.17 per share = $17 per contract
+        assert out["crossing_usd"] == pytest.approx(17.0, abs=0.01)
+
+    def test_it_charges_commission_on_every_leg_both_ways(self):
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        assert out["commission_usd"] == pytest.approx(2.60, abs=0.01)
+
+    def test_the_total_is_the_crossing_plus_commission(self):
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        assert out["total_usd"] == pytest.approx(19.60, abs=0.01)
+
+    def test_net_delta_is_the_long_leg_minus_the_short(self):
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        assert out["net_delta"] == pytest.approx(0.1974, abs=0.001)
+
+    def test_it_reports_how_far_price_must_move(self):
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        # 19.60 / 100 / 0.1974 = 0.993 points on a 340 spot = 0.29%
+        assert out["points_needed"] == pytest.approx(0.993, abs=0.02)
+        assert out["pct_needed"] == pytest.approx(0.292, abs=0.01)
+
+    def test_a_cheap_contract_is_worse_despite_costing_less(self):
+        # The scan sweep recommends cheap probes as "affordable". On a $0.30
+        # option the flat commission dominates, so the required move is far
+        # LARGER than on an expensive one — the opposite of what the pot
+        # sizer implies.
+        cheap = {"symbol": "SOFI", "spot": 18.0,
+                 "puts": [_leg(18.0, 0.28, 0.32, -0.42),
+                          _leg(17.5, 0.10, 0.13, -0.22)], "calls": []}
+        spread = {"direction": "put",
+                  "long": {"strike": 18.0, "delta": -0.42},
+                  "short": {"strike": 17.5, "delta": -0.22}}
+        rich = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        poor = opt.cost_to_breakeven(cheap, spread)
+        assert poor["pct_needed"] > rich["pct_needed"]
+
+    def test_a_missing_strike_returns_none_rather_than_guessing(self):
+        ch = a_chain_for_cost()
+        ch["puts"] = [ch["puts"][0]]
+        assert opt.cost_to_breakeven(ch, a_spread()) is None
+
+    def test_no_spread_returns_none(self):
+        assert opt.cost_to_breakeven(a_chain_for_cost(), None) is None
+
+    def test_a_zero_net_delta_is_refused(self):
+        # Would divide by zero and print an infinite required move.
+        ch = a_chain_for_cost()
+        ch["puts"] = [_leg(340.0, 4.20, 4.30, -0.3), _leg(332.5, 1.76, 1.83, -0.3)]
+        sp = {"direction": "put",
+              "long": {"strike": 340.0, "delta": -0.3},
+              "short": {"strike": 332.5, "delta": -0.3}}
+        assert opt.cost_to_breakeven(ch, sp) is None
+
+    def test_it_shows_its_working(self):
+        # "SHOW the proof with the logic to back it" — every input that made
+        # the number has to come back with it.
+        out = opt.cost_to_breakeven(a_chain_for_cost(), a_spread())
+        for key in ("crossing_usd", "commission_usd", "total_usd",
+                    "net_delta", "points_needed", "pct_needed"):
+            assert key in out

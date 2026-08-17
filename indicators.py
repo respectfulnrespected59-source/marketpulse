@@ -332,7 +332,26 @@ def ttm_squeeze(highs, lows, closes, length: int = 20,
     else:
         mom, accel = "bear", ("falling" if val < prev else "fading")
     state = "on" if on_now else ("fired" if on_prev else "off")
-    return {"state": state, "bars": bars_on, "mom": mom, "accel": accel}
+
+    # How FAR the squeeze is from forming, not merely whether it has.
+    # `state` alone can only describe a squeeze that already exists, so someone
+    # watching the bands pinch sees it coming several bars before the indicator
+    # will say so. These gaps close that blind spot.
+    #   positive = band still outside the channel, squeeze NOT formed
+    #   negative = inside, compressed
+    win = closes[n - length:n]
+    basis = sum(win) / length
+    dev = bb_mult * _stdev(win)
+    rng = sum(_true_ranges(highs, lows, closes)[-length:]) / length
+    gap_upper = (basis + dev) - (basis + kc_mult * rng)
+    gap_lower = (basis - kc_mult * rng) - (basis - dev)
+
+    return {"state": state, "bars": bars_on, "mom": mom, "accel": accel,
+            "gap_upper": round(gap_upper, 4), "gap_lower": round(gap_lower, 4),
+            # A squeeze needs BOTH bands inside, so the binding constraint is
+            # whichever side is still furthest out.
+            "gap": round(max(gap_upper, gap_lower), 4),
+            "width": round(2 * dev, 4)}
 
 
 def ttm_squeeze_series(highs, lows, closes, length: int = 20,
