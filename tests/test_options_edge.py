@@ -311,6 +311,116 @@ class TestManagedExit:
         assert out["bars_held"] >= 1
 
 
+class TestMomentumExit:
+    """Exit on the TURN, not on a bar count.
+
+    The 29 TSLA entries measured on 2026-08-17 had $349 of profit available at
+    their peaks and lost $984 held to the end — but a fixed bar-6 exit barely
+    helped, because the peak landed anywhere from bar 1 to bar 12. There is no
+    right number of bars. The peak is not at a time, it is at a turn.
+
+    So this exits when momentum rolls over against the position. Momentum turns
+    before price does — that is the whole reason it is worth watching — and a
+    confirmed turn is a condition anyone can follow live, unlike "the top".
+    """
+
+    def _mom_falling_then_rising(self):
+        # bearish push that exhausts and reverses
+        return [-0.2, -0.5, -0.8, -0.9, -0.7, -0.4, -0.1, 0.3]
+
+    def test_a_bearish_position_IN_PROFIT_exits_when_momentum_turns_up(self):
+        # Only fires while the trade is ahead. Measured 2026-08-17: a momentum
+        # exit that ignored P&L closed 28 of 29 trades at a loss, because
+        # bailing on a wobble while underwater is a stop-loss in disguise.
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[99.0, 98.0, 97.0, 96.5, 97.0, 98.0, 99.0, 100.0],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=self._mom_falling_then_rising(),
+                              mom_turn_bars=2, protect_at=0.25)
+        assert out["exit_reason"] in ("protect", "momentum")
+        # must leave while still near the low, not after the round trip
+        assert out["exit_index"] <= 5
+
+    def test_a_LOSING_position_does_not_exit_on_a_momentum_turn(self):
+        # This is the whole correction. Underwater, the stop is the right tool;
+        # a reversal signal has no win to protect.
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[101.0, 102.0, 103.0, 104.0, 105.0],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=[-0.9, -0.5, 0.1, 0.6, 1.2],
+                              mom_turn_bars=2, protect_at=0.25)
+        assert out["exit_reason"] != "momentum"
+        assert out["exit_reason"] != "protect"
+
+    def test_a_big_winner_exits_on_the_FIRST_sign_of_a_turn(self):
+        # Up big, one tick against you is enough — bank it.
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[96.0, 95.0, 95.5, 96.5],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=[-0.9, -1.2, -0.8, -0.3],
+                              mom_turn_bars=3, protect_at=0.10)
+        assert out["exit_reason"] == "protect"
+
+    def test_it_needs_the_turn_CONFIRMED_not_one_wobble(self):
+        # A single up-tick inside a downtrend is noise. Requiring N consecutive
+        # bars is what separates a turn from a flinch.
+        wobble = [-0.2, -0.5, -0.4, -0.7, -0.9, -1.0, -1.1, -1.2]
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[99.0, 98.0, 97.5, 97.0, 96.0, 95.0, 94.0, 93.0],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=wobble, mom_turn_bars=2)
+        assert out["exit_reason"] != "momentum"
+
+    def test_a_bullish_position_in_profit_exits_when_momentum_turns_down(self):
+        out = oe.manage_trade("call", spot=100.0, long_strike=100.0,
+                              short_strike=102.5, sigma=0.40,
+                              path=[101.0, 102.0, 103.0, 102.5, 102.0, 101.0],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=[0.2, 0.5, 0.9, 0.6, 0.2, -0.3],
+                              mom_turn_bars=2, protect_at=0.25)
+        assert out["exit_reason"] in ("protect", "momentum")
+
+    def test_the_target_still_wins_if_it_hits_first(self):
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[95.0, 94.0, 93.0],
+                              t_total=2 / 252, take_profit=0.20, stop_loss=9.0,
+                              mom_path=[-0.9, -0.5, 0.4], mom_turn_bars=1)
+        assert out["exit_reason"] == "target"
+
+    def test_without_a_momentum_path_it_behaves_exactly_as_before(self):
+        # The new argument must not change any existing measurement.
+        kw = dict(direction="put", spot=100.0, long_strike=100.0,
+                  short_strike=97.5, sigma=0.40,
+                  path=[99.0, 98.0, 97.0], t_total=2 / 252,
+                  take_profit=0.30, stop_loss=0.60)
+        assert oe.manage_trade(**kw) == oe.manage_trade(**kw, mom_path=None)
+
+    def test_a_short_momentum_path_does_not_crash(self):
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[99.0, 98.0, 97.0], t_total=2 / 252,
+                              take_profit=9.0, stop_loss=9.0,
+                              mom_path=[-0.5], mom_turn_bars=2)
+        assert out is not None
+
+    def test_it_records_WHICH_rule_closed_the_trade(self):
+        # The exit reason is evidence — a ledger that says only "closed" cannot
+        # be audited later for which rule actually earned the money.
+        out = oe.manage_trade("put", spot=100.0, long_strike=100.0,
+                              short_strike=97.5, sigma=0.40,
+                              path=[99.0, 98.5, 98.0, 99.0, 100.0],
+                              t_total=2 / 252, take_profit=9.0, stop_loss=9.0,
+                              mom_path=[-0.5, -0.8, -0.6, -0.2, 0.4],
+                              mom_turn_bars=2, protect_at=0.20)
+        assert out["exit_reason"] in ("protect", "momentum", "expiry")
+        assert "bars_held" in out
+
+
 class TestRegime:
     """Is the bearish signal broken, or only broken in a bull market?
 

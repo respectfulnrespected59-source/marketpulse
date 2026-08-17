@@ -157,7 +157,9 @@ def manage_trade(direction: str, spot: float, long_strike: float,
                  short_strike: float, sigma: float | None, path: list[float],
                  t_total: float, take_profit: float, stop_loss: float,
                  contracts: int = 1, spread_pct: float = DEFAULT_SPREAD_PCT,
-                 r: float = RISK_FREE) -> dict | None:
+                 r: float = RISK_FREE, mom_path: list | None = None,
+                 mom_turn_bars: int = 2,
+                 protect_at: float = 0.25) -> dict | None:
     """Enter on the signal, leave at the target — the scalper's trade.
 
     `backtest_options` holds to expiry, which for a short-dated spread is close
@@ -202,6 +204,42 @@ def manage_trade(direction: str, spot: float, long_strike: float,
         if move <= -stop_loss:
             exit_value, exit_reason, exit_index = value, "stop", j
             break
+        # Exit on the TURN rather than a bar count. Measured 2026-08-17: the
+        # peak landed anywhere from bar 1 to bar 12, so no fixed number of bars
+        # can catch it — but momentum rolls over before price does, and a
+        # confirmed roll is a condition anyone can act on live.
+        # `mom_turn_bars` consecutive bars are required, because a single
+        # up-tick inside a downtrend is noise, not a turn.
+        if mom_path and j < len(mom_path):
+            # How hard to react to a reversal depends on how much profit is
+            # sitting there. Measured 2026-08-17: a flat momentum exit that
+            # fired regardless of P&L closed 28 of 29 trades at a loss, because
+            # bailing on a wobble while UNDERWATER is not protecting a win — it
+            # is a stop-loss wearing a costume, and the stop already exists.
+            #
+            #   up big      -> one tick against you is enough, bank it
+            #   up a little -> require a confirmed turn
+            #   flat/down   -> momentum says nothing; let the stop do its job
+            if move >= protect_at:
+                need = 1
+            elif move > 0:
+                need = mom_turn_bars
+            else:
+                need = None
+
+            if need is not None and j >= need:
+                recent = mom_path[j - need:j + 1]
+                if len(recent) > need and all(x is not None for x in recent):
+                    turned = all(
+                        (recent[k + 1] > recent[k]) if direction == "put"
+                        else (recent[k + 1] < recent[k])
+                        for k in range(len(recent) - 1)
+                    )
+                    if turned:
+                        exit_value = value
+                        exit_reason = "protect" if move >= protect_at else "momentum"
+                        exit_index = j
+                        break
 
     if exit_value is None:
         # Ran to the end: settle on intrinsic against the real final price.
@@ -319,7 +357,8 @@ def backtest_scalp(highs: list[float], lows: list[float], closes: list[float],
                    dte_days: int = DEFAULT_DTE, iv_multiple: float = 1.0,
                    width_pct: float = DEFAULT_WIDTH_PCT,
                    spread_pct: float = DEFAULT_SPREAD_PCT,
-                   contracts: int = 1) -> dict:
+                   contracts: int = 1, use_momentum: bool = False,
+                   protect_at: float = 0.25, mom_turn_bars: int = 2) -> dict:
     """Enter on a signal, manage the exit, then WAIT before looking again.
 
     This is the honest counterpart to entering on every signalling bar. Signals
@@ -341,7 +380,10 @@ def backtest_scalp(highs: list[float], lows: list[float], closes: list[float],
         return {"symbol": symbol, "trades": [], "summary": summarize([])}
 
     labels = backtest._compute_labels(closes)
-    squeeze = indicators.ttm_squeeze_series(highs, lows, closes) if squeeze_only else None
+    # The momentum series doubles as the exit signal, so it is needed whenever
+    # either the entry gate or the protect rule is in play.
+    squeeze = (indicators.ttm_squeeze_series(highs, lows, closes)
+               if (squeeze_only or use_momentum) else None)
 
     i = 0
     while i < len(labels):
@@ -366,9 +408,13 @@ def backtest_scalp(highs: list[float], lows: list[float], closes: list[float],
 
         spot = closes[i]
         long_k, short_k = _strikes(direction, spot, width_pct)
+        mom = (squeeze["mom"][i + 1:i + 1 + max_bars]
+               if (use_momentum and squeeze) else None)
         out = manage_trade(direction, spot, long_k, short_k, sigma * iv_multiple,
                            closes[i + 1:i + 1 + max_bars], dte_days / TRADING_DAYS,
-                           take_profit, stop_loss, contracts, spread_pct)
+                           take_profit, stop_loss, contracts, spread_pct,
+                           mom_path=mom, mom_turn_bars=mom_turn_bars,
+                           protect_at=protect_at)
         if not out:
             i += 1
             continue

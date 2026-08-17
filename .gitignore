@@ -36,6 +36,12 @@ reports/
 paper_positions.json
 logs/
 
+# Trade ledgers and live calls. This repo is PUBLIC and these files carry pot
+# size, position sizing, P&L and dated predictions. Ignored rather than merely
+# left untracked, so no future `git add .` can publish someone's trading record
+# by accident.
+paper_trades/
+
 # Binary media (regenerable / large)
 *.m4a
 *.wav
