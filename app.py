@@ -700,7 +700,29 @@ def canonical_tf(raw: str | None) -> str:
     return _TF_CANONICAL.get((raw or "").strip().lower(), "wide")
 
 
-def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
+# US equity regular session, exchange-local seconds past midnight: 09:30–16:00.
+_REGULAR_OPEN_SOD = 9 * 3600 + 30 * 60
+_REGULAR_CLOSE_SOD = 16 * 3600
+
+
+def is_regular_bar(ts: int, gmtoffset: int | None) -> bool:
+    """True when a bar falls inside the regular session.
+
+    The offset comes from the upstream response rather than the server clock,
+    so daylight saving is never guessed at — a bar is classified against the
+    exchange's own idea of what time it was.
+
+    The close is exclusive: the 16:00 stamp belongs to the after-hours block,
+    while 15:55 is the last regular five-minute bar.
+    """
+    if gmtoffset is None:
+        gmtoffset = -5 * 3600          # exchange standard time; better than crashing
+    sod = (int(ts) + int(gmtoffset)) % 86400
+    return _REGULAR_OPEN_SOD <= sod < _REGULAR_CLOSE_SOD
+
+
+def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
+                   prepost: bool = False) -> dict:
     """Recent intraday OHLC candles for the live trading chart, at a chosen
     timeframe. Stocks use Yahoo bars; crypto uses Coinbase candles. Short-
     cached so a live poll can refresh without hammering upstream.
@@ -710,7 +732,10 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
       ts:   [unix_seconds, ...]    (parallel to ohlc; empty if source lacks it)
     """
     tf = canonical_tf(tf)
-    key = f"intraday:{kind}:{symbol.lower()}:{tf}"
+    # prepost is part of the key: the two modes return different tapes, and
+    # sharing a cache entry would serve overnight bars to a caller that asked
+    # for regular hours (or worse, the reverse into an indicator).
+    key = f"intraday:{kind}:{symbol.lower()}:{tf}:{int(bool(prepost))}"
     hit = _cache.get(key)
     # 1-min tape needs a snappier cache so a live poll actually shows new bars;
     # daily and weekly bars only change once a session.
@@ -720,6 +745,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
     ohlc: list[list[float]] = []
     ts_arr: list[int] = []
     vol_arr: list[float] = []
+    gmtoffset: int | None = None
     if kind == "crypto":
         prod = coinbase_product(symbol)
         if prod:
@@ -741,10 +767,12 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
         try:
             rng, interval, _agg = INTRADAY_TF["stock"][tf]
             url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                   f"?range={rng}&interval={interval}")
+                   f"?range={rng}&interval={interval}"
+                   + ("&includePrePost=true" if prepost else ""))
             result = _get_json(url)["chart"]["result"][0]
             q = result["indicators"]["quote"][0]
             times = result.get("timestamp") or []
+            gmtoffset = (result.get("meta") or {}).get("gmtoffset")
             vols = q.get("volume") or []
             for i, (o, h, l, c) in enumerate(zip(q["open"], q["high"], q["low"], q["close"])):
                 if None not in (o, h, l, c):
@@ -763,12 +791,21 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide") -> dict:
     # Keep the most recent slice. Five days of 1m bars is ~1,950 candles — far
     # more than the chart shows and a heavy payload — so send the recent tape
     # and let the wider timeframes cover the longer view.
-    if len(ohlc) > MAX_INTRADAY_BARS:
-        ohlc = ohlc[-MAX_INTRADAY_BARS:]
-        ts_arr = ts_arr[-MAX_INTRADAY_BARS:]
-        vol_arr = vol_arr[-MAX_INTRADAY_BARS:]
+    # Extended hours roughly triples the bar count, so trimming to the same 500
+    # would hand back FEWER trading days than the regular-hours view — more data
+    # in the response and less history on the chart. The budget scales instead.
+    cap = MAX_INTRADAY_BARS * 3 if prepost else MAX_INTRADAY_BARS
+    if len(ohlc) > cap:
+        ohlc = ohlc[-cap:]
+        ts_arr = ts_arr[-cap:]
+        vol_arr = vol_arr[-cap:]
+    off = gmtoffset if kind != "crypto" else None
     out = {"symbol": symbol.upper(), "kind": kind, "tf": tf, "ohlc": ohlc, "ts": ts_arr,
-           "volume": vol_arr,
+           "volume": vol_arr, "prepost": bool(prepost), "gmtoffset": off,
+           # Which bars the indicators are allowed to see. Crypto trades around
+           # the clock, so every bar is "regular" there.
+           "regular": ([True] * len(ts_arr) if kind == "crypto"
+                       else [is_regular_bar(t, off) for t in ts_arr]),
            "last": ohlc[-1][3] if ohlc else None, "server_ts": int(time.time())}
     _cache[key] = (time.time(), out)
     return out
@@ -802,7 +839,7 @@ def _agg_ohlc(ohlc: list, ts: list, vol: list, factor: int) -> tuple[list, list,
 
 def chart_overlay(kind: str, symbol: str, tf: str = "wide",
                   ema_periods: tuple[int, ...] = DEFAULT_EMA_PERIODS,
-                  want_squeeze: bool = True) -> dict:
+                  want_squeeze: bool = True, prepost: bool = False) -> dict:
     """EMA series + TTM squeeze computed on THE SAME bars the chart draws.
 
     This used to compute EMAs on daily bars and the squeeze on weekly bars for
@@ -819,15 +856,34 @@ def chart_overlay(kind: str, symbol: str, tf: str = "wide",
     tf = canonical_tf(tf)
     periods = tuple(ema_periods) or DEFAULT_EMA_PERIODS
     plist = ",".join(str(p) for p in periods)
-    key = f"overlay:{kind}:{symbol.lower()}:{tf}:{plist}:{int(bool(want_squeeze))}"
+    key = (f"overlay:{kind}:{symbol.lower()}:{tf}:{plist}:"
+           f"{int(bool(want_squeeze))}:{int(bool(prepost))}")
     hit = _cache.get(key)
     ttl = 20 if tf == "1m" else (300 if tf in SLOW_TF else QUOTE_TTL)
     if hit and (time.time() - hit[0]) < ttl:
         return hit[1]
 
-    base = fetch_intraday(kind, symbol, tf)
+    base = fetch_intraday(kind, symbol, tf, prepost=prepost)
     ohlc = base.get("ohlc") or []
     ts = base.get("ts") or []
+    # Indicators see REGULAR-HOURS bars only, even when the chart is drawing
+    # overnight ones. A 4am bar with two hundred shares traded reads as
+    # compression to the squeeze and as exhaustion to RSI — both artefacts of
+    # nobody trading rather than of anything happening. Draw the extended
+    # candles; do not let them vote.
+    # Only when extended hours were actually ASKED for. With prepost off the
+    # feed already returns regular bars, so filtering would be pointless — and
+    # dangerous: a feed whose stamps do not classify cleanly would have every
+    # bar stripped and the indicators handed an empty tape.
+    flags = base.get("regular")
+    if prepost and flags and len(flags) == len(ohlc):
+        keep = [i for i, r in enumerate(flags) if r]
+        # Never filter down to something unusable. If the classification leaves
+        # too little to compute on, the classification is the thing that is
+        # wrong, and drawing no indicator beats drawing a fabricated one.
+        if len(keep) >= backtest.WARMUP:
+            ohlc = [ohlc[i] for i in keep]
+            ts = [ts[i] for i in keep] if len(ts) == len(flags) else ts
     highs = [row[1] for row in ohlc]
     lows = [row[2] for row in ohlc]
     closes = [row[3] for row in ohlc]
@@ -1333,7 +1389,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 symbol, kind = self._symbol_and_kind(params)
                 tf = (params.get("tf", ["wide"])[0]).lower()
-                return self._json(fetch_intraday(kind, symbol, tf))
+                prepost = (params.get("prepost", ["0"])[0]) in ("1", "true", "yes")
+                return self._json(fetch_intraday(kind, symbol, tf, prepost=prepost))
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001
@@ -1347,8 +1404,9 @@ class Handler(BaseHTTPRequestHandler):
                 # squeeze=0 turns the indicator off entirely rather than
                 # computing it and hiding it client-side.
                 want_squeeze = (params.get("squeeze", ["1"])[0]) not in ("0", "false", "no")
+                prepost = (params.get("prepost", ["0"])[0]) in ("1", "true", "yes")
                 return self._json(
-                    chart_overlay(kind, symbol, tf, periods, want_squeeze)
+                    chart_overlay(kind, symbol, tf, periods, want_squeeze, prepost)
                 )
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)

@@ -412,12 +412,20 @@ function initIndicatorControls() {
 
   const ema = $("#indEma"), periods = $("#indEmaPeriods");
   const sqz = $("#indSqueeze"), vol = $("#indVolume"), reset = $("#indReset");
+  const pp = $("#indPrePost");
 
   // Reflect saved settings into the controls on first paint.
   if (ema) ema.checked = !!chartInd.showEma;
   if (sqz) sqz.checked = !!chartInd.showSqueeze;
   if (vol) vol.checked = !!chartInd.showVolume;
+  if (pp) pp.checked = !!chartInd.showPrePost;
   if (periods) periods.value = chartInd.ema.join(",");
+
+  if (pp) pp.addEventListener("change", () => {
+    chartInd.showPrePost = pp.checked;
+    // Needs the server round-trip: the TAPE changes, not just what is drawn.
+    _applyIndicatorSettings(true);
+  });
 
   if (ema) ema.addEventListener("change", () => {
     chartInd.showEma = ema.checked;

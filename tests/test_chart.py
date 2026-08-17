@@ -317,3 +317,80 @@ class TestFetchIntraday:
             app.fetch_intraday("stock", f"SYM{i}"[:12], "5m")
 
         assert len(app._cache) <= app.MAX_CACHE_ENTRIES
+
+
+# ------------------------------------------- extended hours (pre / post)
+#
+# Overnight structure sets up the open, so the chart should be able to SHOW it.
+# But a 4am bar with two hundred shares traded must never move an indicator:
+# thin tape reads as compression to a squeeze and as exhaustion to RSI, and
+# both are artefacts of nobody trading rather than of anything happening.
+#
+# So the split is deliberate: draw the extended bars, compute on the regular
+# ones. Off by default, because turning it on changes every reading.
+
+class TestExtendedHours:
+    def test_a_regular_hours_bar_is_recognised(self):
+        # 09:30 exchange-local, the first regular bar of the session
+        assert app.is_regular_bar(1786973400, -14400) is True
+
+    def test_a_premarket_bar_is_not_regular(self):
+        # 04:00 exchange-local
+        assert app.is_regular_bar(1786953600, -14400) is False
+
+    def test_an_afterhours_bar_is_not_regular(self):
+        # 16:00 exchange-local — the close is the END of the window, exclusive
+        assert app.is_regular_bar(1786996800, -14400) is False
+
+    def test_the_last_regular_bar_still_counts(self):
+        # 15:55, the final regular five-minute bar
+        assert app.is_regular_bar(1786996800 - 300, -14400) is True
+
+    def test_it_uses_the_offset_it_is_given_not_the_server_clock(self):
+        # Same instant, different exchange offset -> different verdict. The
+        # offset comes from the response so DST is never guessed at.
+        ts = 1786973400
+        assert app.is_regular_bar(ts, -14400) is True
+        assert app.is_regular_bar(ts, -14400 - 3600 * 6) is False
+
+    def test_a_missing_offset_does_not_crash(self):
+        assert app.is_regular_bar(1786973400, None) in (True, False)
+
+
+class TestOverlayIgnoresExtendedBars:
+    def _tape(self):
+        """Two sessions of 5m bars with pre/post attached, as the client sees."""
+        base = 1786953600            # 04:00 ET
+        ts, ohlc = [], []
+        for i in range(260):
+            t = base + i * 300
+            ts.append(t)
+            px = 100.0 + (i % 7) * 0.5
+            ohlc.append([px, px + 0.4, px - 0.4, px])
+        return ts, ohlc
+
+    def test_indicators_are_computed_on_regular_bars_only(self, monkeypatch):
+        ts, ohlc = self._tape()
+        payload = {"symbol": "TSLA", "kind": "stock", "tf": "5m", "ohlc": ohlc,
+                   "ts": ts, "volume": [0] * len(ts), "gmtoffset": -14400,
+                   "regular": [app.is_regular_bar(t, -14400) for t in ts]}
+        monkeypatch.setattr(app, "fetch_intraday", lambda *a, **k: payload)
+        # prepost=True is the mode the filter exists for: extended bars are
+        # DRAWN, and the indicators must still ignore them.
+        out = app.chart_overlay("stock", "TSLA", "5m", prepost=True)
+
+        reg_ts = {t for t, r in zip(ts, payload["regular"]) if r}
+        sq = out.get("squeeze_series") or {}
+        for pair in (sq.get("bb_upper") or []):
+            assert pair[0] in reg_ts, "an indicator value landed on an extended-hours bar"
+        for pair in (out.get("emas", {}).get("14") or []):
+            assert pair[0] in reg_ts
+
+    def test_the_payload_still_reports_which_bars_were_extended(self, monkeypatch):
+        ts, ohlc = self._tape()
+        payload = {"symbol": "TSLA", "kind": "stock", "tf": "5m", "ohlc": ohlc,
+                   "ts": ts, "volume": [0] * len(ts), "gmtoffset": -14400,
+                   "regular": [app.is_regular_bar(t, -14400) for t in ts]}
+        monkeypatch.setattr(app, "fetch_intraday", lambda *a, **k: payload)
+        # The chart needs the flags to style overnight candles differently.
+        assert any(payload["regular"]) and not all(payload["regular"])

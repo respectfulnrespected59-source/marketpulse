@@ -47,6 +47,10 @@ const IND_DEFAULTS = {
   ema: [14, 21, 57],
   showEma: true,
   showSqueeze: true,
+  // Pre-market and after-hours candles. OFF by default: turning it on changes
+  // what the chart shows, and extended bars are thin enough that they must
+  // never feed an indicator (the server strips them before computing).
+  showPrePost: false,
   showVolume: true,
 };
 let chartInd = { ...IND_DEFAULTS };
@@ -382,7 +386,8 @@ async function loadLiveTradeChart() {
   if (!raw) return;
   const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
   try {
-    const res = await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`);
+    const res = await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`
+      + `&prepost=${chartInd.showPrePost ? 1 : 0}`);
     if (!res.ok) throw new Error(`server said ${res.status}`);
     const d = await res.json();
     // Fire-and-forget overlay refresh so the chart shows immediately; the
@@ -424,14 +429,15 @@ async function loadChartOverlay(kind, sym) {
   const periods = chartInd.ema.join(",");
   // The timeframe and the periods are part of the identity of an overlay —
   // leaving them out is what made a 1m chart wear daily EMA lines.
-  const key = `${kind}:${sym.toLowerCase()}:${liveTf}:${periods}:${chartInd.showSqueeze ? 1 : 0}`;
+  const pp = chartInd.showPrePost ? 1 : 0;
+  const key = `${kind}:${sym.toLowerCase()}:${liveTf}:${periods}:${chartInd.showSqueeze ? 1 : 0}:${pp}`;
   if (liveOverlayKey === key && Date.now() - liveOverlayAt < OVERLAY_TTL_MS) {
     return liveOverlay;
   }
   try {
     const url = `/api/chart-overlay?symbol=${encodeURIComponent(sym)}&kind=${kind}`
       + `&tf=${encodeURIComponent(liveTf)}&ema=${encodeURIComponent(periods)}`
-      + `&squeeze=${chartInd.showSqueeze ? 1 : 0}`;
+      + `&squeeze=${chartInd.showSqueeze ? 1 : 0}&prepost=${pp}`;
     const d = await (await fetch(url)).json();
     if (d && !d.error) {
       liveOverlay = d;
