@@ -46,6 +46,7 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(grader, "grade", _fake)
     monkeypatch.setenv(grader.KEY_ENV, "vck_route_test_key")
+    monkeypatch.delenv(grader.BACKUP_KEY_ENV, raising=False)
     monkeypatch.setattr(app, "_GRADE_LIMITER", grader.GradeLimiter())
     return sent
 

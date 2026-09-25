@@ -23,7 +23,15 @@ from grader import (
 
 pytestmark = pytest.mark.unit
 
-GOOD_REASON = ("RSI came off 30 and MACD crossed up. $60 probe out of a $300 pot. "
+
+@pytest.fixture(autouse=True)
+def _no_real_keys(monkeypatch):
+    # A developer machine may carry real keys; no test here may reach the network.
+    monkeypatch.delenv(grader.KEY_ENV, raising=False)
+    monkeypatch.delenv(grader.BACKUP_KEY_ENV, raising=False)
+
+
+GOOD_REASON =("RSI came off 30 and MACD crossed up. $60 probe out of a $300 pot. "
                "Stop at -50%, take profit at +32%.")
 
 
@@ -215,7 +223,125 @@ class TestGrade:
         assert "vck_secret_value" not in str(exc.value)
 
 
+def backup_reply(content):
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def routed_opener(calls, jev=None, backup=None):
+    """Fake network: `jev` / `backup` are a payload dict, or an exception to raise."""
+    def _open(req, timeout=None):
+        which = "jev" if req.full_url == grader.GATEWAY_URL else "backup"
+        calls.append((which, req, timeout))
+        result = jev if which == "jev" else backup
+        if isinstance(result, Exception):
+            raise result
+        return FakeResponse(json.dumps(result).encode("utf-8"))
+    return _open
+
+
+def rate_limited(url=grader.GATEWAY_URL):
+    return urllib.error.HTTPError(url, 429, "Too Many Requests", {},
+                                  io.BytesIO(b'{"error":{"message":"high demand"}}'))
+
+
+THIN_JSON = '{"setup": true, "size": true, "exit": false, "hype": false, "grade": 1}'
+
+
+class TestBackup:
+    def test_jev_answer_never_touches_the_backup(self):
+        calls = []
+        out = grader.grade(GOOD_REASON, key="vck_test", backup="sk-or-test",
+                           opener=routed_opener(calls, jev={"answers": jev_answers()}))
+        assert [c[0] for c in calls] == ["jev"]
+        assert out["graded_by"] == "jev"
+
+    def test_falls_back_when_jev_is_overloaded(self):
+        calls = []
+        out = grader.grade(GOOD_REASON, key="vck_test", backup="sk-or-test",
+                           opener=routed_opener(calls, jev=rate_limited(),
+                                                backup=backup_reply(THIN_JSON)))
+        assert [c[0] for c in calls] == ["jev", "backup"]
+        assert out["graded_by"] == "backup"
+        assert out["label"] == "thin"
+        assert out["missing"] == ["exit"]
+        assert out["checks"]["setup"] == 1.0 and out["checks"]["exit"] == 0.0
+
+    def test_backup_request_uses_the_paid_lane_with_thinking_off(self):
+        calls = []
+        grader.grade(GOOD_REASON, key="vck_test", backup="sk-or-test",
+                     opener=routed_opener(calls, jev=rate_limited(), backup=backup_reply(THIN_JSON)))
+        _, req, timeout = calls[1]
+        body = json.loads(req.data)
+        assert req.full_url == grader.BACKUP_URL
+        assert req.get_header("Authorization") == "Bearer sk-or-test"
+        assert body["model"] == grader.BACKUP_MODEL and not body["model"].endswith(":free")
+        assert body["reasoning"] == {"enabled": False}
+        assert GOOD_REASON in body["messages"][-1]["content"]
+        assert timeout == grader.BACKUP_TIMEOUT_S
+
+    def test_backup_alone_works_without_a_jev_key(self):
+        calls = []
+        out = grader.grade(GOOD_REASON, key="", backup="sk-or-test",
+                           opener=routed_opener(calls, backup=backup_reply(THIN_JSON)))
+        assert [c[0] for c in calls] == ["backup"]
+        assert out["graded_by"] == "backup"
+
+    def test_both_down_is_unavailable_and_names_both(self):
+        calls = []
+        with pytest.raises(GraderUnavailable) as exc:
+            grader.grade(GOOD_REASON, key="vck_secret", backup="sk-or-secret",
+                         opener=routed_opener(calls, jev=rate_limited(),
+                                              backup=rate_limited(grader.BACKUP_URL)))
+        msg = str(exc.value)
+        assert "jev" in msg and "backup" in msg
+        assert "vck_secret" not in msg and "sk-or-secret" not in msg
+
+    def test_no_backup_key_keeps_the_jev_error(self):
+        with pytest.raises(GraderUnavailable) as exc:
+            grader.grade(GOOD_REASON, key="vck_test", backup="",
+                         opener=routed_opener([], jev=rate_limited()))
+        assert "429" in str(exc.value)
+
+    @pytest.mark.parametrize("content", ["", "Sorry, I can't help with that.", '{"setup": true}'])
+    def test_unusable_backup_reply_is_unavailable(self, content):
+        with pytest.raises(GraderUnavailable):
+            grader.grade(GOOD_REASON, key="", backup="sk-or-test",
+                         opener=routed_opener([], backup=backup_reply(content)))
+
+    def test_backup_reply_without_choices_is_unavailable(self):
+        with pytest.raises(GraderUnavailable):
+            grader.grade(GOOD_REASON, key="", backup="sk-or-test",
+                         opener=routed_opener([], backup={"error": "nope"}))
+
+
+class TestParseBackup:
+    def test_reads_json_inside_other_text(self):
+        out = grader.parse_backup("Here you go:\n```json\n" + THIN_JSON + "\n```")
+        assert out["label"] == "thin" and out["graded_by"] == "backup"
+
+    def test_solid_and_hype_flags(self):
+        out = grader.parse_backup('{"setup": true, "size": true, "exit": true, "hype": true, "grade": 2}')
+        assert out["label"] == "solid" and out["missing"] == [] and out["hype"] is True
+
+    @pytest.mark.parametrize("text", [
+        '{"setup": "yes", "size": true, "exit": true, "hype": false, "grade": 2}',
+        '{"setup": true, "size": true, "exit": true, "hype": false, "grade": 3}',
+        '{"setup": true, "size": true, "exit": true, "hype": false, "grade": -1}',
+        '{"setup": true, "size": true, "exit": true, "hype": false, "grade": true}',
+        '{"setup": true, "size": true, "exit": true, "hype": false, "grade": "2"}',
+        '{"setup": true, "size": true, "exit": true, "grade": 2}',
+        "not json at all",
+    ])
+    def test_rejects_anything_off_contract(self, text):
+        with pytest.raises(GraderUnavailable):
+            grader.parse_backup(text)
+
+
 class TestEnabled:
+    def test_on_with_only_the_backup_key(self, monkeypatch):
+        monkeypatch.setenv(grader.BACKUP_KEY_ENV, "sk-or-test")
+        assert grader.enabled() is True
+
     def test_off_without_a_key(self, monkeypatch):
         monkeypatch.delenv(grader.KEY_ENV, raising=False)
         assert grader.enabled() is False
