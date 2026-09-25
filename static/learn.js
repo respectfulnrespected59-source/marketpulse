@@ -886,7 +886,96 @@ function learnWireCoach() {
   });
 }
 
-function learnBoot() { learnWireUI(); learnWireCoach(); }
+/* ---- Grade My Reason -------------------------------------------------- */
+/* Write WHY before a trade; the server asks Jev (grader.py) whether the reason
+ * names a setup, a size and an exit. It grades the plan, never the trade. The
+ * card stays hidden unless /api/universe reports a grader key. */
+
+const GRADE_MAX_CHARS = 1200;
+const GRADE_MIN_CHARS = 12;
+const GRADE_CHECK_LABELS = { setup: "Setup", size: "Size", exit: "Exit" };
+const GRADE_TIPS = {
+  setup: "Name what you see on the chart: RSI, MACD, a breakout, a squeeze, support or resistance.",
+  size: "Say how much: a dollar amount or a share of your pot. The probe is 20% of the pot.",
+  exit: "Say when you get out: a stop for when you are wrong, and a take-profit (the 32% rule).",
+};
+const GRADE_VERDICTS = {
+  "solid": { cls: "is-solid", text: "Solid plan" },
+  "thin": { cls: "is-thin", text: "Thin plan" },
+  "no plan": { cls: "is-none", text: "No plan yet" },
+};
+
+function gradeRender(out) {
+  const verdict = GRADE_VERDICTS[out.label] || GRADE_VERDICTS["no plan"];
+  const rows = Object.keys(GRADE_CHECK_LABELS).map((key) => {
+    const p = out.checks && typeof out.checks[key] === "number" ? out.checks[key] : 0;
+    const ok = p >= 0.5;
+    return `<li class="${ok ? "is-ok" : "is-miss"}"><span class="grade-mark">${ok ? "✓" : "✗"}</span>
+      <b>${learnEsc(GRADE_CHECK_LABELS[key])}</b><span class="grade-p">${learnPct(p)}</span></li>`;
+  }).join("");
+  const tips = (out.missing || []).filter((key) => GRADE_TIPS[key])
+    .map((key) => `<li>${learnEsc(GRADE_TIPS[key])}</li>`).join("");
+  const hype = out.hype
+    ? `<p class="grade-hype">This reads like hype or a tip, not your own read of the chart.</p>`
+    : "";
+  return `<div class="grade-verdict ${verdict.cls}">${learnEsc(verdict.text)}</div>
+    <ul class="grade-checks">${rows}</ul>${hype}
+    ${tips ? `<ul class="grade-tips">${tips}</ul>` : ""}`;
+}
+
+async function gradeSubmit(e) {
+  e.preventDefault();
+  const box = document.querySelector("#gradeReason");
+  const btn = document.querySelector("#gradeBtn");
+  const result = document.querySelector("#gradeResult");
+  if (!box || !btn || !result) return;
+  const reason = box.value.trim();
+  if (reason.length < GRADE_MIN_CHARS) {
+    result.innerHTML = `<p class="grade-error">Write a full sentence: what you see, how much, and when you get out.</p>`;
+    return;
+  }
+  btn.disabled = true;
+  result.innerHTML = `<p class="grade-wait">Grading…</p>`;
+  try {
+    const res = await fetch("/api/grade-reason", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    const out = await res.json().catch(() => ({}));
+    result.innerHTML = res.ok
+      ? gradeRender(out)
+      : `<p class="grade-error">${learnEsc(out.error || "Could not grade that just now.")}</p>`;
+  } catch (err) {
+    result.innerHTML = `<p class="grade-error">Could not reach the grader. Check your connection and try again.</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function gradeWire() {
+  const form = document.querySelector("#gradeForm");
+  if (!form || form.dataset.wired === "1") return;
+  form.dataset.wired = "1";
+  form.addEventListener("submit", gradeSubmit);
+  const box = document.querySelector("#gradeReason");
+  const count = document.querySelector("#gradeCount");
+  if (box && count) {
+    box.addEventListener("input", () => { count.textContent = `${box.value.length} / ${GRADE_MAX_CHARS}`; });
+  }
+  fetch("/api/universe")
+    .then((r) => r.json())
+    .then((u) => {
+      const card = document.querySelector("#gradeCard");
+      if (card && u && u.grader === true) card.hidden = false;
+    })
+    .catch(() => {
+      // Without the server's answer the card stays hidden: the safe default
+      // for an optional feature, and the rest of the Coach still works.
+    });
+}
+
+function learnBoot() { learnWireUI(); learnWireCoach(); gradeWire(); }
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", learnBoot);

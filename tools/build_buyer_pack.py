@@ -42,6 +42,7 @@ BASE = [
     "safety.py",
     "strategy.py",
     "symbols.py",
+    "grader.py",          # Grade My Reason; stays hidden unless the buyer sets a key
     "run.bat",
     "run.sh",
     "README.md",

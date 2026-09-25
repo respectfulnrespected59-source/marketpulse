@@ -7,7 +7,7 @@ services:
     runtime: python
     plan: free
     branch: main
-    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py"
+    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py grader.py"
     startCommand: "python app.py"
     healthCheckPath: /api/universe
     # Off deliberately. Once people are buying against what this demo shows,
@@ -33,3 +33,8 @@ services:
         value: pro
       - key: PYTHON_VERSION
         value: "3.11.9"
+      # Grade My Reason (grader.py). A Vercel AI Gateway key, set in the Render
+      # dashboard only — sync: false keeps the value out of this repo. Unset,
+      # the Coach card simply stays hidden.
+      - key: AI_GATEWAY_API_KEY
+        sync: false
