@@ -38,3 +38,7 @@ services:
       # the Coach card simply stays hidden.
       - key: AI_GATEWAY_API_KEY
         sync: false
+      # Grade My Reason backup (grader.py): paid Nemotron Lightning via OpenRouter when
+      # Jev is down. Dashboard-only secret; unset, a Jev failure just shows the retry message.
+      - key: OPENROUTER_API_KEY
+        sync: false

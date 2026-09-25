@@ -1162,6 +1162,7 @@ body {
 .grade-wait { color: #8a99ab; margin: 0; }
 .grade-error { color: var(--sell); margin: 0; }
 .grade-note { color: #6f7d8e; font-size: 11.5px; margin: 10px 0 0; line-height: 1.45; }
+.grade-source { color: #8a99ab; font-size: 12px; font-style: italic; margin: 8px 0 0; }
 
 /* Learning Mode: the call row. Sits under the dial and only appears while the
    chart is rewound, because a read with the answer on screen isn't a read. */

@@ -12,6 +12,13 @@ teaching hat, and Proof Mode already shows the signals have no validated edge.
 Standard library only (urllib), like the rest of the server. The key lives in
 AI_GATEWAY_API_KEY; with no key the feature reports itself off and the UI
 hides it, so buyer packs without a key are unaffected.
+
+Backup: on 2026-09-25 Jev's provider went down under demand mid-class ("upstream
+provider is currently experiencing high demand", HTTP 429 on every call). When
+OPENROUTER_API_KEY is set, any Jev failure hands the same checklist to paid
+Nemotron Lightning, which answers yes/no in JSON. The result says which model
+graded it, and backup grades carry no confidence numbers, because Nemotron did
+not give any.
 """
 
 from __future__ import annotations
@@ -30,8 +37,14 @@ from collections import OrderedDict, deque
 GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/evaluate"
 MODEL = "typesafe-ai/jev"
 KEY_ENV = "AI_GATEWAY_API_KEY"
-TIMEOUT_S = 15
+TIMEOUT_S = 8    # Jev answers in about half a second; a stalled Jev should hand over, not hang
 MAX_RESPONSE_BYTES = 64 * 1024   # a typed answer is well under 2 KB
+
+# The paid lane on purpose: the :free queue took up to 97 s per call when measured.
+BACKUP_URL = "https://openrouter.ai/api/v1/chat/completions"
+BACKUP_MODEL = "nvidia/nemotron-3.5-lightning"
+BACKUP_KEY_ENV = "OPENROUTER_API_KEY"
+BACKUP_TIMEOUT_S = 15
 
 MIN_REASON_CHARS = 12      # shorter than this is a word, not a reason
 MAX_REASON_CHARS = 1200    # a paragraph; also bounds what one call can cost
@@ -78,12 +91,19 @@ class GraderUnavailable(RuntimeError):
     """The grader could not produce an answer. The message is for the server log."""
 
 
+_JSON_OBJECT = re.compile(r"\{[^{}]*\}")
+
+
 def api_key() -> str:
     return os.environ.get(KEY_ENV, "").strip()
 
 
+def backup_key() -> str:
+    return os.environ.get(BACKUP_KEY_ENV, "").strip()
+
+
 def enabled() -> bool:
-    return bool(api_key())
+    return bool(api_key() or backup_key())
 
 
 def clean_reason(raw: object) -> str:
@@ -138,37 +158,109 @@ def parse_answers(answers: object) -> dict:
     }
 
 
-def grade(reason: object, *, key: str | None = None,
-          opener=urllib.request.urlopen) -> dict:
-    """Grade one reason. Raises InvalidReason for bad input, GraderUnavailable otherwise."""
-    text = clean_reason(reason)
-    key = api_key() if key is None else key.strip()
-    if not key:
-        raise GraderUnavailable("grader is not configured")
+def _backup_body(reason: str) -> dict:
+    system = (
+        "You grade a trader's written reason for a trade against a checklist. "
+        "Reply with ONLY a JSON object, no other text:\n"
+        '{"setup": true|false, "size": true|false, "exit": true|false, '
+        '"hype": true|false, "grade": 0|1|2}\n'
+        + "\n".join(f"{key}: {question}" for key, question in CHECKS.items())
+        + "\ngrade: " + "; ".join(f"{i} = {c}" for i, c in enumerate(GRADE_CRITERIA))
+    )
+    return {"model": BACKUP_MODEL, "max_tokens": 80, "temperature": 0,
+            "reasoning": {"enabled": False},   # thinking on returns an empty answer
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": f"Trade reason: {reason}"}]}
 
+
+def parse_backup(text: object) -> dict:
+    """Turn the backup's JSON reply into the same shape parse_answers produces."""
+    match = _JSON_OBJECT.search(text) if isinstance(text, str) else None
+    try:
+        data = json.loads(match.group(0)) if match else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise GraderUnavailable("backup reply was not the JSON we asked for")
+    flags = {}
+    for key in CHECKS:
+        if not isinstance(data.get(key), bool):
+            raise GraderUnavailable(f"backup gave no yes/no for {key!r}")
+        flags[key] = data[key]
+    grade_value = data.get("grade")
+    if isinstance(grade_value, bool) or not isinstance(grade_value, int) \
+            or not 0 <= grade_value < len(GRADE_LABELS):
+        raise GraderUnavailable("backup gave no usable grade")
+    return {
+        "grade": float(grade_value),
+        "label": GRADE_LABELS[grade_value],
+        "checks": {key: 1.0 if flag else 0.0 for key, flag in flags.items()},
+        "missing": [key for key in PLAN_CHECKS if not flags[key]],
+        "hype": flags["hype"],
+        "graded_by": "backup",
+    }
+
+
+def _post_json(url: str, body: dict, key: str, timeout: float, opener, name: str) -> dict:
     req = urllib.request.Request(
-        GATEWAY_URL,
-        data=json.dumps(build_body(text)).encode("utf-8"),
+        url,
+        data=json.dumps(body).encode("utf-8"),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
     )
     try:
-        with opener(req, timeout=TIMEOUT_S) as resp:
+        with opener(req, timeout=timeout) as resp:
             raw = resp.read(MAX_RESPONSE_BYTES)
     except urllib.error.HTTPError as exc:
         detail = exc.read(200).decode("utf-8", "replace")
-        raise GraderUnavailable(f"gateway HTTP {exc.code}: {detail}") from None
+        raise GraderUnavailable(f"{name} HTTP {exc.code}: {detail}") from None
     except (urllib.error.URLError, OSError) as exc:
-        reason_text = getattr(exc, "reason", exc)
-        raise GraderUnavailable(f"gateway unreachable: {reason_text}") from None
-
+        raise GraderUnavailable(f"{name} unreachable: {getattr(exc, 'reason', exc)}") from None
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise GraderUnavailable("gateway returned something that is not JSON") from None
+        raise GraderUnavailable(f"{name} returned something that is not JSON") from None
     if not isinstance(data, dict):
-        raise GraderUnavailable("gateway returned an unexpected shape")
-    return parse_answers(data.get("answers"))
+        raise GraderUnavailable(f"{name} returned an unexpected shape")
+    return data
+
+
+def _backup_text(data: dict) -> object:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None
+    return (choices[0].get("message") or {}).get("content")
+
+
+def grade(reason: object, *, key: str | None = None, backup: str | None = None,
+          opener=urllib.request.urlopen) -> dict:
+    """Grade one reason: Jev first, the backup only if Jev fails.
+
+    Raises InvalidReason for bad input, GraderUnavailable when nothing could grade it.
+    """
+    text = clean_reason(reason)
+    key = api_key() if key is None else key.strip()
+    backup = backup_key() if backup is None else backup.strip()
+    if not key and not backup:
+        raise GraderUnavailable("grader is not configured")
+
+    jev_error = None
+    if key:
+        try:
+            data = _post_json(GATEWAY_URL, build_body(text), key, TIMEOUT_S, opener, "gateway")
+            return {**parse_answers(data.get("answers")), "graded_by": "jev"}
+        except GraderUnavailable as exc:
+            if not backup:
+                raise
+            jev_error = exc
+
+    try:
+        data = _post_json(BACKUP_URL, _backup_body(text), backup, BACKUP_TIMEOUT_S, opener, "backup")
+        return parse_backup(_backup_text(data))
+    except GraderUnavailable as exc:
+        if jev_error is None:
+            raise
+        raise GraderUnavailable(f"jev: {jev_error}; backup: {exc}") from None
 
 
 def _valid_ip(value: object) -> str | None:
