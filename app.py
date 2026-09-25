@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import datetime
 
 import config
+import grader
 import indicators
 from safety import BoundedCache, InvalidSymbol, clean_kind, clean_symbol
 import strategy as rules_engine
@@ -187,6 +188,10 @@ def clean_ema_periods(raw: str | None) -> tuple[int, ...]:
 # One fixed sentence for every upstream failure. Detail goes to the log, not
 # to the caller — see Handler._upstream_failed.
 UPSTREAM_ERROR_MESSAGE = "Market data is temporarily unavailable. Try again shortly."
+GRADER_ERROR_MESSAGE = "The grader is not answering right now. Try again in a minute."
+
+# One limiter for the whole process: Grade My Reason spends real gateway calls.
+_GRADE_LIMITER = grader.GradeLimiter()
 
 
 def _cached(key: str):
@@ -1275,6 +1280,28 @@ class Handler(BaseHTTPRequestHandler):
         kind = clean_kind(params.get("kind", [default_kind])[0], default=default_kind)
         return symbol, kind
 
+    def _grade_reason(self, body: dict):
+        """Grade My Reason (see grader.py).
+
+        Checks run cheapest first, and only a request that passes all of them
+        spends a gateway call: switched on, valid text, then the limiter.
+        """
+        if not grader.enabled():
+            return self._json({"error": "Grade My Reason is not switched on here."}, code=503)
+        try:
+            reason = grader.clean_reason(body.get("reason"))
+        except grader.InvalidReason as exc:
+            return self._json({"error": str(exc)}, code=400)
+        allowed, why = _GRADE_LIMITER.allow(
+            grader.client_key(self.headers, self.client_address[0]))
+        if not allowed:
+            return self._json({"error": why}, code=429)
+        try:
+            return self._json(grader.grade(reason))
+        except grader.GraderUnavailable as exc:
+            print(f"[error] /api/grade-reason: {exc}", file=sys.stderr)
+            return self._json({"error": GRADER_ERROR_MESSAGE}, code=502)
+
     # Strategies are posted rather than put in a query string: a rule set is
     # structured and can be long, and URLs get logged.
     MAX_BODY_BYTES = 64 * 1024
@@ -1283,7 +1310,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path not in ("/api/paper/scan", "/api/strategy/validate",
                         "/api/options/mark", "/api/options/open",
-                        "/api/options/book/export"):
+                        "/api/options/book/export", "/api/grade-reason"):
             return self._send(404, b"Not found", "text/plain")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1299,6 +1326,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "body must be a JSON object"}, code=400)
 
         try:
+            if path == "/api/grade-reason":
+                return self._grade_reason(body)
+
             if path == "/api/strategy/validate":
                 problems = rules_engine.validate(body.get("strategy"))
                 return self._json({"ok": not problems, "problems": problems})
@@ -1562,6 +1592,7 @@ class Handler(BaseHTTPRequestHandler):
                 "africa": AFRICA_STOCKS, "ai": AI_STOCKS,
                 "tier": config.TIER, "features": config.features(),
                 "upgrade": config.UPGRADE_URL, "freeCap": config.FREE_SYMBOL_CAP,
+                "grader": grader.enabled(),
             })
 
         # static files

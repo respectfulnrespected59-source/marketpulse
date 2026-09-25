@@ -7,7 +7,7 @@ services:
     runtime: python
     plan: free
     branch: main
-    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py"
+    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py grader.py"
     startCommand: "python app.py"
     healthCheckPath: /api/universe
     # Off deliberately. Once people are buying against what this demo shows,

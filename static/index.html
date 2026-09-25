@@ -234,6 +234,27 @@
       </div>
       <button class="add-btn ghost" id="coachReset" type="button">Clear my record</button>
     </div>
+    <!-- Grade My Reason: write WHY before a trade and Jev checks it against the
+         pre-buy checklist. Grades the plan, never the trade. Stays hidden
+         unless the server has a grader key (see grader.py). -->
+    <div class="coach-card grade-card" id="gradeCard" hidden>
+      <h3>✍️ Grade my reason</h3>
+      <p class="grade-intro">Before you take a trade, write why. A pro can name the
+        <b>setup</b>, the <b>size</b> and the <b>exit</b> before they ever click buy.</p>
+      <form id="gradeForm" novalidate>
+        <label class="grade-sr" for="gradeReason">Why are you taking this trade?</label>
+        <textarea id="gradeReason" rows="3" maxlength="1200"
+          placeholder="e.g. RSI bounced off 30 and MACD crossed up. $60 probe out of a $300 pot. Stop at -50%, take profit at +32%."></textarea>
+        <div class="grade-row">
+          <button class="add-btn" id="gradeBtn" type="submit">Grade my reason</button>
+          <span class="grade-count" id="gradeCount">0 / 1200</span>
+        </div>
+      </form>
+      <div class="grade-result" id="gradeResult" role="status" aria-live="polite"></div>
+      <p class="grade-note">Graded by Jev (TypeSafe AI) through Vercel. What you type is sent
+        there to be graded, so leave out anything personal. It checks your plan, not whether
+        the trade will win.</p>
+    </div>
     <div id="coachBody"></div>
   </section>
 
