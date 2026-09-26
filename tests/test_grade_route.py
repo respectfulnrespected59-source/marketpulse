@@ -1,6 +1,6 @@
 """POST /api/grade-reason through the real request handler.
 
-Runs app.Handler on a loopback port. The Jev call itself is faked, so these
+Runs app.Handler on a loopback port. The model call itself is faked, so these
 tests pin the route's contract: what it refuses, what it spends a call on,
 and what it tells the browser when the grader fails.
 """
@@ -45,8 +45,7 @@ def calls(monkeypatch):
         return SOLID
 
     monkeypatch.setattr(grader, "grade", _fake)
-    monkeypatch.setenv(grader.KEY_ENV, "vck_route_test_key")
-    monkeypatch.delenv(grader.BACKUP_KEY_ENV, raising=False)
+    monkeypatch.setenv(grader.KEY_ENV, "sk-or-route-test-key")
     monkeypatch.setattr(app, "_GRADE_LIMITER", grader.GradeLimiter())
     return sent
 
@@ -102,12 +101,12 @@ def test_rate_limited_is_429(server, calls, monkeypatch):
 
 def test_grader_failure_is_502_without_the_detail(server, calls, monkeypatch):
     def _down(reason, **_kw):
-        raise grader.GraderUnavailable("gateway HTTP 403: vck_route_test_key rejected")
+        raise grader.GraderUnavailable("grader HTTP 403: sk-or-route-test-key rejected")
 
     monkeypatch.setattr(grader, "grade", _down)
     status, out = post(server, {"reason": REASON})
     assert status == 502
-    assert "vck_route_test_key" not in json.dumps(out)
+    assert "sk-or-route-test-key" not in json.dumps(out)
     assert "403" not in out["error"]
 
 

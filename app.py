@@ -190,7 +190,7 @@ def clean_ema_periods(raw: str | None) -> tuple[int, ...]:
 UPSTREAM_ERROR_MESSAGE = "Market data is temporarily unavailable. Try again shortly."
 GRADER_ERROR_MESSAGE = "The grader is not answering right now. Try again in a minute."
 
-# One limiter for the whole process: Grade My Reason spends real gateway calls.
+# One limiter for the whole process: Grade My Reason spends real paid-model calls.
 _GRADE_LIMITER = grader.GradeLimiter()
 
 
@@ -1284,7 +1284,7 @@ class Handler(BaseHTTPRequestHandler):
         """Grade My Reason (see grader.py).
 
         Checks run cheapest first, and only a request that passes all of them
-        spends a gateway call: switched on, valid text, then the limiter.
+        spends a model call: switched on, valid text, then the limiter.
         """
         if not grader.enabled():
             return self._json({"error": "Grade My Reason is not switched on here."}, code=503)
