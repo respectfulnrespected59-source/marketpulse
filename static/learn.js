@@ -887,7 +887,7 @@ function learnWireCoach() {
 }
 
 /* ---- Grade My Reason -------------------------------------------------- */
-/* Write WHY before a trade; the server asks Jev (grader.py) whether the reason
+/* Write WHY before a trade; the server asks Nemotron (grader.py) whether the reason
  * names a setup, a size and an exit. It grades the plan, never the trade. The
  * card stays hidden unless /api/universe reports a grader key. */
 
@@ -907,18 +907,12 @@ const GRADE_VERDICTS = {
 
 function gradeRender(out) {
   const verdict = GRADE_VERDICTS[out.label] || GRADE_VERDICTS["no plan"];
-  // The backup answers yes/no only; showing "100%" would invent a confidence it never gave.
-  const backup = out.graded_by === "backup";
+  // The grader answers yes/no only; showing "100%" would invent a confidence it never gave.
   const rows = Object.keys(GRADE_CHECK_LABELS).map((key) => {
-    const p = out.checks && typeof out.checks[key] === "number" ? out.checks[key] : 0;
-    const ok = p >= 0.5;
-    const pct = backup ? "" : `<span class="grade-p">${learnPct(p)}</span>`;
+    const ok = Boolean(out.checks && out.checks[key]);
     return `<li class="${ok ? "is-ok" : "is-miss"}"><span class="grade-mark">${ok ? "✓" : "✗"}</span>
-      <b>${learnEsc(GRADE_CHECK_LABELS[key])}</b>${pct}</li>`;
+      <b>${learnEsc(GRADE_CHECK_LABELS[key])}</b></li>`;
   }).join("");
-  const source = backup
-    ? `<p class="grade-source">Graded by the backup model (Nemotron) because Jev was busy.</p>`
-    : "";
   const tips = (out.missing || []).filter((key) => GRADE_TIPS[key])
     .map((key) => `<li>${learnEsc(GRADE_TIPS[key])}</li>`).join("");
   const hype = out.hype
@@ -926,7 +920,7 @@ function gradeRender(out) {
     : "";
   return `<div class="grade-verdict ${verdict.cls}">${learnEsc(verdict.text)}</div>
     <ul class="grade-checks">${rows}</ul>${hype}
-    ${tips ? `<ul class="grade-tips">${tips}</ul>` : ""}${source}`;
+    ${tips ? `<ul class="grade-tips">${tips}</ul>` : ""}`;
 }
 
 async function gradeSubmit(e) {

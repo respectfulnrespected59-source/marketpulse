@@ -234,7 +234,7 @@
       </div>
       <button class="add-btn ghost" id="coachReset" type="button">Clear my record</button>
     </div>
-    <!-- Grade My Reason: write WHY before a trade and Jev checks it against the
+    <!-- Grade My Reason: write WHY before a trade and Nemotron checks it against the
          pre-buy checklist. Grades the plan, never the trade. Stays hidden
          unless the server has a grader key (see grader.py). -->
     <div class="coach-card grade-card" id="gradeCard" hidden>
@@ -251,9 +251,8 @@
         </div>
       </form>
       <div class="grade-result" id="gradeResult" role="status" aria-live="polite"></div>
-      <p class="grade-note">Graded by Jev (TypeSafe AI) through Vercel, with NVIDIA Nemotron as
-        the backup when Jev is busy. What you type is sent there to be graded, so leave out
-        anything personal. It checks your plan, not whether the trade will win.</p>
+      <p class="grade-note">Graded by NVIDIA Nemotron through OpenRouter. What you type is sent there to be
+        graded, so leave out anything personal. It checks your plan, not whether the trade will win.</p>
     </div>
     <div id="coachBody"></div>
   </section>
