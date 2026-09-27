@@ -17,7 +17,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-import config
+import agent_config as config
 
 _PROPOSALS = "proposals.json"
 _LEDGER = "ledger.json"
@@ -120,17 +120,21 @@ def get_proposal(pid: str) -> dict | None:
 
 
 # ----------------------------------------------------------------- ledger
-def record_spend(usd: str, symbol: str, order_id: str | None) -> None:
+def record_spend(usd: str, symbol: str, order_id: str | None, mode: str = "paper") -> None:
     ledger = _read_json(_LEDGER, [])
     ledger.append({"ts": int(time.time()), "usd": str(usd),
-                   "symbol": symbol, "order_id": order_id})
+                   "symbol": symbol, "order_id": order_id, "mode": mode})
     _write_json(_LEDGER, ledger)
 
 
-def spend_last_24h() -> float:
+def spend_last_24h(mode: str | None = None) -> float:
+    """24h spend, optionally for one mode only. Paper and live budgets are
+    separate: fake-money practice must never use up the real daily cap.
+    Records written before modes existed count as paper."""
     cutoff = time.time() - 24 * 3600
     ledger = _read_json(_LEDGER, [])
-    return sum(float(r["usd"]) for r in ledger if r["ts"] >= cutoff)
+    return sum(float(r["usd"]) for r in ledger
+               if r["ts"] >= cutoff and (mode is None or r.get("mode", "paper") == mode))
 
 
 # ----------------------------------------------------------------- circuit

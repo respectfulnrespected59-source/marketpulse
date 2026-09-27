@@ -111,13 +111,16 @@ PRO_ONLY = [
     # you decide the free edition should include it.
     "agent/README.md",
     "agent/.env.example",
-    "agent/config.py",
+    "agent/agent_config.py",
+    "agent/credentials.py",
+    "agent/desk.py",
     "agent/store.py",
     "agent/guardrails.py",
     "agent/broker.py",
     "agent/proposer.py",
     "agent/cli.py",
-    "tests/test_guardrails.py",   # needs agent/
+    "tests/test_guardrails.py",
+    "tests/test_money_core.py",   # needs agent/
 ]
 
 EDITIONS = {

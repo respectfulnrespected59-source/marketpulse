@@ -52,6 +52,26 @@ CRYPTO_UNIVERSE = {
 MAX_SINGLE_TX_USD = Decimal(os.environ.get("MP_MAX_SINGLE_TX_USD", "100"))
 MAX_DAILY_SPEND_USD = Decimal(os.environ.get("MP_MAX_DAILY_SPEND_USD", "400"))
 
+# LIVE-MONEY CEILINGS (owner decision 2026-09-27, one-week pilot). These are
+# constants, NOT env-overridable: a buyer or a typo can lower the live caps via
+# the settings above, but nothing can raise them past these. See caps().
+LIVE_MAX_SINGLE_TX_USD = Decimal("25")
+LIVE_MAX_DAILY_SPEND_USD = Decimal("100")
+# Exits are deliberately uncapped (owner: auto may close positions). This is NOT
+# a policy cap, only a sanity stop for a data bug (a mis-read quantity): at
+# $100/day a one-week pilot cannot build a position anywhere near this size.
+LIVE_SELL_SANITY_USD = LIVE_MAX_DAILY_SPEND_USD * 20
+
+
+def caps(mode: str) -> tuple[Decimal, Decimal]:
+    """(per-trade cap, 24h cap) in force for this mode. Live is always clamped
+    to the hard ceilings; paper uses the configured values as-is."""
+    if mode == "live":
+        return (min(MAX_SINGLE_TX_USD, LIVE_MAX_SINGLE_TX_USD),
+                min(MAX_DAILY_SPEND_USD, LIVE_MAX_DAILY_SPEND_USD))
+    return MAX_SINGLE_TX_USD, MAX_DAILY_SPEND_USD
+
+
 # Notional sized per proposal (kept <= MAX_SINGLE_TX_USD).
 PER_TRADE_USD = Decimal(os.environ.get("MP_PER_TRADE_USD", "50"))
 

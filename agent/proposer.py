@@ -22,7 +22,7 @@ import os
 import sys
 import time
 
-import config
+import agent_config as config
 import guardrails
 import store
 

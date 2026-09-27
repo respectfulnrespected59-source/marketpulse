@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 
-import config
+import agent_config as config
 import guardrails as gr
 import store
 
@@ -29,6 +29,9 @@ def isolated_state(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
     yield
+
+
+OPEN = {"is_open": True}  # market-hours guard: these tests are about other checks
 
 
 def _proposal(**overrides):
@@ -176,35 +179,35 @@ def test_a_win_resets_loss_streak():
 
 # ----------------------------------------------------------------- full gate
 def test_authorize_send_happy_path_passes_and_audits():
-    gr.authorize_send(_proposal(), current_price=100.2)
+    gr.authorize_send(_proposal(), current_price=100.2, clock=OPEN)
     events = [a["event"] for a in store.read_audit()]
     assert "authorized" in events
 
 
 def test_authorize_send_without_live_price_fails_closed():
     with pytest.raises(gr.SlippageError):
-        gr.authorize_send(_proposal(), current_price=None)
+        gr.authorize_send(_proposal(), current_price=None, clock=OPEN)
 
 
 def test_authorize_send_blocks_when_halted():
     store.engage_halt("test")
     with pytest.raises(gr.HaltError):
-        gr.authorize_send(_proposal(), current_price=100.0)
+        gr.authorize_send(_proposal(), current_price=100.0, clock=OPEN)
 
 
 def test_authorize_send_blocks_off_universe_symbol():
     with pytest.raises(gr.DisallowedSymbolError):
-        gr.authorize_send(_proposal(symbol="FAKE"), current_price=100.0)
+        gr.authorize_send(_proposal(symbol="FAKE"), current_price=100.0, clock=OPEN)
 
 
 def test_authorize_send_blocks_oversized_buy():
     big = _proposal(notional=str(config.MAX_SINGLE_TX_USD + Decimal("1")))
     with pytest.raises(gr.SpendLimitError):
-        gr.authorize_send(big, current_price=100.2)
+        gr.authorize_send(big, current_price=100.2, clock=OPEN)
 
 
 def test_authorize_send_sell_skips_spend_cap():
     # A sell reduces exposure; an oversized notional must NOT be spend-capped.
     sell = _proposal(side="sell",
                      notional=str(config.MAX_SINGLE_TX_USD + Decimal("500")))
-    gr.authorize_send(sell, current_price=100.0)  # passes other gates, no raise
+    gr.authorize_send(sell, current_price=100.0, clock=OPEN)  # passes other gates, no raise

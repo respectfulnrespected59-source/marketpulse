@@ -20,7 +20,7 @@ def load_config(monkeypatch, env_value, host=None, render=None):
     """Load the ROOT config.py fresh, with MP_TIER / HOST / RENDER set.
 
     Loaded by path rather than `import config`: conftest puts agent/ first on
-    sys.path so a bare import resolves to agent/config.py, which is a different
+    sys.path so a bare import resolves to agent/agent_config.py (formerly agent/config.py), which is a different
     module entirely. Executing the file fresh each call is also what lets us see
     boot-time behaviour, since the env is read at import.
     """

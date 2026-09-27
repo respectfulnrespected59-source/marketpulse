@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
-import config
+import agent_config as config
 import store
 
 
@@ -42,24 +42,69 @@ class DisallowedSymbolError(GuardrailError):
     pass
 
 
+class MarketClosedError(GuardrailError):
+    pass
+
+
+class LiveNotPermittedError(GuardrailError):
+    pass
+
+
 # --------------------------------------------------------------- spend limits
-def check_spend(usd: Decimal) -> None:
-    """Per-trade ceiling + 24h rolling daily ceiling. Does NOT record;
+def check_spend(usd: Decimal, mode: str = "paper") -> None:
+    """Per-trade ceiling + 24h rolling daily ceiling for this mode (live is
+    clamped to the hard ceilings in agent_config.caps). Does NOT record;
     recording happens only after a successful send (see record_spend)."""
+    single, daily_cap = config.caps(mode)
     if usd <= 0:
         raise SpendLimitError(f"Non-positive notional: {usd}")
-    if usd > config.MAX_SINGLE_TX_USD:
+    if usd > single:
+        raise SpendLimitError(f"${usd} exceeds the {mode} per-trade cap ${single}")
+    daily = Decimal(str(store.spend_last_24h(mode)))
+    if daily + usd > daily_cap:
         raise SpendLimitError(
-            f"${usd} exceeds per-trade cap ${config.MAX_SINGLE_TX_USD}")
-    daily = Decimal(str(store.spend_last_24h()))
-    if daily + usd > config.MAX_DAILY_SPEND_USD:
-        raise SpendLimitError(
-            f"24h spend ${daily} + ${usd} exceeds daily cap "
-            f"${config.MAX_DAILY_SPEND_USD}")
+            f"24h {mode} spend ${daily} + ${usd} exceeds the daily cap ${daily_cap}")
 
 
-def record_spend(usd: Decimal, symbol: str, order_id: str | None) -> None:
-    store.record_spend(str(usd), symbol, order_id)
+def check_spend_value(raw, mode: str = "paper") -> Decimal:
+    """Parse an order size from a proposal, then check it. Anything that is not a
+    plain positive finite number (NaN, Infinity, 'abc', a negative) is refused as
+    a spend-limit breach, never allowed through as an odd exception."""
+    try:
+        usd = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        raise SpendLimitError(f"Not a valid order size: {raw!r}") from None
+    if not usd.is_finite():
+        raise SpendLimitError(f"Not a valid order size: {raw!r}")
+    check_spend(usd, mode=mode)
+    return usd
+
+
+def record_spend(usd: Decimal, symbol: str, order_id: str | None, mode: str = "paper") -> None:
+    store.record_spend(str(usd), symbol, order_id, mode=mode)
+
+
+# --------------------------------------------------------------- market hours
+def check_market_open(proposal: dict, clock: dict | None) -> None:
+    """A stock DAY order sent while the market is closed is QUEUED by Alpaca and
+    fills at the next open at whatever price the open prints: that walks right
+    around the slippage bound. So stock orders go only while the market is open.
+    An unknown clock counts as closed. Crypto trades 24/7."""
+    if proposal.get("kind") == "crypto":
+        return
+    if not clock or clock.get("is_open") is not True:
+        raise MarketClosedError(
+            "The stock market is closed. Approve during market hours "
+            "(9:30am-4pm ET) so the price you see is the price you get.")
+
+
+# --------------------------------------------------------------- live permission
+def check_live_permitted(mode: str, permitted: bool) -> None:
+    """Real money only when the caller has proven it is allowed (Pro license,
+    or the owner's pilot). Paper is always allowed."""
+    if mode == "live" and not permitted:
+        raise LiveNotPermittedError(
+            "Live trading is not switched on for this copy (needs MarketPulse Pro).")
 
 
 # --------------------------------------------------------------- kill switch
@@ -152,7 +197,9 @@ def record_trade_result(is_win: bool) -> None:
 
 
 # --------------------------------------------------------------- full gate
-def authorize_send(proposal: dict, current_price: float | None = None) -> None:
+def authorize_send(proposal: dict, current_price: float | None = None, *,
+                   mode: str = "paper", clock: dict | None = None,
+                   live_permitted: bool = False) -> None:
     """Run every independent control. Raises GuardrailError if any fails.
 
     This is the single chokepoint every order must pass. Order of checks is
@@ -160,31 +207,35 @@ def authorize_send(proposal: dict, current_price: float | None = None) -> None:
 
     `current_price` is a freshly pulled live price (see broker.latest_price).
     It is REQUIRED — omitting it means we cannot bound slippage, so we fail
-    closed rather than send blind.
+    closed rather than send blind. `clock` is Alpaca's market clock; without
+    it a stock order is treated as market-closed. `live_permitted` must be
+    True for a live-mode order to pass.
     """
     try:
         check_not_halted()
+        check_live_permitted(mode, live_permitted)
         check_symbol_allowed(proposal)
         check_fresh(proposal)
+        check_market_open(proposal, clock)
         if current_price is None:
             raise SlippageError(
                 "No live price supplied to authorize_send; refusing to send blind")
         check_slippage(proposal, current_price)
         if proposal["side"] == "buy":  # sells reduce exposure; don't spend-cap exits
-            check_spend(Decimal(str(proposal["notional"])))
+            check_spend_value(proposal.get("notional"), mode=mode)
     except GuardrailError as exc:
         # store.audit promises "every decision is logged, success or not" -- and a
         # refusal IS the decision this agent exists to make. Logging only the
         # approvals would leave the audit trail describing a system that never
         # says no. Record which control fired, then re-raise unchanged.
-        store.audit("refused", {"id": proposal.get("id"),
+        store.audit("refused", {"id": proposal.get("id"), "mode": mode,
                                 "symbol": proposal.get("symbol"),
                                 "side": proposal.get("side"),
                                 "notional": proposal.get("notional"),
                                 "control": type(exc).__name__,
                                 "reason": str(exc)})
         raise
-    store.audit("authorized", {"id": proposal["id"], "symbol": proposal["symbol"],
+    store.audit("authorized", {"id": proposal["id"], "mode": mode, "symbol": proposal["symbol"],
                                "side": proposal["side"], "notional": proposal["notional"],
                                "ref_price": proposal.get("ref_price"),
                                "live_price": current_price})
