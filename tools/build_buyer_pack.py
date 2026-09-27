@@ -35,6 +35,7 @@ BASE = [
     "app.py",
     "indicators.py",
     "config.py",
+    "licensing.py",
     "daily_plays.py",
     # app.py imports these at module load — omitting one makes the unzipped
     # app die on startup. strategy.py is here rather than with the agent
@@ -64,6 +65,7 @@ BASE = [
     "static/learn.js",
     "static/panels.js",
     "static/home.js",
+    "static/license.js",
     "static/wizards.js",
     "static/paper.js",
     # Ships in BOTH editions even though the options engine is Pro: index.html
@@ -126,7 +128,7 @@ EDITIONS = {
 }
 
 # Belt-and-suspenders: refuse to ship anything that smells like a secret/state.
-FORBIDDEN_SUBSTRINGS = (".env", "/data/", "__pycache__", "HALT", ".pyc")
+FORBIDDEN_SUBSTRINGS = (".env", "/data/", "__pycache__", "HALT", ".pyc", ".license_secret")
 
 
 def _safe(rel: str) -> bool:
