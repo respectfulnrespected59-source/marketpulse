@@ -52,6 +52,10 @@ BASE = [
     # amount control and its money math both went undefined in the delivered
     # zip while working fine in the repo.
     "static/index.html",
+    # "/" serves the landing page; the app itself is at /app.
+    "static/landing.html",
+    "static/landing/landing.css",
+    "static/landing/landing.js",
     "static/styles.css",
     "static/app.js",
     "static/chart.js",

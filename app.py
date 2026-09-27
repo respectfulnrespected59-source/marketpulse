@@ -7,7 +7,7 @@ Data sources (both free, no API key):
   - Crypto: CoinGecko /coins/markets (price, 24h change, 7d hourly sparkline)
   - Stocks: Yahoo Finance /v8/finance/chart (daily OHLC)
 
-Run:  python app.py   ->  open http://127.0.0.1:8000
+Run:  python app.py   ->  open http://127.0.0.1:8000/app  (the landing page is at /)
 """
 from __future__ import annotations
 
@@ -1596,9 +1596,17 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         # static files
-        rel = "index.html" if path in ("/", "") else path.lstrip("/")
+        # "/" is the public landing; the app itself lives at /app.
+        rel = {"/": "landing.html", "": "landing.html",
+               "/app": "index.html", "/app/": "index.html"}.get(path, path.lstrip("/"))
         full = os.path.normpath(os.path.join(STATIC, rel))
-        if not full.startswith(STATIC) or not os.path.isfile(full):
+        # Compare whole path components: a bare startswith(STATIC) also admits a
+        # sibling like "static-evil/" because "static" is its string prefix.
+        try:
+            inside = os.path.commonpath([STATIC, full]) == STATIC
+        except ValueError:  # Windows: a different drive ("/D:/x") shares no path at all
+            inside = False
+        if not inside or not os.path.isfile(full):
             return self._send(404, b"Not found", "text/plain")
         ctype = {
             ".html": "text/html", ".js": "text/javascript", ".css": "text/css",

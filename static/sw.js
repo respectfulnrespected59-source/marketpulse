@@ -12,10 +12,13 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v17";
+const SHELL_VERSION = "mp-shell-v18";
 const SHELL_ASSETS = [
   "/",
+  "/app",
   "/index.html",
+  "/landing/landing.css",
+  "/landing/landing.js",
   "/styles.css",
   "/app.js",
   "/chart.js",
@@ -62,16 +65,26 @@ self.addEventListener("fetch", (event) => {
   // Only handle our own origin's shell requests.
   if (url.origin !== self.location.origin) return;
 
-  // Navigations: network-first (freshest HTML), fall back to cached shell offline.
+  // Navigations: network-first (freshest HTML), fall back to cached page offline.
+  // Each page is cached under its OWN path: "/" is the landing and "/app" is the
+  // app, so caching every navigation under one key would let a landing visit
+  // overwrite the app shell and open the installed app on the marketing page.
   if (req.mode === "navigate") {
+    const key = url.pathname === "/app/" ? "/app" : url.pathname;
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(SHELL_VERSION).then((c) => c.put("/index.html", copy));
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(SHELL_VERSION).then((c) => c.put(key, copy));
+          }
           return res;
         })
-        .catch(() => caches.match("/index.html"))
+        // Offline: the page's own copy, else the app shell. The landing gets no
+        // fallback on purpose: an offline visitor shouldn't be dropped into the app.
+        .catch(() =>
+          caches.match(key).then((hit) => hit || (key === "/" ? undefined : caches.match("/app")))
+        )
     );
     return;
   }

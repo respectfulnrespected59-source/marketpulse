@@ -110,8 +110,8 @@ async function renderHomeState() {
   box.innerHTML = `<div class="hs hs-scan">Reading the board…</div>`;
   try {
     const [stocks, crypto] = await Promise.all([
-      fetch("/api/markets?kind=stocks").then((r) => r.json()).catch(() => ({ rows: [] })),
-      fetch("/api/markets?kind=crypto").then((r) => r.json()).catch(() => ({ rows: [] })),
+      fetch("/api/markets?type=stocks").then((r) => r.json()).catch(() => ({ rows: [] })),
+      fetch("/api/markets?type=crypto").then((r) => r.json()).catch(() => ({ rows: [] })),
     ]);
     const rows = [...(stocks.rows || []), ...(crypto.rows || [])].filter((r) => !r.error);
     if (!rows.length) {
