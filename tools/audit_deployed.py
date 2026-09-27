@@ -50,7 +50,7 @@ MARKERS = {
     "onChange: dcaScheduleRerun": ("wizards.js", True),
     "function forwardToApp": ("landing/landing.js", True),  # installed app -> /app
     "api/markets?kind=": ("home.js", False),
-    "@keyframes mp-mol": ("brand.css", True),  # the heartbeat -> melanin loop  # the OLD cockpit bug (counted crypto twice)
+    "@keyframes mp-mol": ("brand.css", True),  # the heartbeat -> melanin loop
 }
 
 TIMEOUT_S = 60

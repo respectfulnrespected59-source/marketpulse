@@ -429,6 +429,7 @@ h1 em, h2 em {
   .nav-links a { padding: 16px 24px; border-top: 1px solid var(--line); }
   .nav.open .nav-links { transform: none; opacity: 1; pointer-events: auto; }
   .nav-burger { display: block; }
+  .nav-cta { margin-left: auto; }  /* the links collapse into the menu, so push the group right */
   .link-mono { display: none; }
   .feed-grid, .price-grid, .beyond-grid { grid-template-columns: 1fr; }
   .vs-grid { grid-template-columns: 1fr; }
@@ -440,7 +441,9 @@ h1 em, h2 em {
 @media (max-width: 560px) {
   .hero { padding: 52px 0 50px; }
   .nav { gap: 12px; }
-  .nav-cta .btn { padding: 10px 14px; font-size: 11px; letter-spacing: 0.1em; }
+  .nav-cta { gap: 10px; }
+  .nav-cta .btn { padding: 10px 13px; font-size: 11px; letter-spacing: 0.1em; white-space: nowrap; }
+  .wide-only { display: none; }
   .status-list { grid-template-columns: 1fr; }
   .kicker { font-size: 10.5px; letter-spacing: 0.16em; gap: 9px; }
   .kicker::before { width: 18px; }
@@ -455,6 +458,10 @@ h1 em, h2 em {
   .status-board > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .foot-grid { grid-template-columns: 1fr; }
   .btn-lg { width: 100%; }
+}
+/* Smallest phones: the wordmark needs the row; the hero's big gold CTA sits right below. */
+@media (max-width: 374px) {
+  .nav-cta .btn { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
