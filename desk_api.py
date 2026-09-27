@@ -195,7 +195,8 @@ def _state(headers, license_check) -> dict:
         "live": {"permitted": permitted, "why": why},
         "pilot": pilot.status(),
         "settings": desk.settings(),
-        "loop": {k: _LOOP[k] for k in ("every_min", "last", "last_result")},
+        "loop": {**{k: _LOOP[k] for k in ("every_min", "last", "last_result")},
+                 "heartbeat": desk.last_tick()},    # the app loop OR the scheduled task
         "pending": [_view(p) for p in proposals if p.get("status") == "pending"],
         "recent": [_view(p) for p in proposals if p.get("status") != "pending"][-15:][::-1],
         "report": desk.report(7),

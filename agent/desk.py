@@ -313,8 +313,19 @@ def tick(*, live_permitted: bool, scan=None) -> dict:
         notify.send(toast)
     exits = auto_exit_pass(live_permitted=live_permitted) if settings()["auto_exits"] else []
     refresh_fills()
-    return {"ran": True, "new": len(new), "notified": bool(toast),
-            "auto_exits": [r["status"] for r in exits]}
+    out = {"ran": True, "new": len(new), "notified": bool(toast),
+           "auto_exits": [r["status"] for r in exits]}
+    # Heartbeat: proof the scheduled scans are really running, shown on the desk.
+    store.write_json(HEARTBEAT_FILE, {"ts": int(time.time()), **out})
+    return out
+
+
+HEARTBEAT_FILE = "last_tick.json"
+
+
+def last_tick() -> dict | None:
+    beat = store.read_json(HEARTBEAT_FILE, None)
+    return beat if isinstance(beat, dict) and isinstance(beat.get("ts"), int) else None
 
 
 # ------------------------------------------------------------------ receipts

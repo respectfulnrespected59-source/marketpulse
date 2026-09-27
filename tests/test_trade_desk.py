@@ -503,3 +503,12 @@ def test_reconcile_does_not_wait_on_a_running_approval(alpaca):
         started = time.monotonic()
         assert desk.reconcile() == 0
         assert time.monotonic() - started < 2
+
+
+def test_every_tick_leaves_a_heartbeat_and_a_disconnected_one_does_not(alpaca):
+    assert desk.tick(live_permitted=False, scan=lambda: [])["ran"] is False
+    assert desk.last_tick() is None
+    connect()
+    desk.tick(live_permitted=False, scan=lambda: [])
+    beat = desk.last_tick()
+    assert beat and abs(beat["ts"] - time.time()) < 5 and beat["new"] == 0

@@ -120,7 +120,9 @@
       s.mode === "live" ? "LIVE · real money" : "PAPER · practice money");
     h.append(badge);
     const loop = s.loop || {};
-    const every = loop.every_min ? `Scans every ${loop.every_min} min · last ${ago(loop.last)}` : "Background scan off";
+    const beat = loop.heartbeat && loop.heartbeat.ts;
+    const every = beat ? `Last scan ${ago(beat)}${loop.every_min ? ` · every ${loop.every_min} min` : ""}`
+      : loop.every_min ? `Scans every ${loop.every_min} min · first scan soon` : "Background scan off";
     h.append(el("span", "desk-loop", every));
     return h;
   }
