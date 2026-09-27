@@ -66,6 +66,7 @@ BASE = [
     "static/panels.js",
     "static/home.js",
     "static/license.js",
+    "static/desk.js",       # Trade desk UI; hides itself unless the local desk API answers
     "static/wizards.js",
     "static/paper.js",
     # Ships in BOTH editions even though the options engine is Pro: index.html

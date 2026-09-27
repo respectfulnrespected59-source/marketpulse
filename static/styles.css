@@ -61,6 +61,13 @@ body {
 
 /* Desk-grade tabs: mono caps, line icons, a gold underline marks where you are. */
 .tabs { display: flex; gap: 2px; margin-left: 12px; align-self: stretch; }
+/* One line needs ~1600px (brand + 12 tabs + clock). Narrower, the tabs take their
+   own full row (scrolling if they must) instead of pushing the page sideways. */
+@media (max-width: 1620px) {
+  .topbar { flex-wrap: wrap; row-gap: 0; }
+  .tabs { order: 3; width: 100%; margin-left: 0; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+}
 .tab {
   display: inline-flex; align-items: center; white-space: nowrap;
   font: 600 11.5px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase;
@@ -1388,3 +1395,46 @@ body.mp-lock-scroll .foot { display: none; }
 .lic-msg { margin: 10px 0 0; min-height: 1.2em; font-size: 12.5px; color: var(--text-dim); }
 .lic-active { margin: 10px 0 14px; font-size: 14px; color: var(--text-dim); }
 .lic-active b { color: var(--gold); }
+
+/* Trade desk (Alpaca). Paper reads calm; LIVE is unmistakable. */
+.tab[hidden] { display: none; }   /* .tab's display:inline-flex would beat [hidden] */
+.trade { position: relative; z-index: 1; padding: 18px 26px 40px; }
+@media (max-width: 560px) { .trade { padding: 14px 16px 40px; } }
+.desk-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.desk-head .panel-title { margin-right: 4px; }
+.desk-mode {
+  font-family: var(--mono); font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line);
+}
+.desk-mode.is-paper { color: var(--buy); background: var(--buy-soft); border-color: rgba(47, 209, 128, 0.35); }
+.desk-mode.is-live { color: #1a0f00; background: var(--gold); border-color: var(--gold);
+  box-shadow: 0 0 18px rgba(232, 194, 90, 0.35); }
+.desk-loop { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.desk-alerts { display: grid; gap: 8px; margin: 10px 0; }
+.desk-alerts:empty { display: none; }
+.desk-alert {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45;
+  border: 1px solid var(--line); background: var(--surface);
+}
+.desk-alert.bad { border-color: rgba(255, 93, 108, 0.55); background: var(--sell-soft); }
+.desk-alert.warn { border-color: rgba(232, 194, 90, 0.55); background: rgba(232, 194, 90, 0.10); }
+.desk-alert.ok { border-color: rgba(47, 209, 128, 0.45); background: var(--buy-soft); }
+.desk-alert .ltc-tool { margin-left: auto; }
+.desk-controls { margin: 4px 0 8px; }
+.desk-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.desk-kill { color: var(--sell); border-color: rgba(255, 93, 108, 0.5); margin-left: auto; }
+.desk-prop.is-buy { border-left: 3px solid var(--buy); }
+.desk-prop.is-sell { border-left: 3px solid var(--sell); }
+.desk-sym { font-weight: 700; color: var(--text); }
+.desk-label { color: var(--gold); }
+.desk-approve { color: var(--buy); border-color: rgba(47, 209, 128, 0.5); }
+.desk-why { flex-basis: 100%; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+.desk-report { margin-top: 6px; }
+.desk-keys { margin: 22px 0 8px; max-width: 720px; }
+.desk-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.desk-modes { display: flex; gap: 14px; flex-basis: 100%; margin: 2px 0; }
+@media (max-width: 560px) {
+  .desk-loop { margin-left: 0; flex-basis: 100%; }
+  .desk-kill { margin-left: 0; }
+}

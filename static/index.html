@@ -62,6 +62,7 @@
       <button class="tab" data-view="dca"><i class="mi mi-sprout" aria-hidden="true"></i>DCA</button>
       <button class="tab" data-view="live"><i class="mi-live" aria-hidden="true"></i>Live</button>
       <button class="tab" data-view="paper"><i class="mi mi-doc" aria-hidden="true"></i>Paper</button>
+      <button class="tab" data-view="trade" hidden><i class="mi mi-dollar" aria-hidden="true"></i>Trade</button>
       <button class="tab" data-view="proof"><i class="mi mi-shield" aria-hidden="true"></i>Proof</button>
     </nav>
 
@@ -460,6 +461,10 @@
   </section>
 
   <!-- Paper trading: your rules, real prices, no real order ever placed. -->
+  <!-- The Trade desk (Alpaca). desk.js fills it; the tab only appears on the
+       buyer's own computer, where the local server offers a desk session. -->
+  <section class="trade" id="tradePanel" hidden></section>
+
   <section class="paper" id="paperPanel" hidden>
     <h2 class="panel-title"><i class="mi mi-doc" aria-hidden="true"></i>Paper Trading</h2>
     <p class="panel-sub">
@@ -577,6 +582,7 @@
   <script src="panels.js"></script>
   <script src="home.js"></script>
   <script src="license.js"></script>
+  <script src="desk.js"></script>
   <script src="wizards.js"></script>
   <script src="paper.js"></script>
   <script src="options-paper.js"></script>

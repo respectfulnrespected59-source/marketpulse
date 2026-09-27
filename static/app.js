@@ -418,7 +418,8 @@ function setView(v) {
   const isLive = v === "live";
   const isPaper = v === "paper";
   const isCoach = v === "coach";
-  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper || isCoach;
+  const isTrade = v === "trade";
+  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper || isCoach || isTrade;
   $("#homePanel").hidden = !isHome;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
@@ -427,11 +428,14 @@ function setView(v) {
   $("#livePanel").hidden = !isLive;
   $("#paperPanel").hidden = !isPaper;
   $("#coachPanel").hidden = !isCoach;
+  $("#tradePanel").hidden = !isTrade;
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
   if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
+  if (!isTrade && window.mpDeskHide) window.mpDeskHide();  // the desk polls only while open
   if (isHome) { renderHome(); return; }
+  if (isTrade) { if (window.mpDeskShow) window.mpDeskShow(); return; }
   // Recomputed on every visit rather than cached: the record changes whenever
   // a call is made on the Live tab, and a stale grade is worse than none.
   if (isCoach) { renderCoach(); return; }
