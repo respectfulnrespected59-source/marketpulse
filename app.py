@@ -1732,7 +1732,11 @@ def main():
     if desk_api is not None and desk_api.enabled(server.server_address):
         # The desk link carries its token in the #fragment; only this console
         # (and the owner-only launch page) ever sees it.
-        print(f"  Trade desk (this computer only): {desk_api.desk_url(shown, PORT)}\n")
+        # The link unlocks the desk: show it in an interactive window only, never
+        # in a log file someone redirected the output to.
+        link = (desk_api.desk_url(shown, PORT) if sys.stdout.isatty()
+                else f"http://{shown}:{PORT}/app (unlock link hidden: output is not a console)")
+        print(f"  Trade desk (this computer only): {link}\n")
         if open_browser:
             webbrowser.open(desk_api.open_page(shown, PORT))
         # Scans for proposals while the app is open; auto-exits only if switched on.

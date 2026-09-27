@@ -32,6 +32,7 @@ import agent_config as config
 import broker
 import credentials
 import guardrails
+import notify
 import oslock
 import store
 
@@ -65,6 +66,7 @@ class _MaybeSent(Exception):
 
 
 SEND_STUCK_S = 300      # a 'sending' this old was interrupted mid-send: settle it with Alpaca
+NOT_FOUND_TRUST_S = 60  # Alpaca may not index a brand-new order at once: trust "not found" only after this
 
 
 def _result(ok: bool, pid: str, status: str, message: str, **extra) -> dict:
@@ -161,7 +163,10 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
         if p["side"] == "buy":
             order = broker.submit_order(symbol, "buy", notional=p["notional"], client_order_id=pid)
         else:
-            held = broker.position(symbol)
+            try:
+                held = broker.position(symbol)
+            except broker.BrokerError as exc:   # a READ failed: no order was attempted
+                return _block(pid, f"Couldn't read the position from Alpaca, so nothing was sent: {exc}")
             if not held:
                 return _block(pid, "There is no open position to close.")
             exit_pl = float(held.get("unrealized_pl", 0) or 0)
@@ -216,16 +221,21 @@ def _mark_submitted(pid: str, **fields) -> None:
     raise _SentButUnrecorded(fields.get("broker_order_id"), fields.get("mode"))
 
 
+def _provisional(pid: str) -> str:
+    """Ledger tag for the spend of an order whose reply never came."""
+    return f"unconfirmed:{pid}"
+
+
 def _unconfirmed(p: dict, mode: str, auto: bool, exc: Exception) -> dict:
     """No usable reply to an order: it may or may not exist. Never call that
     "refused". A buy's spend is counted now (the safe side of the daily cap)
     and refresh_fills settles the truth with Alpaca by our own order id."""
     pid = p["id"]
     try:
-        store.update_proposal(pid, status="unconfirmed", mode=mode, auto=auto,
+        store.update_proposal(pid, status="unconfirmed", mode=mode, auto=auto, unconfirmed_since=time.time(),
                               note="Alpaca didn't answer in time; checking whether the order was placed.")
         if p["side"] == "buy":
-            guardrails.record_spend(Decimal(str(p["notional"])), p["symbol"], None, mode=mode)
+            guardrails.record_spend(Decimal(str(p["notional"])), p["symbol"], _provisional(pid), mode=mode)
     except Exception:  # noqa: BLE001
         raise _MaybeSent(mode) from None
     store.audit("unconfirmed", {"id": pid, "mode": mode, "error": type(exc).__name__})
@@ -298,9 +308,13 @@ def tick(*, live_permitted: bool, scan=None) -> dict:
         import proposer
         scan = proposer.scan
     new = scan()
+    toast = notify.message(new)        # a buy nobody sees in 30 minutes is a buy nobody approves
+    if toast:
+        notify.send(toast)
     exits = auto_exit_pass(live_permitted=live_permitted) if settings()["auto_exits"] else []
     refresh_fills()
-    return {"ran": True, "new": len(new), "auto_exits": [r["status"] for r in exits]}
+    return {"ran": True, "new": len(new), "notified": bool(toast),
+            "auto_exits": [r["status"] for r in exits]}
 
 
 # ------------------------------------------------------------------ receipts
@@ -327,13 +341,19 @@ def reconcile(now: float | None = None) -> int:
     if not any(stuck(p) for p in store.load_proposals()):
         return 0
     settled = 0
-    with _LOCK:
+    if not _LOCK.acquire(timeout=0.5):     # an approval is running: settle on the next pass
+        return 0
+    try:
         try:
             with FileLock(timeout=0):
                 for p in [p for p in store.load_proposals() if stuck(p)]:
                     try:
                         o = broker.get_order_by_client_id(p["id"])
                     except broker.NotFoundError:
+                        since = float(p.get("unconfirmed_since") or p.get("sending_since") or p.get("ts") or 0)
+                        if now - since < NOT_FOUND_TRUST_S:
+                            continue      # too soon to believe "not found"; ask again next pass
+                        store.remove_spend(_provisional(p["id"]))   # it never left: give the cap back
                         store.update_proposal(p["id"], status="blocked",
                                               note="Alpaca has no order with this id: it was never placed.")
                         store.audit("reconciled", {"id": p["id"], "found": False})
@@ -346,6 +366,8 @@ def reconcile(now: float | None = None) -> int:
                     settled += 1
         except DeskBusyError:
             return settled
+    finally:
+        _LOCK.release()
     return settled
 
 

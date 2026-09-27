@@ -232,6 +232,20 @@ def record_spend(usd: str, symbol: str, order_id: str | None, mode: str = "paper
                                                 "mode": mode}])
 
 
+def remove_spend(order_id: str) -> int:
+    """Drop ledger rows for one order id (a provisional spend for an order
+    Alpaca confirmed it never received). Returns how many rows went."""
+    with _locked():
+        ledger = _read_ledger()
+        kept = [r for r in ledger if r.get("order_id") != order_id]
+        if len(kept) != len(ledger):
+            _write_json(_LEDGER, kept)
+    gone = len(ledger) - len(kept)
+    if gone:
+        audit("spend_reversed", {"order_id": order_id, "rows": gone})
+    return gone
+
+
 def spend_last_24h(mode: str | None = None) -> float:
     """24h spend, optionally for one mode only. Paper and live budgets are
     separate: fake-money practice must never use up the real daily cap.

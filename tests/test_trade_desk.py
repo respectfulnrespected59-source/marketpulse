@@ -331,7 +331,7 @@ def test_reconcile_blocks_an_unconfirmed_order_alpaca_never_got():
     b._TRANSPORT = fake
     try:
         connect()
-        assert desk.reconcile() == 1
+        assert desk.reconcile(now=time.time() + desk.NOT_FOUND_TRUST_S + 1) == 1
     finally:
         b._TRANSPORT = old
     p = store.get_proposal("ghost")
@@ -416,3 +416,90 @@ def test_exit_pl_lives_on_the_proposal_not_the_audit_tail(alpaca, monkeypatch):
     assert store.get_proposal("s1")["exit_pl"] == 1.25
     monkeypatch.setattr(store, "read_audit", lambda limit=50: [])
     assert desk.report(7)["exit_pl_usd"] == {"paper": 1.25}
+
+
+# ------------------------------------------------------------------ notifications
+def test_the_toast_names_only_buys_and_never_amounts_or_ids():
+    import notify
+    msg = notify.message([{"id": "p-1-BTCUSD", "side": "buy", "symbol": "BTC/USD", "notional": "25"},
+                          {"side": "sell", "symbol": "ETH/USD"}])
+    assert msg.startswith("1 trade waiting") and "BUY BTC/USD" in msg
+    assert "25" not in msg and "p-1" not in msg and "ETH" not in msg
+    assert notify.message([{"side": "sell", "symbol": "ETH/USD"}]) is None
+
+
+def test_the_toast_text_cannot_break_out_of_its_quotes():
+    import notify
+    cleaned = notify._clean("x'); Stop-Computer; (\" & calc `whoami` $env:X")
+    for bad in ("'", '"', ";", "&", "`", "$"):
+        assert bad not in cleaned
+
+
+def test_notifications_can_be_switched_off(monkeypatch):
+    import notify
+    monkeypatch.setenv("MP_NOTIFY", "0")
+
+    def boom(*a, **k):
+        raise AssertionError("must not launch anything")
+
+    monkeypatch.setattr(notify.subprocess, "Popen", boom)
+    assert notify.send("hello") is False
+
+
+def test_tick_notifies_once_for_new_buys(alpaca, monkeypatch):
+    import notify
+    connect()
+    sent = []
+    monkeypatch.setattr(notify, "send", lambda text: sent.append(text) or True)
+    out = desk.tick(live_permitted=False, scan=lambda: [{"side": "buy", "symbol": "ETH/USD"}])
+    assert out["notified"] is True and len(sent) == 1 and "ETH/USD" in sent[0]
+    desk.tick(live_permitted=False, scan=lambda: [])
+    assert len(sent) == 1
+
+
+# ------------------------------------------------------------------ re-review fixes
+def _lost_buy(alpaca):
+    connect()
+    alpaca.lose_order_reply = True
+    add("b1")
+    desk.approve("b1", live_permitted=False)
+    alpaca.lose_order_reply = False
+    alpaca.seen_client_ids.discard("b1")         # Alpaca never actually got it
+
+
+def test_a_never_placed_unconfirmed_buy_gives_its_spend_back(alpaca):
+    _lost_buy(alpaca)
+    assert store.spend_last_24h("paper") == 20.0
+    desk.reconcile(now=time.time() + desk.NOT_FOUND_TRUST_S + 1)
+    assert store.get_proposal("b1")["status"] == "blocked"
+    assert store.spend_last_24h("paper") == 0.0
+
+
+def test_a_404_right_after_the_order_is_not_trusted_yet(alpaca):
+    _lost_buy(alpaca)
+    desk.reconcile()                              # Alpaca may not have indexed it yet
+    assert store.get_proposal("b1")["status"] == "unconfirmed"
+    assert store.spend_last_24h("paper") == 20.0
+
+
+def test_a_lost_reply_while_reading_a_position_is_blocked_not_unconfirmed(alpaca, monkeypatch):
+    connect()
+    add("s1", side="sell")
+
+    def lost(symbol):
+        raise broker.TransportError("Alpaca didn't answer (TimeoutError)")
+
+    monkeypatch.setattr(broker, "position", lost)
+    r = desk.approve("s1", live_permitted=False)
+    assert r["status"] == "blocked" and "nothing was sent" in r["message"]
+    assert alpaca.orders == []
+
+
+def test_reconcile_does_not_wait_on_a_running_approval(alpaca):
+    store.add_proposal({"id": "u1", "ts": time.time(), "kind": "crypto", "symbol": "BTC/USD",
+                        "side": "buy", "notional": "20", "status": "unconfirmed"})
+    connect()
+    with desk._LOCK:
+        started = time.monotonic()
+        assert desk.reconcile() == 0
+        assert time.monotonic() - started < 2
