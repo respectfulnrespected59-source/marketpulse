@@ -24,83 +24,30 @@ client_order_id is the second, independent guard against a double send.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
+from datetime import datetime
 from decimal import Decimal
 
 import agent_config as config
 import broker
 import credentials
 import guardrails
+import oslock
 import store
 
 _LOCK = threading.Lock()
 LOCK_FILE = ".desk.lock"
 
 
-class DeskBusyError(Exception):
+class DeskBusyError(oslock.BusyError):
     """Another approval (maybe in another process) holds the desk lock."""
 
 
-class FileLock:
-    """Cross-process exclusive lock on agent/data/.desk.lock (msvcrt on Windows,
-    fcntl elsewhere). Polls until `timeout`, then raises DeskBusyError."""
-
-    def __init__(self, timeout: float = 10.0) -> None:
-        self.timeout = timeout
-        self._fh = None
-
-    def acquire(self) -> None:
-        os.makedirs(config.DATA_DIR, exist_ok=True)
-        fh = open(os.path.join(config.DATA_DIR, LOCK_FILE), "a+b")
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                _lock(fh)
-                self._fh = fh
-                return
-            except OSError:
-                if time.monotonic() >= deadline:
-                    fh.close()
-                    raise DeskBusyError("Another approval is in progress. Try again in a moment.") from None
-                time.sleep(0.05)
-
-    def release(self) -> None:
-        if self._fh is not None:
-            try:
-                _unlock(self._fh)
-            finally:
-                self._fh.close()
-                self._fh = None
-
-    def __enter__(self) -> "FileLock":
-        self.acquire()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.release()
-
-
-if os.name == "nt":
-    import msvcrt
-
-    def _lock(fh) -> None:
-        fh.seek(0)
-        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-
-    def _unlock(fh) -> None:
-        fh.seek(0)
-        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-else:
-    import fcntl
-
-    def _lock(fh) -> None:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-    def _unlock(fh) -> None:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-
+def FileLock(timeout: float = 10.0) -> oslock.FileLock:  # noqa: N802 — kept as the old class name
+    """Cross-process exclusive lock on agent/data/.desk.lock."""
+    return oslock.FileLock(LOCK_FILE, timeout, DeskBusyError,
+                           "Another approval is in progress. Try again in a moment.")
 
 def _result(ok: bool, pid: str, status: str, message: str, **extra) -> dict:
     return {"ok": ok, "id": pid, "status": status, "message": message, **extra}
@@ -177,7 +124,7 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
     try:
         guardrails.authorize_send(p, current_price=live, mode=mode, clock=clock,
                                   live_permitted=live_permitted)
-    except guardrails.GuardrailError as exc:
+    except (guardrails.GuardrailError, store.LedgerError) as exc:
         return _block(pid, str(exc))
 
     exit_pl: float | None = None
@@ -212,7 +159,7 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
             guardrails.record_spend(Decimal(str(p["notional"])), symbol, oid, mode=mode)
         else:
             guardrails.record_trade_result(is_win=(exit_pl is None or exit_pl >= 0))
-            store.audit("exit_result", {"id": pid, "symbol": symbol, "unrealized_pl": exit_pl})
+            store.audit("exit_result", {"id": pid, "symbol": symbol, "unrealized_pl": exit_pl, "mode": mode})
     finally:
         store.audit("submitted", {"id": pid, "symbol": symbol, "side": p["side"], "mode": mode,
                                   "order_id": oid, "auto": auto})
@@ -221,20 +168,132 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
 
 
 def reject(pid: str) -> dict:
+    """Under the SAME locks as approve(): a reject from the CLI (another
+    process) must never overwrite a proposal an approval already claimed."""
     with _LOCK:
-        p = store.get_proposal(pid)
-        if not p or p.get("status") != "pending":
-            return _result(False, pid, (p or {}).get("status", "missing"), "Only a pending proposal can be rejected.")
-        store.update_proposal(pid, status="rejected")
+        try:
+            with FileLock():
+                p = store.get_proposal(pid)
+                if not p or p.get("status") != "pending":
+                    return _result(False, pid, (p or {}).get("status", "missing"),
+                                   "Only a pending proposal can be rejected.")
+                store.update_proposal(pid, status="rejected")
+        except DeskBusyError as exc:
+            return _result(False, pid, "pending", str(exc))
     store.audit("rejected", {"id": pid})
     return _result(True, pid, "rejected", "Rejected; nothing was sent.")
 
 
 def auto_exit_pass(*, live_permitted: bool) -> list[dict]:
     """Auto mode, owner decision 2026-09-27: auto may CLOSE positions on its own
-    (exits cap the downside); every new BUY still waits for a human Approve."""
+    (exits cap the downside); every new BUY still waits for a human Approve.
+
+    In live mode without permission it does nothing at all: approving would
+    only mark each exit 'blocked', and a blocked exit is one the human can no
+    longer approve. Left pending, it stays one click away."""
+    creds = credentials.load()
+    if creds is not None and creds.mode == "live" and not live_permitted:
+        store.audit("auto_exit_skipped", {"reason": "live not permitted"})
+        return []
     results = []
     for p in store.load_proposals():
         if p.get("status") == "pending" and p.get("side") == "sell":
             results.append(approve(p["id"], live_permitted=live_permitted, auto=True))
     return results
+
+
+# ------------------------------------------------------------------ settings
+SETTINGS_FILE = "desk_settings.json"
+_DEFAULTS = {"auto_exits": False}
+
+
+def settings() -> dict:
+    raw = store.read_json(SETTINGS_FILE, {})
+    raw = raw if isinstance(raw, dict) else {}
+    return {"auto_exits": raw.get("auto_exits") is True}   # anything odd reads as OFF
+
+
+def set_auto_exits(on: bool) -> dict:
+    new = {**settings(), "auto_exits": bool(on)}
+    store.write_json(SETTINGS_FILE, new)
+    store.audit("auto_exits", {"on": bool(on)})
+    return new
+
+
+# ------------------------------------------------------------------ the loop
+def tick(*, live_permitted: bool, scan=None) -> dict:
+    """One pass of the background loop: expire stale proposals, scan for new
+    ones, then (only if the owner switched auto-exits on) close positions whose
+    exit fired. Buys are never sent from here. `scan` is injectable for tests."""
+    if credentials.load() is None:
+        return {"ran": False, "why": "not connected"}
+    if scan is None:
+        import proposer
+        scan = proposer.scan
+    new = scan()
+    exits = auto_exit_pass(live_permitted=live_permitted) if settings()["auto_exits"] else []
+    refresh_fills()
+    return {"ran": True, "new": len(new), "auto_exits": [r["status"] for r in exits]}
+
+
+# ------------------------------------------------------------------ receipts
+_FINAL = {"filled", "canceled", "expired", "rejected", "done_for_day", "replaced"}
+
+
+def refresh_fills(limit: int = 10) -> int:
+    """Read the fill (qty, average price) of recently sent orders back from
+    Alpaca, so the desk shows what actually happened, not just "sent"."""
+    todo = [p for p in store.load_proposals()
+            if p.get("status") == "submitted" and p.get("broker_order_id")
+            and (p.get("fill") or {}).get("status") not in _FINAL][-limit:]
+    done = 0
+    for p in todo:
+        try:
+            o = broker.get_order(p["broker_order_id"])
+        except broker.BrokerError:
+            continue          # try again next pass; a receipt is never worth a crash
+        store.update_proposal(p["id"], fill={
+            "status": o.get("status"), "qty": o.get("filled_qty"),
+            "avg_price": o.get("filled_avg_price"), "at": o.get("filled_at")})
+        done += 1
+    return done
+
+
+# ------------------------------------------------------------------ report
+def report(days: float = 7, now: float | None = None) -> dict:
+    """What the agent did in the last `days`, split paper vs live. The go/no-go
+    evidence between the paper week and the live pilot."""
+    now = time.time() if now is None else now
+    since = now - days * 86400
+    rows = [p for p in store.load_proposals() if float(p.get("ts") or 0) >= since]
+    out = {"days": days, "proposed": len(rows), "by_status": {}, "modes": {}}
+    for p in rows:
+        out["by_status"][p.get("status", "?")] = out["by_status"].get(p.get("status", "?"), 0) + 1
+    for p in rows:
+        if p.get("status") != "submitted":
+            continue
+        m = out["modes"].setdefault(p.get("mode") or "paper", {
+            "buys": 0, "sells": 0, "auto_sells": 0, "filled": 0, "bought_usd": 0.0})
+        m["buys" if p["side"] == "buy" else "sells"] += 1
+        m["auto_sells"] += 1 if p["side"] == "sell" and p.get("auto") else 0
+        fill = p.get("fill") or {}
+        if fill.get("status") == "filled":
+            m["filled"] += 1
+            if p["side"] == "buy":
+                m["bought_usd"] += float(fill.get("qty") or 0) * float(fill.get("avg_price") or 0)
+    exits = [a for a in store.read_audit(5000) if a.get("event") == "exit_result"
+             and _audit_ts(a) >= since]
+    pl: dict = {}
+    for a in exits:
+        mode = a["detail"].get("mode") or "paper"
+        pl[mode] = round(pl.get(mode, 0.0) + float(a["detail"].get("unrealized_pl") or 0), 2)
+    out["exit_pl_usd"] = pl          # P/L on each position at the moment it was closed
+    out["exits"] = len(exits)
+    return out
+
+
+def _audit_ts(row: dict) -> float:
+    try:
+        return datetime.fromisoformat(row["ts"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return 0.0

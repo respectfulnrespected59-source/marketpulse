@@ -21,9 +21,12 @@ from __future__ import annotations
 import os
 import sys
 import time
+from decimal import Decimal
 
 import agent_config as config
+import credentials
 import guardrails
+import oslock
 import store
 
 # The signal engine lives one directory up (the MarketPulse root).
@@ -76,12 +79,20 @@ def _entry_price(slashless: str) -> float | None:
     return None
 
 
+def single_trade_cap() -> Decimal:
+    """Per-trade ceiling for the CONNECTED account's mode. Sizing a live buy
+    at the paper cap ($50 default) would get every one of them refused by the
+    $25 live ceiling; guardrails refuse an oversize order rather than trim it."""
+    creds = credentials.load()
+    return config.caps(creds.mode if creds else "paper")[0]
+
+
 def _make_proposal(kind: str, symbol: str, side: str, sig: dict,
                    price: float | None, notional_override: float | None = None) -> dict:
     # The declared size is still only a request: guardrails.check_spend caps it
     # at the per-trade and daily limits before anything can be sent.
     wanted = notional_override if notional_override else config.PER_TRADE_USD
-    notional = min(wanted, config.MAX_SINGLE_TX_USD)
+    notional = min(Decimal(str(wanted)), single_trade_cap())
     ts = int(time.time())
     return {
         "id": f"p-{ts}-{symbol.replace('/', '')}",
@@ -134,13 +145,48 @@ def _consider(kind: str, symbol: str, sig: dict, price: float | None,
     return None
 
 
+SCAN_LOCK_FILE = ".scan.lock"
+
+
 def scan() -> list[dict]:
     """Compute fresh signals, emit new proposals, persist + audit them.
 
-    Returns the list of newly created proposals (may be empty).
+    Returns the list of newly created proposals (may be empty). One scan at a
+    time across the app, its background loop and the CLI: two overlapping
+    scans could each see "nothing pending for AAPL" and both propose it. A scan
+    that finds another one running simply skips (the other one covers it).
     """
+    try:
+        with oslock.FileLock(SCAN_LOCK_FILE, timeout=0):
+            store.expire_stale(config.PROPOSAL_TTL)
+            return _scan_locked()
+    except oslock.BusyError:
+        return []
+
+
+def _connected() -> bool:
+    """Keys from the app's Trade desk OR the env. (config.keys_present() only
+    sees env keys, so keys saved in the app skipped the circuit breaker.)"""
+    return credentials.load() is not None
+
+
+def _stock_market_open() -> bool:
+    """Stock proposals only while the market is open: a stock order is refused
+    while closed (guardrails.check_market_open), so proposing one at night just
+    queues something nobody can approve. Offline (no keys) we still propose,
+    which keeps the demo CLI useful; an unreadable clock counts as closed."""
+    if not _connected():
+        return True
+    try:
+        import broker
+        return bool(broker.clock().get("is_open"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _scan_locked() -> list[dict]:
     # Circuit-breaker pre-check against real equity, when keys are available.
-    if config.keys_present():
+    if _connected():
         try:
             import broker
             equity = float(broker.account().get("equity", 0) or 0)
@@ -194,6 +240,9 @@ def scan() -> list[dict]:
             crypto_universe = {}
 
     # Stocks
+    if stock_universe and not _stock_market_open():
+        stock_universe = []     # nothing a closed market would let anyone approve
+
     for row in (app.fetch_stocks(stock_universe) if stock_universe else []):
         if row.get("error"):
             continue

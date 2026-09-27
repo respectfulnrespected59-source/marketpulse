@@ -119,6 +119,11 @@ PRO_ONLY = [
     "agent/broker.py",
     "agent/proposer.py",
     "agent/cli.py",
+    "agent/oslock.py",
+    "agent/pilot.py",
+    "desk_api.py",          # the Trade desk's local-only HTTP API
+    "tests/test_trade_desk.py",
+    "tests/test_desk_api.py",
     "tests/test_guardrails.py",
     "tests/test_money_core.py",   # needs agent/
 ]
