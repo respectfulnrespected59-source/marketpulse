@@ -145,10 +145,7 @@ h1 em, h2 em {
   -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
   border-bottom: 1px solid rgba(44, 33, 64, 0.7);
 }
-.brand { display: inline-flex; align-items: center; gap: 10px; font-size: 19px; letter-spacing: -0.02em; }
-.brand b { color: var(--gold); font-weight: 800; }
-.brand-mark { color: var(--gold); font-size: 20px; text-shadow: 0 0 14px rgba(232, 194, 90, 0.6); }
-.brand-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--gold); opacity: 0.7; }
+/* Wordmark + emblem live in /brand.css (shared with the app). */
 .nav-links { display: flex; gap: 28px; margin-inline: auto; }
 .nav-links a { color: var(--mut); font-size: 15px; transition: color 0.25s; }
 .nav-links a:hover { color: var(--txt); }
@@ -399,8 +396,8 @@ h1 em, h2 em {
 .foot-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 34px; }
 .foot-grid p { color: var(--mut); font-size: 14px; max-width: 30em; }
 .foot h4 { margin: 0 0 14px; font: 700 11px/1 var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); }
-.foot-grid a:not(.brand) { display: block; color: var(--mut); font-size: 14px; padding: 4px 0; }
-.foot-grid a:not(.brand):hover { color: var(--txt); }
+.foot-grid a:not(.mp-brand) { display: block; color: var(--mut); font-size: 14px; padding: 4px 0; }
+.foot-grid a:not(.mp-brand):hover { color: var(--txt); }
 .risk { margin-top: 40px; padding-top: 26px; border-top: 1px solid var(--line); }
 .risk p { color: var(--faint); font-size: 12.5px; line-height: 1.7; }
 .risk b { color: var(--mut); }
@@ -445,6 +442,8 @@ h1 em, h2 em {
   .nav { gap: 12px; }
   .nav-cta .btn { padding: 10px 14px; font-size: 11px; letter-spacing: 0.1em; }
   .status-list { grid-template-columns: 1fr; }
+  .kicker { font-size: 10.5px; letter-spacing: 0.16em; gap: 9px; }
+  .kicker::before { width: 18px; }
   .ep-stats { grid-template-columns: repeat(3, 1fr); }
   .ep-stats > div:nth-child(3) { border-right: 0; }
   .ep-stats > div:nth-child(-n+3) { border-bottom: 1px solid var(--line); }

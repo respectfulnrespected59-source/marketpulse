@@ -41,7 +41,7 @@ function renderScan(d) {
       <span class="sc-dir ${r.dir === "long" ? "bull" : "bear"}">${r.dir === "long" ? "LONG ▲" : "SHORT ▼"}</span>
       <span class="sc-meta">${esc(r.label)} · ${fmtPrice(r.price)}</span></div>`).join("") : "";
   box.innerHTML = `<div class="scan">
-    <div class="scan-head">🔍 Qualifies at a $${d.pot} pot — option probe ≤ $${d.budget} (scanned ${d.scanned})</div>
+    <div class="scan-head"><i class="mi mi-search" aria-hidden="true"></i>Qualifies at a $${d.pot} pot — option probe ≤ $${d.budget} (scanned ${d.scanned})</div>
     ${qHtml}${nHtml}${cHtml}
     <div class="scan-note">Click a stock to load its chain + full plan. Probes are mostly losers — tiny risk is the point. Educational, not advice.</div>
   </div>`;
@@ -83,7 +83,7 @@ function renderProbe(pp) {
   // $-pot Probe → Read → Escalate sizer (scaled to the stock's price).
   const box = $("#optProbe");
   if (!pp) { box.innerHTML = ""; return; }
-  const head = `<div class="probe-head">🎯 $${pp.pot} pot · Probe → Read → Escalate
+  const head = `<div class="probe-head"><i class="mi mi-target" aria-hidden="true"></i>$${pp.pot} pot · Probe → Read → Escalate
     <span class="probe-bud">probe budget $${pp.budget} (20%)</span></div>`;
   if (pp.qualifies === null) {
     box.innerHTML = `<div class="probe none">${head}<div class="probe-line">${esc(pp.note)}</div></div>`;
@@ -98,7 +98,7 @@ function renderProbe(pp) {
            Anything cheaper here is a dead lottery, not a read. <b>Walk — or load a cheaper name.</b></div>`
       : `<div class="probe-line">${esc(pp.note || "Doesn’t fit this pot.")}</div>`;
     box.innerHTML = `<div class="probe toorich">${head}
-      <div class="probe-verdict bad">✋ Too rich for a $${pp.pot} pot</div>${detail}</div>`;
+      <div class="probe-verdict bad"><i class="mi mi-stop" aria-hidden="true"></i>Too rich for a $${pp.pot} pot</div>${detail}</div>`;
     return;
   }
   const p = pp.probe;
@@ -116,11 +116,17 @@ function renderProbe(pp) {
     <div class="probe-note">Single directional option = <b>no straddle</b>. Cap $${pp.pot}. Never revenge-size a melter.</div></div>`;
 }
 
+/* The server's nudge carries an emoji icon; the app draws its own line icon
+   from the direction instead (and never inserts the server string raw). */
+const NUDGE_ICON = { bullish: "up", bearish: "down", "either-way": "split", "stand-aside": "still", hold: "scale" };
+function nudgeIcon(dir) {
+  return `<i class="mi mi-${NUDGE_ICON[dir] || "still"}" aria-hidden="true"></i>`;
+}
 function renderNudge(n) {
   const box = $("#optNudge");
   if (!n) { box.innerHTML = ""; return; }
   box.innerHTML = `<div class="nudge ${esc(n.dir)}">
-    <span class="nudge-ic">${n.icon || ""}</span>
+    <span class="nudge-ic">${nudgeIcon(n.dir)}</span>
     <span class="nudge-body"><b>${esc(n.headline || "")}</b> ${esc(n.text || "")}</span>
   </div>`;
 }
@@ -216,7 +222,7 @@ function renderRead(read) {
     `<div class="read-step"><span class="rk">${esc(s.k)}</span><span class="rv">${esc(s.v)}</span></div>`).join("");
   const risk = read.risk.map((r) => `<li>${esc(r)}</li>`).join("");
   box.innerHTML =
-    `<div class="read-head">📖 How to read this — &amp; think about your money</div>${steps}` +
+    `<div class="read-head"><i class="mi mi-book" aria-hidden="true"></i>How to read this — &amp; think about your money</div>${steps}` +
     `<div class="read-bottom">${esc(read.bottom_line)}</div>` +
     `<div class="read-risk"><div class="rr-title">Risk rules — non-negotiable</div><ul>${risk}</ul></div>` +
     `<div class="read-disc">${esc(read.disclaimer)}</div>`;
@@ -339,14 +345,14 @@ function renderPot() {
         <span class="pr-close">close $<input class="pr-ret" type="number" step="1" placeholder="got back" />
           <button class="pr-win" type="button">✓</button>
           <button class="pr-loss" type="button" title="total loss">✗ zero</button></span>
-        <button class="pr-del" type="button" title="delete">🗑</button></div>`;
+        <button class="pr-del" type="button" title="delete" aria-label="Delete"><i class="mi solo mi-trash" aria-hidden="true"></i></button></div>`;
     }
     const pl = (x.ret || 0) - x.cost;
     return `<div class="pot-row closed" data-id="${esc(x.id)}">
       <span class="pr-sym">${esc(x.sym)}</span><span class="sc-dir ${dc}">${dir}</span>
       <span class="pr-cost">$${x.cost} → $${x.ret || 0}</span>
       <span class="pr-pl ${pl >= 0 ? "up" : "down"}">${potMoney(pl)}</span>
-      <button class="pr-del" type="button" title="delete">🗑</button></div>`;
+      <button class="pr-del" type="button" title="delete" aria-label="Delete"><i class="mi solo mi-trash" aria-hidden="true"></i></button></div>`;
   }).join("");
   $("#potList").innerHTML = rows ||
     `<div class="scan-empty">No probes logged yet. Log your first $${s.budget}-or-less probe above — small enough to be wrong cheaply.</div>`;
@@ -368,7 +374,7 @@ function logProbe() {
   const p = getPot();
   const s = potCompute(p);
   $("#potWarn").innerHTML = cost > s.budget
-    ? `<div class="warn">⚠ $${cost} is over your $${s.budget} probe budget (20% of pot). That's bigger than a probe — size down, or it's not the method.</div>`
+    ? `<div class="warn"><i class="mi mi-alert" aria-hidden="true"></i>$${cost} is over your $${s.budget} probe budget (20% of pot). That's bigger than a probe — size down, or it's not the method.</div>`
     : "";
   p.probes.push({ id: "p" + Date.now(), date: new Date().toISOString().slice(0, 10),
                   sym, dir: $("#potDir").value, cost, status: "open", ret: 0 });
@@ -425,7 +431,7 @@ function renderHome() {
   // Pot card
   const s = potCompute(getPot());
   $("#homePot").innerHTML =
-    `<div class="hc-head">🫙 Pot <a class="hc-link" data-goto="pot">open →</a></div>` +
+    `<div class="hc-head"><i class="mi mi-wallet" aria-hidden="true"></i>Pot <a class="hc-link" data-goto="pot">open →</a></div>` +
     `<div class="hc-big ${s.realized > 0 ? "up" : s.realized < 0 ? "down" : ""}">${potMoney(s.equity)}</div>` +
     `<div class="hc-sub">realized ${potMoney(s.realized)} · ${s.open} open ($${s.openCost} at risk)</div>` +
     `<div class="hc-sub">win ${s.winRate == null ? "—" : s.winRate + "%"} · next probe ≤ <b>$${s.budget}</b></div>`;
@@ -434,7 +440,7 @@ function renderHome() {
   const p = getLive();
   if (!p) {
     $("#homeLive").innerHTML =
-      `<div class="hc-head">🔴 Live play <a class="hc-link" data-goto="live">open →</a></div>` +
+      `<div class="hc-head"><i class="mi-live" aria-hidden="true"></i>Live play <a class="hc-link" data-goto="live">open →</a></div>` +
       `<div class="hc-empty">No active play. Pin one to track it live.</div>`;
   } else {
     const price = p.current ?? p.entry;
@@ -443,7 +449,7 @@ function renderHome() {
     const side = (LIVE_SIDE[p.side] || LIVE_SIDE.long).label;
     const liveSym = p.kind === "crypto" ? String(p.sym).toLowerCase() : p.sym;
     $("#homeLive").innerHTML =
-      `<div class="hc-head">🔴 Live play <a class="hc-link" data-goto="live">open →</a></div>` +
+      `<div class="hc-head"><i class="mi-live" aria-hidden="true"></i>Live play <a class="hc-link" data-goto="live">open →</a></div>` +
       `<div class="hc-big ${cls}"><span class="sym-tap" role="button" tabindex="0"
           data-live-kind="${esc(p.kind)}" data-live-sym="${esc(liveSym)}"
           title="Open ${esc(p.sym)} live chart">${esc(p.sym)}</span> ${r.netUsd >= 0 ? "+" : "-"}$${Math.abs(r.netUsd).toFixed(2)}</div>` +

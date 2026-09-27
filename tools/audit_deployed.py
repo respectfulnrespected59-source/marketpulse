@@ -36,7 +36,7 @@ WATCHED = [
     "app.js", "chart.js", "chart-tools.js", "wizards.js", "panels.js",
     "home.js", "learn.js", "paper.js", "quickfill.js", "styles.css",
     "index.html", "sw.js",
-    "landing.html", "landing/landing.js", "landing/landing.css",
+    "landing.html", "landing/landing.js", "landing/landing.css", "brand.css",
 ]
 
 # A line-count match is strong but not proof. These are strings whose presence
@@ -49,7 +49,8 @@ MARKERS = {
     "dv-scale": ("wizards.js", True),                 # DCA scale explainer
     "onChange: dcaScheduleRerun": ("wizards.js", True),
     "function forwardToApp": ("landing/landing.js", True),  # installed app -> /app
-    "api/markets?kind=": ("home.js", False),  # the OLD cockpit bug (counted crypto twice)
+    "api/markets?kind=": ("home.js", False),
+    "@keyframes mp-mol": ("brand.css", True),  # the heartbeat -> melanin loop  # the OLD cockpit bug (counted crypto twice)
 }
 
 TIMEOUT_S = 60

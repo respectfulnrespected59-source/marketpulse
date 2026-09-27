@@ -120,7 +120,7 @@ function card(r) {
         <div class="name">${esc(r.name || "")}</div>
       </div>
       <div class="card-actions">
-        <button class="icon-btn alert ${hasAlert ? "on" : ""}" title="Price alert">${hasAlert ? "🔔" : "🔕"}</button>
+        <button class="icon-btn alert ${hasAlert ? "on" : ""}" title="Price alert">${hasAlert ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z M10 20a2 2 0 0 0 4 0"/></svg>' : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z M10 20a2 2 0 0 0 4 0 M4 4l16 16"/></svg>'}</button>
         <button class="icon-btn star ${starred ? "on" : ""}" title="Watchlist">${starred ? "★" : "☆"}</button>
       </div>
     </div>
@@ -308,7 +308,7 @@ function checkAlerts(rows) {
 
 function fireAlert(r, a) {
   const msg = `${r.symbol} ${a.dir === "above" ? "rose above" : "dropped below"} ${fmtPrice(a.price)}`;
-  toast(a.dir === "above" ? "buy" : "sell", `🔔 ${r.symbol} alert`, msg + ` · now ${fmtPrice(r.price)}`);
+  toast(a.dir === "above" ? "buy" : "sell", `${r.symbol} alert`, msg + ` · now ${fmtPrice(r.price)}`);
   if ("Notification" in window && Notification.permission === "granted") {
     new Notification("MarketPulse alert", { body: msg });
   }
@@ -381,7 +381,7 @@ let features = { proof: true, alerts: true, unlimited_symbols: true };
 let upgradeUrl = "https://quantummelaninmedia.gumroad.com";
 
 function openUpgrade() {
-  toast("buy", "Pro feature 🔒", "Opening upgrade page…");
+  toast("buy", "Pro feature", "Opening upgrade page…");
   window.open(upgradeUrl, "_blank");
 }
 
@@ -395,7 +395,7 @@ function applyGating() {
   if (!features.proof || !features.alerts) {
     const bar = document.createElement("div");
     bar.className = "upgrade-bar";
-    bar.innerHTML = `🔒 Free edition — Proof Mode, price alerts & unlimited symbols are in
+    bar.innerHTML = `<i class="mi mi-lock" aria-hidden="true"></i>Free edition — Proof Mode, price alerts & unlimited symbols are in
       <b>Pro</b>. <a href="${upgradeUrl}" target="_blank">Unlock Pro →</a>`;
     document.querySelector(".controls").appendChild(bar);
   }
@@ -490,18 +490,19 @@ async function init() {
     store.set("mp_stock_syms", state.stockSyms);
     setView("stocks");
   };
-  const addPreset = (list, label, title) => {
+  const addPreset = (list, label, title, icon) => {
     if (!list || !list.length) return;
     const btn = document.createElement("button");
     btn.className = "add-btn ghost";
     btn.type = "button";
-    btn.textContent = label;
+    btn.innerHTML = `<i class="mi mi-${icon}" aria-hidden="true"></i>`;
+    btn.append(label);
     btn.title = title;
     btn.addEventListener("click", () => loadPreset(list));
     document.querySelector(".add-form").appendChild(btn);
   };
-  addPreset(defaults.ai, "🤖 AI names", "Load the AI Come-Up universe (apply the method — not a buy list)");
-  addPreset(defaults.africa, "🌍 Africa (JSE)", "Load Johannesburg Stock Exchange tickers");
+  addPreset(defaults.ai, "AI names", "Load the AI Come-Up universe (apply the method — not a buy list)", "cpu");
+  addPreset(defaults.africa, "Africa (JSE)", "Load Johannesburg Stock Exchange tickers", "globe");
 
   $("#tabs").addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");

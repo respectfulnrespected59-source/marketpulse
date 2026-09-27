@@ -56,6 +56,7 @@ BASE = [
     "static/landing.html",
     "static/landing/landing.css",
     "static/landing/landing.js",
+    "static/brand.css",
     "static/styles.css",
     "static/app.js",
     "static/chart.js",

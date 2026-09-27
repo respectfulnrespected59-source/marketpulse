@@ -20,29 +20,49 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 
+  <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="bg-grain" aria-hidden="true"></div>
 
   <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">◈</span>
-      <span class="brand-name">Market<strong>Pulse</strong></span>
-    </div>
+    <a class="mp-brand" href="/" aria-label="MarketPulse home">
+<!-- MP-EMBLEM:START -->
+<svg class="mp-emb" viewBox="0 8 52 36" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="mpGold" gradientUnits="userSpaceOnUse" x1="0" y1="8" x2="52" y2="44"><stop offset="0" stop-color="#f5dc8e"/><stop offset=".5" stop-color="#e8c25a"/><stop offset="1" stop-color="#b8903a"/></linearGradient></defs>
+  <rect class="mp-frame" x="1" y="9" width="50" height="34" rx="9"/>
+  <path class="mp-ln mp-ecg" pathLength="1" d="M7 27 H17 L21 18 L26 37 L30 13 L34 27 H45"/>
+  <g class="mp-mol">
+    <polygon class="mp-ln" pathLength="1" points="20,16 28.66,21 28.66,31 20,36 11.34,31 11.34,21"/>
+    <polyline class="mp-ln" pathLength="1" points="28.66,21 38.17,17.91 44.05,26 38.17,34.09 28.66,31"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="21" y1="19.2" x2="26.3" y2="22.3"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="14" y1="23" x2="14" y2="29"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="21" y1="32.8" x2="26.3" y2="29.7"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="37.4" y1="21" x2="41.2" y2="26.2"/>
+    <line class="mp-ln" pathLength="1" x1="11.34" y1="21" x2="6.4" y2="18.2"/>
+    <line class="mp-ln" pathLength="1" x1="11.34" y1="31" x2="6.4" y2="33.8"/>
+    <circle class="mp-atom mp-oh" cx="5.2" cy="17.5" r="2.1"/>
+    <circle class="mp-atom mp-oh" cx="5.2" cy="34.5" r="2.1"/>
+    <circle class="mp-atom mp-n" cx="38.17" cy="34.09" r="2.3"/>
+  </g>
+</svg>
+<!-- MP-EMBLEM:END -->
+<span class="mp-word"><span class="mp-mk">Market</span><span class="mp-ps" data-t="PULSE">PULSE</span></span>
+    </a>
 
     <nav class="tabs" id="tabs">
-      <button class="tab is-active" data-view="home">🏠 Home</button>
-      <button class="tab" data-view="crypto">Crypto</button>
-      <button class="tab" data-view="stocks">Stocks</button>
-      <button class="tab" data-view="options">⛓ Options</button>
-      <button class="tab" data-view="watchlist">★ Watchlist <span class="pill" id="watchCount">0</span></button>
-      <button class="tab" data-view="pot">🫙 Pot</button>
-      <button class="tab" data-view="coach">🧭 Coach</button>
-      <button class="tab" data-view="dca">🌱 DCA</button>
-      <button class="tab" data-view="live">🔴 Live</button>
-      <button class="tab" data-view="paper">📝 Paper</button>
-      <button class="tab" data-view="proof">◆ Proof</button>
+      <button class="tab is-active" data-view="home"><i class="mi mi-home" aria-hidden="true"></i>Home</button>
+      <button class="tab" data-view="crypto"><i class="mi mi-coins" aria-hidden="true"></i>Crypto</button>
+      <button class="tab" data-view="stocks"><i class="mi mi-candles" aria-hidden="true"></i>Stocks</button>
+      <button class="tab" data-view="options"><i class="mi mi-link" aria-hidden="true"></i>Options</button>
+      <button class="tab" data-view="watchlist"><i class="mi mi-star" aria-hidden="true"></i>Watchlist <span class="pill" id="watchCount">0</span></button>
+      <button class="tab" data-view="pot"><i class="mi mi-wallet" aria-hidden="true"></i>Pot</button>
+      <button class="tab" data-view="coach"><i class="mi mi-compass" aria-hidden="true"></i>Coach</button>
+      <button class="tab" data-view="dca"><i class="mi mi-sprout" aria-hidden="true"></i>DCA</button>
+      <button class="tab" data-view="live"><i class="mi-live" aria-hidden="true"></i>Live</button>
+      <button class="tab" data-view="paper"><i class="mi mi-doc" aria-hidden="true"></i>Paper</button>
+      <button class="tab" data-view="proof"><i class="mi mi-shield" aria-hidden="true"></i>Proof</button>
     </nav>
 
     <div class="topbar-right">
@@ -57,7 +77,7 @@
   <!-- Cockpit / Home: everything at a glance (all local, always loads) -->
   <section class="home" id="homePanel" hidden>
     <div class="home-head">
-      <h2>🏠 Your Cockpit</h2>
+      <h2><i class="mi mi-home" aria-hidden="true"></i>Your Cockpit</h2>
       <p>Everything in one place — your pot, your live play, your DCA plans.
         All saved in this browser. <b>Educational — not advice.</b></p>
     </div>
@@ -69,13 +89,13 @@
     </div>
     <div class="home-plans">
       <div class="home-plans-head">
-        <h3>🌱 Saved DCA plans</h3>
+        <h3><i class="mi mi-sprout" aria-hidden="true"></i>Saved DCA plans</h3>
         <button class="add-btn ghost" id="homeNewPlan" type="button">+ New plan</button>
       </div>
       <div id="homePlansList"></div>
     </div>
     <div class="home-backup">
-      <span class="home-backup-lbl">💾 Back up your data</span>
+      <span class="home-backup-lbl"><i class="mi mi-save" aria-hidden="true"></i>Back up your data</span>
       <button class="add-btn ghost" id="homeExport" type="button">Export</button>
       <button class="add-btn ghost" id="homeImport" type="button">Import</button>
       <input id="homeImportFile" type="file" accept="application/json" hidden />
@@ -147,7 +167,7 @@
           pot $<input id="optPot" class="opt-pot" type="number" min="50" step="50" value="300" />
         </label>
         <button class="add-btn" type="submit">Load chain</button>
-        <button class="add-btn ghost" type="button" id="optScanBtn">🔍 Scan my pot</button>
+        <button class="add-btn ghost" type="button" id="optScanBtn"><i class="mi mi-search" aria-hidden="true"></i>Scan my pot</button>
       </form>
     </div>
     <div class="opt-hint" id="optHint"></div>
@@ -157,7 +177,7 @@
     <div class="opt-probe" id="optProbe"></div>
     <div class="opt-read" id="optRead"></div>
     <details class="opt-glossary">
-      <summary>📖 How to read everything on this screen (glossary)</summary>
+      <summary><i class="mi mi-book" aria-hidden="true"></i>How to read everything on this screen (glossary)</summary>
       <div class="gloss-grid">
         <div><b>Signal labels</b> — STRONG BUY → SELL is a composite of RSI + MACD + trend.
           It's a <i>lean</i>, not a guarantee. Green = bullish tilt, red = bearish.</div>
@@ -193,7 +213,7 @@
   <section class="pot" id="potPanel" hidden>
     <div class="pot-head">
       <div>
-        <h2>🫙 Pot Tracker</h2>
+        <h2><i class="mi mi-wallet" aria-hidden="true"></i>Pot Tracker</h2>
         <p>Log every probe. The method only works if you can SEE it: tiny defined-risk probes,
           escalate the winners, never revenge-size. Most probes lose — survival is the edge.
           <b>Educational — not advice. Stays in your browser.</b></p>
@@ -230,7 +250,7 @@
   <section class="coach" id="coachPanel" hidden>
     <div class="coach-head">
       <div>
-        <h2>🧭 Coach</h2>
+        <h2><i class="mi mi-compass" aria-hidden="true"></i>Coach</h2>
         <p>Rewind the live chart, call the next move before it prints, and this keeps score.
           It grades how you read — not what to buy. Everything stays on this device.</p>
       </div>
@@ -240,7 +260,7 @@
          pre-buy checklist. Grades the plan, never the trade. Stays hidden
          unless the server has a grader key (see grader.py). -->
     <div class="coach-card grade-card" id="gradeCard" hidden>
-      <h3>✍️ Grade my reason</h3>
+      <h3><i class="mi mi-pen" aria-hidden="true"></i>Grade my reason</h3>
       <p class="grade-intro">Before you take a trade, write why. A pro can name the
         <b>setup</b>, the <b>size</b> and the <b>exit</b> before they ever click buy.</p>
       <form id="gradeForm" novalidate>
@@ -263,7 +283,7 @@
   <section class="live" id="livePanel" hidden>
     <div class="live-head">
       <div>
-        <h2>🔴 Live Tracker</h2>
+        <h2><i class="mi-live" aria-hidden="true"></i>Live Tracker</h2>
         <p>Pin a real entry with a locked timestamp, then watch <b>real market
           prices</b> prove or disprove the call in real time — the honest receipt.
           Fills use the same honest slippage as Proof Mode.
@@ -285,7 +305,7 @@
         </div>
         <div class="qf-label">Your stake</div>
         <div id="liveStakeQf"></div>
-        <button class="add-btn" type="submit">🔴 Pin entry</button>
+        <button class="add-btn" type="submit"><i class="mi-live" aria-hidden="true"></i>Pin entry</button>
       </form>
     </div>
 
@@ -381,7 +401,7 @@
   <section class="dca" id="dcaPanel" hidden>
     <div class="dca-head">
       <div>
-        <h2>🌱 DCA Wizard</h2>
+        <h2><i class="mi mi-sprout" aria-hidden="true"></i>DCA Wizard</h2>
         <p>The honest <b>GROW</b> engine. One budget, three ways: steady <b>DCA</b>,
           all-in <b>Lump Sum</b>, and MarketPulse's <b>Signal-Tilt</b> (buy a little more
           when the engine reads the asset as cheap, a little less when rich — but always
@@ -407,7 +427,7 @@
         <div id="dcaMonthlyQf"></div>
         <div class="dca-form-actions">
           <button class="add-btn" type="submit">Build plan</button>
-          <button class="add-btn ghost" id="dcaSavePlan" type="button">💾 Save plan</button>
+          <button class="add-btn ghost" id="dcaSavePlan" type="button"><i class="mi mi-save" aria-hidden="true"></i>Save plan</button>
         </div>
       </form>
     </div>
@@ -418,17 +438,17 @@
 
     <div class="dca-charts">
       <div class="dca-chart-block">
-        <div class="dca-cap">💰 Where your money SITS — dollars paid <b>in</b> vs what they grew <b>to</b>.
+        <div class="dca-cap"><i class="mi mi-dollar" aria-hidden="true"></i>Where your money SITS — dollars paid <b>in</b> vs what they grew <b>to</b>.
           A line above the gray = in profit; below = underwater. <span class="dca-legend" id="dcaGrowthLegend"></span></div>
         <div class="proof-chart-wrap"><svg id="dcaGrowth" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
       </div>
       <div class="dca-chart-block">
-        <div class="dca-cap">🎯 Where you BOUGHT — every dot is a tilt buy on the price line.
+        <div class="dca-cap"><i class="mi mi-target" aria-hidden="true"></i>Where you BOUGHT — every dot is a tilt buy on the price line.
           Bigger &amp; greener = the engine leaned <b>in</b> (cheaper); smaller &amp; red = it eased <b>off</b>.</div>
         <div class="proof-chart-wrap"><svg id="dcaChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
       </div>
       <div class="dca-chart-block">
-        <div class="dca-cap">🌱 Where it's GOING — money you'd put <b>in</b> (gray) vs projected value.
+        <div class="dca-cap"><i class="mi mi-sprout" aria-hidden="true"></i>Where it's GOING — money you'd put <b>in</b> (gray) vs projected value.
           Gold = base case; the band is bear → bull. An assumption, not a forecast.</div>
         <div class="proof-chart-wrap"><svg id="dcaProjChart" class="proof-chart" viewBox="0 0 1000 280" preserveAspectRatio="none"></svg></div>
       </div>
@@ -439,7 +459,7 @@
 
   <!-- Paper trading: your rules, real prices, no real order ever placed. -->
   <section class="paper" id="paperPanel" hidden>
-    <h2 class="panel-title">📝 Paper Trading</h2>
+    <h2 class="panel-title"><i class="mi mi-doc" aria-hidden="true"></i>Paper Trading</h2>
     <p class="panel-sub">
       Write your rules. They run against <b>real prices</b> on a timer and open
       and close <b>paper</b> positions — no broker, no key, no real order.
@@ -471,7 +491,7 @@
     </div>
 
     <!-- The options book. The Options tab builds a spread; this proves it. -->
-    <h2 class="panel-title">⛓ Options paper book</h2>
+    <h2 class="panel-title"><i class="mi mi-link" aria-hidden="true"></i>Options paper book</h2>
     <p class="panel-sub">
       Test a real spread against the live chain. Entries fill at the
       <b>ask</b>, exits at the <b>bid</b>, and commission is charged on every
@@ -491,7 +511,7 @@
       <label class="paper-label" for="optBookBankroll">Bankroll $</label>
       <input id="optBookBankroll" class="pot-input" type="number" value="10000"
              min="1" step="100">
-      <button type="button" class="ltc-tool" id="optBookLoadBtn">⛓ Load the signal's spread</button>
+      <button type="button" class="ltc-tool" id="optBookLoadBtn"><i class="mi mi-link" aria-hidden="true"></i>Load the signal's spread</button>
       <button type="button" class="ltc-tool" id="optBookOpenBtn">▶ Open paper position</button>
       <button type="button" class="ltc-tool" id="optBookExportBtn"
               title="Park the book on disk so the daily Obsidian journal can read it">⤓ Export to journal</button>

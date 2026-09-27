@@ -156,7 +156,7 @@ function renderHomePlans() {
   const plans = getDcaPlans();
   const box = $("#homePlansList");
   if (!plans.length) {
-    box.innerHTML = `<div class="hc-empty">No saved plans yet. Build a DCA plan and hit 💾 Save plan.</div>`;
+    box.innerHTML = `<div class="hc-empty">No saved plans yet. Build a DCA plan and hit <i class="mi mi-save" aria-hidden="true"></i>Save plan.</div>`;
     return;
   }
   box.innerHTML = plans.map((pl) => {
@@ -166,7 +166,7 @@ function renderHomePlans() {
         <span class="plan-meta">${esc(pl.symbol)} · $${Math.round(pl.monthly)} ${esc(pl.cadence)} · $${ann.toLocaleString()}/yr</span></div>
       <div class="plan-acts">
         <button class="plan-load" data-id="${esc(pl.id)}" type="button">Load</button>
-        <button class="plan-del" data-id="${esc(pl.id)}" type="button" title="delete">🗑</button></div>
+        <button class="plan-del" data-id="${esc(pl.id)}" type="button" title="delete" aria-label="Delete"><i class="mi solo mi-trash" aria-hidden="true"></i></button></div>
     </div>`;
   }).join("");
   box.querySelectorAll(".plan-load").forEach((b) => b.addEventListener("click", () => loadDcaPlan(b.dataset.id)));
@@ -370,8 +370,8 @@ function renderLive() {
   const r = livePnl(p, price);
   const winCls = r.netUsd > 0 ? "win" : r.netUsd < 0 ? "lose" : "flat";
   const status = p.status === "open"
-    ? (r.netUsd > 0 ? "🟢 WINNING (live)" : r.netUsd < 0 ? "🔴 LOSING (live)" : "⚪ FLAT (live)")
-    : (r.netUsd > 0 ? "🟢 CLOSED · WIN" : r.netUsd < 0 ? "🔴 CLOSED · LOSS" : "⚪ CLOSED · FLAT");
+    ? (r.netUsd > 0 ? "▲ WINNING (live)" : r.netUsd < 0 ? "▼ LOSING (live)" : "● FLAT (live)")
+    : (r.netUsd > 0 ? "▲ CLOSED · WIN" : r.netUsd < 0 ? "▼ CLOSED · LOSS" : "● CLOSED · FLAT");
   const side = LIVE_SIDE[p.side] || LIVE_SIDE.long;
   const moveArrow = r.movePct >= 0 ? "▲" : "▼";
   const dirCls = r.netUsd >= 0 ? "up" : "down";
@@ -394,7 +394,7 @@ function renderLive() {
       <div class="ln"><span>Elapsed</span><b id="liveElapsed">${fmtElapsed(p.entryTs, p.status === "open" ? Math.floor(Date.now() / 1000) : p.closedAt)}</b>
         <i>${p.status}</i></div>
     </div>
-    <div class="live-read">📖 The READ at entry:
+    <div class="live-read"><i class="mi mi-book" aria-hidden="true"></i>The READ at entry:
       <span class="badge ${esc(sig.css || "neutral")}">${esc(sig.label || "—")}</span>
       ${sig.rsi != null ? "RSI " + sig.rsi + " · " : ""}${esc((sig.reasons || []).join(" · "))}</div>
     <div class="proof-chart-wrap"><svg id="liveChart" class="proof-chart" viewBox="0 0 1000 220" preserveAspectRatio="none"></svg></div>
