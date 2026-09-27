@@ -100,7 +100,7 @@ function renderDca(d) {
 
   const ncls = n.tilt > 1.05 ? "bullish" : n.tilt < 0.95 ? "bearish" : "stand-aside";
   $("#dcaNudge").innerHTML = `<div class="nudge ${ncls}">
-    <span class="nudge-ic">${n.icon || ""}</span>
+    <span class="nudge-ic">${nudgeIcon(n.tilt > 1.05 ? "bullish" : n.tilt < 0.95 ? "bearish" : "hold")}</span>
     <span class="nudge-body"><b>${esc(n.headline)}</b> ${esc(n.text)}</span></div>`;
 
   $("#dcaPlan").innerHTML = `<div class="dca-planbar">
@@ -117,7 +117,7 @@ function renderDca(d) {
   const tiltTxt = v.tilt_vs_plain_pct == null ? "—"
     : `${v.tilt_vs_plain_pct > 0 ? "+" : ""}${v.tilt_vs_plain_pct} pts`;
   $("#dcaVerdict").innerHTML = `<div class="dca-vbox">
-    <div class="dv-head">📊 Regime: <b>${rg.tag.toUpperCase()}</b>
+    <div class="dv-head"><i class="mi mi-bars" aria-hidden="true"></i>Regime: <b>${rg.tag.toUpperCase()}</b>
       (${rg.move_pct > 0 ? "+" : ""}${rg.move_pct}% over window) · winner per-dollar:
       <b>${DCA_LABEL[win]}</b></div>
     <div class="dv-note">${esc(v.regime_note)}</div>
@@ -127,7 +127,7 @@ function renderDca(d) {
         : "the tilt did NOT beat plain DCA here (the engine’s “cheap” kept moving the same way)."}</div>
     <div class="dv-truth">${esc(v.honest_truth)}</div>
     <div class="dv-truth sub">${esc(v.same_dollars_note)}</div>
-    <div class="dv-scale">📐 <b>Why the percentages don't move when you change your amount.</b>
+    <div class="dv-scale"><i class="mi mi-ruler" aria-hidden="true"></i><b>Why the percentages don't move when you change your amount.</b>
       At ${potMoney(p.per_period)} every ${esc(p.cadence)}, this window put
       <b>${potMoney(b.plain.invested)}</b> to work. Change that to
       ${potMoney(p.per_period * 10)} and every dollar figure above scales by 10× —
@@ -147,7 +147,7 @@ function renderDca(d) {
     <div class="pj-name">${label} <i>${o.annual_rate_pct}%/yr</i></div>
     <div class="pj-val">${potMoney(o.future_value)}</div>
     <div class="pj-sub">+${potMoney(o.growth)} growth</div></div>`;
-  $("#dcaProj").innerHTML = `<div class="pj-head">🌱 Keep it up ${pj.years} yr —
+  $("#dcaProj").innerHTML = `<div class="pj-head"><i class="mi mi-sprout" aria-hidden="true"></i>Keep it up ${pj.years} yr —
       ${potMoney(pj.per_period)}/period × ${pj.periods} = <b>${potMoney(pj.contributed)}</b> contributed</div>
     <div class="pj-cards">${pcard("bear", "Bear", sc.bear)}${pcard("base", "Base", sc.base)}${pcard("bull", "Bull", sc.bull)}</div>
     <div class="pj-disc">${esc(pj.disclaimer)}</div>`;

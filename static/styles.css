@@ -59,20 +59,27 @@ body {
 .brand-name { font-size: 19px; letter-spacing: -0.02em; font-weight: 500; }
 .brand-name strong { color: var(--gold); font-weight: 800; }
 
-.tabs { display: flex; gap: 6px; margin-left: 8px; }
+/* Desk-grade tabs: mono caps, line icons, a gold underline marks where you are. */
+.tabs { display: flex; gap: 2px; margin-left: 12px; align-self: stretch; }
 .tab {
-  font: inherit; font-size: 14px; color: var(--text-dim);
-  background: transparent; border: 1px solid transparent; border-radius: 999px;
-  padding: 8px 16px; cursor: pointer; transition: all 0.2s var(--ease);
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font: 600 11.5px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-dim); background: transparent;
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 14px 11px 12px; cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
 }
-.tab:hover { color: var(--text); background: var(--surface); }
-.tab.is-active { color: #07050d; background: var(--gold); font-weight: 600; }
+.tab:hover { color: var(--text); }
+.tab:focus-visible { outline: 1px solid var(--gold); outline-offset: -3px; }
+.tab.is-active { color: var(--text); border-bottom-color: var(--gold); }
+.tab.is-active .mi { color: var(--gold); }
+.icon-btn .ico { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; }
 .pill {
   display: inline-grid; place-items: center; min-width: 18px; height: 18px;
   padding: 0 5px; margin-left: 4px; border-radius: 999px;
   background: rgba(0,0,0,0.25); font-size: 11px; font-family: var(--mono);
 }
-.tab.is-active .pill { background: rgba(0,0,0,0.18); }
+.tab.is-active .pill { background: rgba(232, 194, 90, 0.18); color: var(--gold); }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
 .clock { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
@@ -368,7 +375,7 @@ body {
 .opt-nudge { margin: 4px 0 12px; }
 .nudge { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px;
   border-radius: 10px; font-size: 13px; line-height: 1.5; border: 1px solid; }
-.nudge-ic { font-size: 20px; line-height: 1.2; }
+.nudge-ic { font-size: 20px; line-height: 1.2; color: var(--gold); }
 .nudge-body { color: var(--text); }
 .nudge-body b { display: block; font-size: 14px; margin-bottom: 2px; }
 .nudge.bullish { border-color: rgba(64, 200, 130, 0.5); background: rgba(64, 200, 130, 0.08); }
@@ -537,7 +544,8 @@ body {
 
 @media (max-width: 640px) {
   .topbar { flex-wrap: wrap; gap: 12px; }
-  .tabs { order: 3; width: 100%; }
+  .tabs { order: 3; width: 100%; margin-left: 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .tabs::-webkit-scrollbar { display: none; }
   .legend { display: none; }
   .add-input { max-width: 60vw; }
 }
@@ -1287,10 +1295,11 @@ body.mp-lock-scroll .foot { display: none; }
   padding: 16px 18px; box-shadow: var(--shadow);
 }
 .hc-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: flex-start;
   font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
   margin-bottom: 8px;
 }
+.hc-head .hc-link { margin-left: auto; }
 .hc-link { color: var(--gold); text-decoration: none; font-size: 11px; cursor: pointer; }
 .hc-link:hover { text-decoration: underline; }
 .hc-big { font-family: var(--mono); font-size: 30px; font-weight: 800; letter-spacing: -0.01em; }

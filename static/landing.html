@@ -11,6 +11,7 @@
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <meta property="og:title" content="MarketPulse · The system reads the market. You make the call." />
   <meta property="og:description" content="Transparent signals, risk-capped sizing, and published backtests. Free to use." />
+  <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="/landing/landing.css" />
   <!-- Runs before paint: an installed app or an old deep link goes straight to /app. -->
   <script src="/landing/landing.js"></script>
@@ -23,8 +24,28 @@
 
   <!-- ============================== NAV -->
   <header class="nav" id="nav">
-    <a class="brand" href="#top" aria-label="MarketPulse home">
-      <span class="brand-mark">◈</span><span>Market<b>Pulse</b></span><span class="brand-dot" aria-hidden="true"></span>
+    <a class="mp-brand" href="#top" aria-label="MarketPulse home">
+<!-- MP-EMBLEM:START -->
+<svg class="mp-emb" viewBox="0 8 52 36" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="mpGold" gradientUnits="userSpaceOnUse" x1="0" y1="8" x2="52" y2="44"><stop offset="0" stop-color="#f5dc8e"/><stop offset=".5" stop-color="#e8c25a"/><stop offset="1" stop-color="#b8903a"/></linearGradient></defs>
+  <rect class="mp-frame" x="1" y="9" width="50" height="34" rx="9"/>
+  <path class="mp-ln mp-ecg" pathLength="1" d="M7 27 H17 L21 18 L26 37 L30 13 L34 27 H45"/>
+  <g class="mp-mol">
+    <polygon class="mp-ln" pathLength="1" points="20,16 28.66,21 28.66,31 20,36 11.34,31 11.34,21"/>
+    <polyline class="mp-ln" pathLength="1" points="28.66,21 38.17,17.91 44.05,26 38.17,34.09 28.66,31"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="21" y1="19.2" x2="26.3" y2="22.3"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="14" y1="23" x2="14" y2="29"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="21" y1="32.8" x2="26.3" y2="29.7"/>
+    <line class="mp-ln mp-db" pathLength="1" x1="37.4" y1="21" x2="41.2" y2="26.2"/>
+    <line class="mp-ln" pathLength="1" x1="11.34" y1="21" x2="6.4" y2="18.2"/>
+    <line class="mp-ln" pathLength="1" x1="11.34" y1="31" x2="6.4" y2="33.8"/>
+    <circle class="mp-atom mp-oh" cx="5.2" cy="17.5" r="2.1"/>
+    <circle class="mp-atom mp-oh" cx="5.2" cy="34.5" r="2.1"/>
+    <circle class="mp-atom mp-n" cx="38.17" cy="34.09" r="2.3"/>
+  </g>
+</svg>
+<!-- MP-EMBLEM:END -->
+<span class="mp-word"><span class="mp-mk">Market</span><span class="mp-ps" data-t="PULSE">PULSE</span></span>
     </a>
     <nav class="nav-links" id="navLinks">
       <a href="#engine">How it works</a>
@@ -317,7 +338,7 @@
   <footer class="foot">
     <div class="wrap foot-grid">
       <div>
-        <a class="brand" href="#top"><span class="brand-mark">◈</span><span>Market<b>Pulse</b></span></a>
+        <a class="mp-brand" href="#top" aria-label="MarketPulse"><span class="mp-word"><span class="mp-mk">Market</span><span class="mp-ps" data-t="PULSE">PULSE</span></span></a>
         <p>Honest trading logic for people who'd rather see the receipts. A Quantum Melanin Media build.</p>
       </div>
       <div><h4>Navigate</h4><a href="#engine">How it works</a><a href="#proof">Receipts</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
