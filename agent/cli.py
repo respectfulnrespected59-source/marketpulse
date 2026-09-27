@@ -25,10 +25,18 @@ import sys
 from decimal import Decimal
 
 import broker
-import config
+import agent_config as config
+import credentials
+import desk
 import guardrails
 import proposer
 import store
+
+
+def _owner_pilot() -> bool:
+    """The CLI's live permission during the owner's one-week pilot: an explicit
+    MP_OWNER_PILOT=1 on the owner's own machine. The app uses a Pro license."""
+    return os.environ.get("MP_OWNER_PILOT") == "1"
 
 
 def _fmt_money(v) -> str:
@@ -39,18 +47,27 @@ def _fmt_money(v) -> str:
 
 
 def cmd_status() -> None:
+    creds = credentials.load()
+    mode = creds.mode if creds else "paper"
+    single, daily = config.caps(mode)
     print("\n  MarketPulse Agent")
-    print(f"  mode      : {config.MODE}   ({'PAPER' if config.PAPER else 'LIVE'})")
-    print(f"  endpoint  : {config.ALPACA_BASE}")
+    print(f"  mode      : {config.MODE}   ({mode.upper()})"
+          + ("   live allowed: " + ("yes (owner pilot)" if _owner_pilot() else "NO") if mode == "live" else ""))
+    print(f"  endpoint  : {broker.trading_base(creds) if creds else '(not connected)'}")
+    if creds:
+        shown = credentials.masked(creds)
+        print(f"  keys from : {shown['source']}" + ("   ! these ENV keys override the keys saved in the app"
+                                                  if shown["overrides_saved_file"] else ""))
     print(f"  per-trade : {_fmt_money(config.PER_TRADE_USD)}   "
-          f"single-cap {_fmt_money(config.MAX_SINGLE_TX_USD)}   "
-          f"daily-cap {_fmt_money(config.MAX_DAILY_SPEND_USD)}")
-    print(f"  24h spend : {_fmt_money(store.spend_last_24h())}")
+          f"single-cap {_fmt_money(single)}   daily-cap {_fmt_money(daily)}")
+    print(f"  24h spend : {_fmt_money(store.spend_last_24h(mode))} ({mode})")
     halted = store.is_halted()
     print(f"  halted    : {'YES - ' + (store.load_circuit().get('reason') or '') if halted else 'no'}")
 
-    if not config.keys_present():
-        print("\n  ! Alpaca keys not set - read-only. See agent/.env.example.\n")
+    if creds is None:
+        why = credentials.problem()
+        print("\n  ! Alpaca not connected - read-only. "
+              + (why if why else "Add keys in the app's Trade desk or see agent/.env.example.") + "\n")
         return
     try:
         acct = broker.account()
@@ -103,66 +120,14 @@ def cmd_list() -> None:
 
 
 def cmd_approve(pid: str) -> None:
-    p = store.get_proposal(pid)
-    if not p:
-        print(f"  No proposal {pid}.")
-        return
-    if p["status"] != "pending":
-        print(f"  Proposal {pid} is '{p['status']}', not pending.")
-        return
-
-    # 1) Pull a fresh LIVE price (fail-closed). Without it we cannot bound
-    #    slippage, so we refuse rather than fill blind (skill: simulate before
-    #    send / mandatory min_amount_out).
-    try:
-        live = broker.latest_price(p["symbol"])
-    except broker.BrokerError as exc:
-        store.update_proposal(pid, status="blocked", note=f"no live price: {exc}")
-        store.audit("blocked", {"id": pid, "reason": f"no live price: {exc}"})
-        print(f"  BLOCKED: could not get a live price to bound slippage — {exc}")
-        return
-
-    # 2) Independent safety chokepoint — may raise and block the send.
-    try:
-        guardrails.authorize_send(p, current_price=live)
-    except guardrails.GuardrailError as exc:
-        store.update_proposal(pid, status="blocked", note=str(exc))
-        store.audit("blocked", {"id": pid, "reason": str(exc)})
-        print(f"  BLOCKED: {exc}")
-        return
-
-    # 3) Send through the broker.
-    exit_pl: float | None = None  # set on exits, feeds the loss circuit breaker
-    try:
-        if p["side"] == "buy":
-            order = broker.submit_order(p["symbol"], "buy", notional=p["notional"])
-        else:
-            held = broker.position(p["symbol"])
-            if not held:
-                store.update_proposal(pid, status="blocked", note="no position to sell")
-                print("  BLOCKED: no open position to close.")
-                return
-            exit_pl = float(held.get("unrealized_pl", 0) or 0)
-            order = broker.submit_order(p["symbol"], "sell", qty=held["qty"])
-    except broker.BrokerError as exc:
-        store.update_proposal(pid, status="blocked", note=str(exc))
-        store.audit("send_failed", {"id": pid, "reason": str(exc)})
-        print(f"  Send failed: {exc}")
-        return
-
-    oid = order.get("id")
-    store.update_proposal(pid, status="submitted", broker_order_id=oid)
-    if p["side"] == "buy":
-        guardrails.record_spend(Decimal(str(p["notional"])), p["symbol"], oid)
-    else:
-        # An exit realizes a win/loss — feed the consecutive-loss breaker so a
-        # losing streak can halt the agent (skill: circuit breakers).
-        guardrails.record_trade_result(is_win=(exit_pl is None or exit_pl >= 0))
-        store.audit("exit_result", {"id": pid, "symbol": p["symbol"],
-                                    "unrealized_pl": exit_pl})
-    store.audit("submitted", {"id": pid, "symbol": p["symbol"],
-                              "side": p["side"], "order_id": oid})
-    print(f"  SUBMITTED {p['side'].upper()} {p['symbol']}  order={oid}")
+    """Same single path the app uses: desk.approve (lock, live permission,
+    fresh price, market hours, chokepoint, idempotent send)."""
+    r = desk.approve(pid, live_permitted=_owner_pilot())
+    # Key off the STATUS: an order Alpaca accepted is "submitted" even if our
+    # own bookkeeping hiccuped afterwards, and must never read as "not sent".
+    sent = r.get("status") == "submitted"
+    print("  " + ("SUBMITTED " if sent else "NOT SENT: ") + r["message"]
+          + (f"  order={r['order_id']}" if r.get("order_id") else ""))
 
 
 def cmd_reject(pid: str) -> None:

@@ -82,7 +82,7 @@ liquidated.
 
 ```
 agent/
-  config.py      caps, venue, universe, mode (env-driven)
+  agent_config.py  caps, venue, universe, mode (env-driven)
   store.py       JSON persistence: proposals / ledger / circuit / audit / HALT
   guardrails.py  independent safety controls + the authorize_send chokepoint
   broker.py      Alpaca paper REST client (pure stdlib)

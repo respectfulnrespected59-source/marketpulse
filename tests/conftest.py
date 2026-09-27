@@ -4,11 +4,10 @@ Two import roots are in play:
   * the repo root holds the pure-math modules (options.py, indicators.py)
   * agent/ holds the trading layer (config.py, store.py, guardrails.py)
 
-agent/config.py and the repo-root config.py share a name. The root math
-modules never import `config`, so we put agent/ FIRST on sys.path: any
-`import config` resolves to the agent's, while `import options` / `import
-indicators` still resolve from the root. Keeping both on the path lets one
-pytest run cover both layers.
+The agent's settings module is agent_config.py (it used to be agent/config.py,
+which shadowed the app's config.py and stopped the app from importing the
+agent's safety code). Both directories stay on sys.path so one pytest run
+covers both layers; `import config` is always the app's.
 """
 from __future__ import annotations
 

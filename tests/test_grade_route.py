@@ -111,7 +111,7 @@ def test_grader_failure_is_502_without_the_detail(server, calls, monkeypatch):
 
 
 def _dashboard_config():
-    # Under pytest, `import config` resolves to agent/config.py (see conftest),
+    # Under pytest, `import config` resolves to agent/agent_config.py (formerly agent/config.py) (see conftest),
     # so app.config is the agent's. /api/universe needs the dashboard's.
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "config.py")
