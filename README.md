@@ -63,7 +63,7 @@ You need **Python 3** installed. That's it.
 - **Windows:** double-click **`run.bat`**
 - **Mac / Linux:** run **`bash run.sh`**
 
-It opens **http://127.0.0.1:8000** in your browser automatically.
+It opens the app at **http://127.0.0.1:8000/app** in your browser automatically (the MarketPulse home page is at http://127.0.0.1:8000).
 To stop it, close the terminal window (or press `Ctrl+C`).
 
 ### Windows: don't have Python?

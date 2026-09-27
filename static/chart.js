@@ -1059,7 +1059,7 @@ function _priceAxisSVG(rect, min, max, last, axisRW, W) {
   const y = Math.max(rect.y + 8, Math.min(rect.y + rect.h - 8, ly));
   out += `<rect x="${(axisX + 2).toFixed(1)}" y="${(y - 8).toFixed(1)}" width="${axisRW - 6}" height="16" rx="3"
     fill="var(--gold)" opacity="0.94" filter="url(#neonGold)"/>`;
-  out += `<text x="${(axisX + axisRW / 2 - 1).toFixed(1)}" y="${(y + 3).toFixed(1)}" fill="#0a0d12"
+  out += `<text x="${(axisX + axisRW / 2 - 1).toFixed(1)}" y="${(y + 3).toFixed(1)}" fill="#07050d"
     font-family="var(--mono)" font-size="10.5" font-weight="800" text-anchor="middle">${_fmtAxisPrice(last)}</text>`;
   return out;
 }
@@ -1214,14 +1214,14 @@ function _drawCrosshair(x, y) {
   const snapDot = snap
     ? `<rect x="${(cx - 4).toFixed(1)}" y="${(cy - 4).toFixed(1)}" width="8" height="8"
         transform="rotate(45 ${cx.toFixed(1)} ${cy.toFixed(1)})"
-        fill="${snap.color}" stroke="rgba(10,13,18,0.9)" stroke-width="1"/>
+        fill="${snap.color}" stroke="rgba(7, 5, 13,0.9)" stroke-width="1"/>
        <text x="${(cx + 8).toFixed(1)}" y="${(cy - 8).toFixed(1)}" fill="${snap.color}"
         font-family="var(--mono)" font-size="9" font-weight="700" letter-spacing="0.08em">${snap.kind.toUpperCase()}</text>`
     : "";
 
   // 1px physical-pixel lines regardless of chart size — sharper reads.
   const strokeW = 1 / (g.pxPerSvgY || 1);
-  const lineCol = snap ? snapCol : "rgba(217,176,97,0.65)";
+  const lineCol = snap ? snapCol : "rgba(232, 194, 90,0.65)";
   el.innerHTML = `
     <line x1="${r.x}" y1="${cy.toFixed(2)}" x2="${(r.x + r.w).toFixed(2)}" y2="${cy.toFixed(2)}"
       stroke="${lineCol}" stroke-width="${strokeW.toFixed(2)}" stroke-dasharray="4 4" shape-rendering="crispEdges"/>
@@ -1230,11 +1230,11 @@ function _drawCrosshair(x, y) {
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="1.4" fill="${snap ? snapCol : "var(--gold)"}" opacity="0.95"/>
     <rect x="${(priceLabelX + 2).toFixed(1)}" y="${(cy - 8).toFixed(1)}"
       width="${g.axisR - 6}" height="16" rx="3"
-      fill="rgba(10,13,18,0.96)" stroke="${snapCol}" stroke-width="1"/>
+      fill="rgba(7, 5, 13,0.96)" stroke="${snapCol}" stroke-width="1"/>
     <text x="${(priceLabelX + g.axisR / 2 - 1).toFixed(1)}" y="${(cy + 3).toFixed(1)}"
       fill="${snapCol}" font-family="var(--mono)" font-size="10.5" font-weight="800" text-anchor="middle">${priceStr}</text>
     <rect x="${(cx - 28).toFixed(1)}" y="${(g.timeAxisTop + 2).toFixed(1)}"
-      width="56" height="16" rx="3" fill="rgba(10,13,18,0.96)" stroke="${snapCol}" stroke-width="1"/>
+      width="56" height="16" rx="3" fill="rgba(7, 5, 13,0.96)" stroke="${snapCol}" stroke-width="1"/>
     <text x="${cx.toFixed(1)}" y="${(g.timeAxisTop + 13).toFixed(1)}"
       fill="${snapCol}" font-family="var(--mono)" font-size="10" font-weight="700" text-anchor="middle">${when}</text>
     ${snapDot}

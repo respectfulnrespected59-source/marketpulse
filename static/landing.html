@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MarketPulse · The honest trading system</title>
+  <meta name="description" content="MarketPulse reads the market with a transparent signal engine, sizes every play so one loss can't sink you, and publishes its own backtests, losses included. You make the call." />
+  <meta name="theme-color" content="#07050d" />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta property="og:title" content="MarketPulse · The system reads the market. You make the call." />
+  <meta property="og:description" content="Transparent signals, risk-capped sizing, and published backtests. Free to use." />
+  <link rel="stylesheet" href="/landing/landing.css" />
+  <!-- Runs before paint: an installed app or an old deep link goes straight to /app. -->
+  <script src="/landing/landing.js"></script>
+</head>
+<body id="landing">
+  <div class="liquid" aria-hidden="true">
+    <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+  </div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- ============================== NAV -->
+  <header class="nav" id="nav">
+    <a class="brand" href="#top" aria-label="MarketPulse home">
+      <span class="brand-mark">◈</span><span>Market<b>Pulse</b></span><span class="brand-dot" aria-hidden="true"></span>
+    </a>
+    <nav class="nav-links" id="navLinks">
+      <a href="#engine">How it works</a>
+      <a href="#method">Method</a>
+      <a href="#proof">Receipts</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="link-mono" href="https://www.youtube.com/@QUANTUMMELANINMEDIA" rel="noopener" target="_blank">Watch</a>
+      <a class="btn btn-gold" href="/app">Open the app</a>
+      <button class="nav-burger" id="navBurger" aria-label="Menu" aria-expanded="false"><span></span><span></span></button>
+    </div>
+  </header>
+
+  <main>
+  <!-- ============================== HERO -->
+  <section class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div class="hero-copy reveal">
+        <p class="kicker">MarketPulse // honest trading system</p>
+        <h1>The System Reads The Market. <em>You Make The Call.</em></h1>
+        <p class="lede">MarketPulse scans real prices through a transparent signal engine, sizes every play so one bad trade can't sink you, and publishes its own backtests, losses included. No black box. No hype. No guarantees.</p>
+        <div class="hero-ctas">
+          <a class="btn btn-gold btn-lg" href="/app">Open the app free <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost btn-lg" href="#engine">See how it works</a>
+        </div>
+        <ul class="status-list">
+          <li><i class="dot" data-status-dot></i><span data-status-text>Waking the engine</span></li>
+          <li><i class="dot gold"></i>Real prices, not a simulation</li>
+          <li><i class="dot"></i>Every signal shows its reasons</li>
+          <li><i class="dot gold"></i>Risk caps on every play</li>
+        </ul>
+      </div>
+
+      <!-- Live engine panel: every number here comes from /api/markets. -->
+      <div class="engine-panel glass reveal" id="enginePanel">
+        <div class="ep-head">
+          <span class="ep-title"><b>MARKETPULSE</b> // live read</span>
+          <span class="ep-state"><i class="dot" data-status-dot></i><span data-status-word>CONNECTING</span></span>
+        </div>
+        <div class="ep-stats">
+          <div><small>Names scanned</small><strong data-live="scanned">…</strong></div>
+          <div><small>Strong reads</small><strong data-live="strong">…</strong></div>
+          <div><small>Leaning up</small><strong class="up" data-live="bull">…</strong></div>
+          <div><small>Leaning down</small><strong class="down" data-live="bear">…</strong></div>
+          <div><small>Read at</small><strong data-live="time">…</strong></div>
+        </div>
+        <div class="ep-chart">
+          <div class="ep-chart-head">
+            <span class="chip-mono" data-live="featTag">…</span>
+            <span class="ep-feat"><b data-live="featSym">…</b> <span data-live="featPrice">…</span> <span data-live="featChg">…</span></span>
+          </div>
+          <svg class="spark" id="heroSpark" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="Recent daily closes of the featured name">
+            <defs>
+              <linearGradient id="sparkFill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#e8c25a" stop-opacity=".35" />
+                <stop offset="1" stop-color="#e8c25a" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+            <path class="spark-area" d="" fill="url(#sparkFill)" />
+            <path class="spark-line" d="" />
+            <circle class="spark-head" r="5" cx="-10" cy="-10" />
+          </svg>
+          <p class="ep-note">Real daily closes · not a simulated equity curve</p>
+        </div>
+        <div class="ep-rows" id="heroRows">
+          <div class="ep-row skeleton"></div><div class="ep-row skeleton"></div>
+          <div class="ep-row skeleton"></div><div class="ep-row skeleton"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== TICKER MARQUEE -->
+  <div class="marquee" aria-label="Latest prices">
+    <div class="marquee-track" id="marquee"><span class="mq-item muted">Loading real prices…</span></div>
+  </div>
+
+  <!-- ============================== WATCH IT WORK -->
+  <section class="section" id="live">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">Watch the system work</p>
+        <h2>Every read shows its work.</h2>
+        <p>MarketPulse doesn't hand you a mystery arrow. Each signal lists the exact factors that fired, so you can check the logic before a single dollar moves. No chasing candles. No revenge trades.</p>
+      </header>
+      <div class="feed-grid">
+        <div class="feed glass reveal">
+          <div class="feed-head"><span>Latest read · real factors</span><span class="streaming"><i class="dot gold"></i>Streaming</span></div>
+          <ol class="feed-list" id="feed">
+            <li class="muted">Waiting on the first read…</li>
+          </ol>
+        </div>
+        <div class="process glass reveal">
+          <p class="kicker">// the process</p>
+          <p class="process-lede">MarketPulse is not a tip line. It runs the same repeatable process on every name, the same way, every time. The last step is always yours.</p>
+          <div class="chips">
+            <span>Scan</span><i>→</i><span>Read</span><i>→</i><span>Size</span><i>→</i><span>Prove</span><i>→</i><span class="you">You approve</span><i>→</i><span>Track</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== ENGINE: SIX STAGES -->
+  <section class="section alt" id="engine">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <p class="kicker">The MarketPulse engine</p>
+        <h2>Six stages. <em>No mystery.</em></h2>
+        <p>Every play passes through the same pipeline. Nothing is hidden, and nothing moves without you.</p>
+      </header>
+      <div class="stage-grid">
+        <article class="stage glass reveal"><small>01 // scan</small><h3>Watch the market</h3><p>Stocks, crypto, and options chains on real prices, re-read every minute while you watch.</p></article>
+        <article class="stage glass reveal"><small>02 // read</small><h3>Seven-factor read</h3><p>RSI, MACD, Stochastic, Bollinger, trend, the 50/200 cross, and the higher timeframe. Every factor that fires is listed.</p></article>
+        <article class="stage glass reveal"><small>03 // size</small><h3>Size to survive</h3><p>A probe risks no more than a fifth of your pot, on a contract that actually reacts to a normal move.</p></article>
+        <article class="stage glass reveal"><small>04 // prove</small><h3>Backtest it first</h3><p>Proof Mode runs the exact live engine over years of history, after fees and slippage, against simply holding.</p></article>
+        <article class="stage glass reveal"><small>05 // approve</small><h3>You make the call</h3><p>The system proposes. You approve. A read is a lean, never an order.</p></article>
+        <article class="stage glass reveal"><small>06 // track</small><h3>Receipts, win or lose</h3><p>Pin a play, stream the real price, and keep the receipt either way. Paper first, always.</p></article>
+      </div>
+      <div class="status-board glass reveal">
+        <div><small>System status</small><b data-live="sysStatus">…</b></div>
+        <div><small>Signal engine</small><b>Transparent</b></div>
+        <div><small>Name scanner</small><b data-live="scanFrac">…</b></div>
+        <div><small>Risk engine</small><b>Capped</b></div>
+        <div><small>Execution</small><b>Paper first</b></div>
+        <div><small>Approval</small><b>Yours</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== HUMAN VS SYSTEM -->
+  <section class="section" id="human">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">Human vs system</p>
+        <h2>Most people don't lose because they were wrong.</h2>
+        <p class="big-quote">They lose because they were <em>too big</em> when they were wrong. You can't compound from zero.</p>
+      </header>
+      <div class="vs-grid">
+        <div class="vs-card glass reveal">
+          <h3 class="vs-h">Trading alone</h3>
+          <ul class="vs-list minus"><li>Fear and FOMO</li><li>Sizing up to win it back</li><li>Chasing green candles</li><li>No record of what worked</li><li>Trusting a guru's screenshot</li><li>One bad trade ends the pot</li></ul>
+        </div>
+        <span class="vs-mid" aria-hidden="true">vs</span>
+        <div class="vs-card glass gold-edge reveal">
+          <h3 class="vs-h gold">With MarketPulse</h3>
+          <ul class="vs-list check"><li>Rules you can read</li><li>Probes capped at 20% of the pot</li><li>Signals only when factors agree</li><li>Receipts on every play</li><li>Your own backtest, losses shown</li><li>Kill switch and loss limits</li></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== METHOD -->
+  <section class="section alt" id="method">
+    <div class="wrap method-grid">
+      <header class="sec-head reveal">
+        <p class="kicker">The method</p>
+        <h2>Read. Size. <em>Prove.</em></h2>
+        <p>A setup only earns attention when the factors agree. Then the size is set before the entry, and the whole rule gets tested against history before you trust it.</p>
+      </header>
+      <div class="flow glass reveal">
+        <div class="flow-top"><span>Trend</span><b>+</b><span>Momentum</span><b>+</b><span>Timeframe</span></div>
+        <ol class="flow-steps">
+          <li>Factors agree</li>
+          <li>Lean confirmed</li>
+          <li>Risk sized to the pot</li>
+          <li>Backtested in Proof Mode</li>
+          <li class="gold">You approve</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== RECEIPTS -->
+  <section class="section" id="proof">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">The receipts</p>
+        <h2>We tried to break our own tool.</h2>
+        <p>Most trading sites show you a curve and ask you to trust it. Here are four real backtests of the MarketPulse engine, after fees and slippage, wins and losses side by side. Then run any ticker yourself.</p>
+      </header>
+      <div class="proof-grid">
+        <a class="proof-card glass reveal" href="https://youtu.be/Rb0kObnZtLE" target="_blank" rel="noopener">
+          <small>NVDA · bull run</small><h3>It lost.</h3>
+          <div class="pc-nums"><span><em>Tool</em><b class="down">-10.2%</b></span><span><em>Just holding</em><b class="up">+63.2%</b></span></div>
+          <p>A 56% hit rate still lost to holding. Win rate means nothing on its own.</p>
+        </a>
+        <a class="proof-card glass reveal" href="https://youtu.be/PF_nQENIAJ0" target="_blank" rel="noopener">
+          <small>Bitcoin · crash</small><h3>It lost less.</h3>
+          <div class="pc-nums"><span><em>Tool</em><b class="down">-7.3%</b></span><span><em>Just holding</em><b class="down">-42.6%</b></span></div>
+          <p>Losing less is not winning. It sat in cash through the fall.</p>
+        </a>
+        <a class="proof-card glass reveal" href="https://youtu.be/YWaLWdTw3HE" target="_blank" rel="noopener">
+          <small>Monero · rally</small><h3>It made money.</h3>
+          <div class="pc-nums"><span><em>Tool</em><b class="up">+7.5%</b></span><span><em>Just holding</em><b class="up">+15.8%</b></span></div>
+          <p>Profitable, and still behind holding. Late in, early out.</p>
+        </a>
+        <a class="proof-card glass gold-edge reveal" href="https://youtu.be/X4N6rstCnHo" target="_blank" rel="noopener">
+          <small>UBER · sideways chop</small><h3>It beat the market.</h3>
+          <div class="pc-nums"><span><em>Tool</em><b class="up">+12.7%</b></span><span><em>Just holding</em><b class="up">+2.6%</b></span></div>
+          <p>Choppy markets are where the engine earns its keep. Match the tool to the weather.</p>
+        </a>
+      </div>
+      <p class="fine center">Backtests run June 2026 on about two years of daily data (crypto about one year), after modeled fees and slippage. Past results do not predict future results. Tap a card for the full breakdown.</p>
+      <div class="center"><a class="btn btn-ghost" href="/app?view=proof">Run Proof Mode on any ticker <span aria-hidden="true">→</span></a></div>
+    </div>
+  </section>
+
+  <!-- ============================== WHO IT'S FOR -->
+  <section class="section alt" id="who">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <p class="kicker">Who it's for</p>
+        <h2>Built for how you actually invest.</h2>
+      </header>
+      <div class="who-grid">
+        <article class="who glass reveal"><small>01 //</small><h3>The beginner</h3><p>Every screen explains itself in plain English, down to what one options contract really costs.</p><a href="/app">Start free →</a></article>
+        <article class="who glass reveal"><small>02 //</small><h3>The steady builder</h3><p>The DCA wizard compares plain, tilted, and lump-sum investing on the same dollars, honestly.</p><a href="/app?view=dca">Plan a DCA →</a></article>
+        <article class="who glass reveal"><small>03 //</small><h3>The options curious</h3><p>Live chains, IV and Greeks, defined-risk spreads, and a probe sizer that tells you when a trade is too rich for your pot.</p><a href="/app?view=options">Read a chain →</a></article>
+        <article class="who glass reveal"><small>04 //</small><h3>The disciplined trader</h3><p>Paper trade, pin live plays, track your pot, and keep receipts until the numbers earn real money.</p><a href="/app?view=paper">Paper trade →</a></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== PRICING -->
+  <section class="section" id="pricing">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">Pricing</p>
+        <h2>Start free. Upgrade when it's earned.</h2>
+        <p>The full research app is free while real-money execution is being built. Pro adds execution on your own brokerage account: your money never leaves your broker.</p>
+        <div class="bill-toggle" role="group" aria-label="Billing period">
+          <button class="is-on" data-bill="monthly" aria-pressed="true">Monthly</button>
+          <button data-bill="lifetime" aria-pressed="false">Lifetime</button>
+        </div>
+      </header>
+      <div class="price-grid" id="priceGrid"></div>
+      <p class="fine center">Prices in USD. Pro tiers open in phases as real-money execution ships. Join the founding list to be first in.</p>
+    </div>
+  </section>
+
+  <!-- ============================== BEYOND -->
+  <section class="section alt" id="beyond">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">More from QMM</p>
+        <h2>Beyond the app.</h2>
+      </header>
+      <div class="beyond-grid">
+        <article class="beyond glass reveal"><small>// the breakdowns</small><h3>Watch every test</h3><p>Real setups, real backtests, and the trades the tool got wrong, explained on the Quantum Melanin Media channel.</p><b>Free</b><a class="btn btn-ghost" href="https://www.youtube.com/@QUANTUMMELANINMEDIA" target="_blank" rel="noopener">Watch free →</a></article>
+        <article class="beyond glass gold-edge reveal"><small>// the download</small><h3>Run it on your machine</h3><p>The same app as a download. Your data and, soon, your broker keys stay on your own computer.</p><b>Free</b><a class="btn btn-gold" href="https://quantummelaninmedia.gumroad.com/l/mzwrgk" target="_blank" rel="noopener">Get the download →</a></article>
+        <article class="beyond glass reveal"><small>// the studio</small><h3>Built by QMM</h3><p>MarketPulse is built in public by Quantum Melanin Media. See what else we make.</p><b>&nbsp;</b><a class="btn btn-ghost" href="https://quantummelaninmedia.com" target="_blank" rel="noopener">Visit QMM →</a></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== FAQ -->
+  <section class="section" id="faq">
+    <div class="wrap narrow">
+      <header class="sec-head center reveal">
+        <p class="kicker">FAQ</p>
+        <h2>Questions, answered.</h2>
+      </header>
+      <div class="faq">
+        <details class="reveal"><summary>What is MarketPulse?</summary><p>A trading research app with a transparent signal engine, an options chain with IV and Greeks, a DCA wizard, a probe sizer, paper trading, and Proof Mode backtests. It reads the market and shows its reasoning. You decide what to do.</p></details>
+        <details class="reveal"><summary>Does it trade for me?</summary><p>Today it trades on paper only. Real-money execution is being built on your own brokerage account: every trade waits for your approval by default, and full auto is an opt-in switch with hard daily limits, a kill switch, and a loss circuit breaker.</p></details>
+        <details class="reveal"><summary>Do you ever hold my money?</summary><p>Never. When real-money trading ships, you connect your own brokerage account. Your money stays with your broker, and you can revoke access any time.</p></details>
+        <details class="reveal"><summary>Will it make me money?</summary><p>Nobody can promise that, and anyone who does is selling you something. Our own backtests show the engine losing to simply holding in a bull run and beating it in a choppy market. What MarketPulse does promise is transparency and risk caps so one bad trade can't end your pot.</p></details>
+        <details class="reveal"><summary>Is paper trading the same as real trading?</summary><p>No. A paper trade never touches the market. Real trades face slippage, fills, and your own nerves. That's why every result here is labeled for what it is.</p></details>
+        <details class="reveal"><summary>What markets does it cover?</summary><p>US stocks and ETFs, major crypto, US options chains, and South African (JSE) names. Prices come from free delayed feeds, so a reading can be up to a minute old.</p></details>
+        <details class="reveal"><summary>What does it cost?</summary><p>The research app is free. Pro tiers add real-money execution as it ships, monthly or lifetime. See pricing above.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== FINAL CTA -->
+  <section class="final">
+    <div class="wrap center reveal">
+      <p class="kicker">The market is moving</p>
+      <h2>Let the system read it. <em>You make the call.</em></h2>
+      <p>Open the app, pick a name, and read exactly why the engine leans the way it does.</p>
+      <a class="btn btn-gold btn-lg" href="/app">Open MarketPulse free <span aria-hidden="true">→</span></a>
+    </div>
+  </section>
+  </main>
+
+  <!-- ============================== FOOTER -->
+  <footer class="foot">
+    <div class="wrap foot-grid">
+      <div>
+        <a class="brand" href="#top"><span class="brand-mark">◈</span><span>Market<b>Pulse</b></span></a>
+        <p>Honest trading logic for people who'd rather see the receipts. A Quantum Melanin Media build.</p>
+      </div>
+      <div><h4>Navigate</h4><a href="#engine">How it works</a><a href="#proof">Receipts</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
+      <div><h4>App</h4><a href="/app">Open the app</a><a href="/app?view=proof">Proof Mode</a><a href="https://quantummelaninmedia.gumroad.com/l/mzwrgk" target="_blank" rel="noopener">Download</a></div>
+      <div><h4>QMM</h4><a href="https://quantummelaninmedia.com" target="_blank" rel="noopener">quantummelaninmedia.com</a><a href="https://www.youtube.com/@QUANTUMMELANINMEDIA" target="_blank" rel="noopener">YouTube</a></div>
+    </div>
+    <div class="wrap risk">
+      <p><b>Risk disclosure.</b> Trading stocks, options, and crypto carries a high level of risk and may not be suitable for every investor. Options can lose 100% of the premium paid. Past performance, including every backtest on this page, is not indicative of future results. MarketPulse is educational software and not financial advice; it does not guarantee any profit, and you trade your own account at your own discretion. Only trade money you can afford to lose.</p>
+      <p class="copy">© 2026 Quantum Melanin Media · <span class="sys"><i class="dot" data-status-dot></i><span data-status-word>CONNECTING</span></span></p>
+    </div>
+  </footer>
+</body>
+</html>

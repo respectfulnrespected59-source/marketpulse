@@ -32,6 +32,8 @@ def _local_assets_in_index_html() -> set[str]:
     for ref in refs:
         if ref.startswith(("http://", "https://", "//", "data:", "#")):
             continue
+        if ref.endswith("/"):  # <base href="/"> is a URL root, not a file
+            continue
         assets.add(f"static/{ref.lstrip('/')}")
     return assets
 
@@ -64,6 +66,11 @@ class TestManifestCoversTheApp:
         imported = _local_modules_imported_by(ROOT / "app.py")
         missing = sorted(m for m in imported if m not in ALL_SHIPPED)
         assert not missing, f"app.py imports modules the buyer never gets: {missing}"
+
+    def test_the_landing_ships(self):
+        # app.py serves landing.html at "/"; without it the unzipped app's root 404s.
+        for f in ("static/landing.html", "static/landing/landing.css", "static/landing/landing.js"):
+            assert f in build_buyer_pack.BASE, f
 
     def test_the_chart_ships(self):
         # The live chart is the headline feature of the paid edition.

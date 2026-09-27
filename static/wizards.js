@@ -170,7 +170,7 @@ function renderDcaChart(series, contribs) {
     const col = c.tilt > 1.05 ? "var(--buy)" : c.tilt < 0.95 ? "var(--sell)" : "#c9a227";
     const r = (3 + (c.tilt - 0.5) * 2.4).toFixed(1);
     return `<circle cx="${X(i).toFixed(1)}" cy="${Y(c.price).toFixed(1)}" r="${r}"
-      fill="${col}" fill-opacity="0.85" stroke="#0a0d12" stroke-width="1">
+      fill="${col}" fill-opacity="0.85" stroke="#07050d" stroke-width="1">
       <title>${c.date} · $${c.amount} (${c.tilt}× tilt) @ ${fmtPrice(c.price)}</title></circle>`;
   }).join("");
   svg.innerHTML = `<polyline points="${line}" fill="none" stroke="#4aa3ff" stroke-width="1.9" stroke-linejoin="round"/>${dots}`;
