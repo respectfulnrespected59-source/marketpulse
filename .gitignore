@@ -88,3 +88,6 @@ marketing/ads_quantus_tess/*.png
 marketing/ads_quantus_tess/*.mp3
 # Office lock files
 ~$*
+
+# Local license-token signing secret (generated on first run; never commit)
+data/.license_secret

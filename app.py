@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ import datetime
 
 import config
 import grader
+import licensing
 import indicators
 from safety import BoundedCache, InvalidSymbol, clean_kind, clean_symbol
 import strategy as rules_engine
@@ -192,6 +194,42 @@ GRADER_ERROR_MESSAGE = "The grader is not answering right now. Try again in a mi
 
 # One limiter for the whole process: Grade My Reason spends real paid-model calls.
 _GRADE_LIMITER = grader.GradeLimiter()
+
+# ---- Gumroad license keys (Pro / Pro+). Off until MP_GUMROAD_PLANS names the
+# products; the signing secret is read lazily so importing this module never
+# writes a file. Nothing is gated on a license yet: real-money execution will be.
+_LICENSE_PLANS = licensing.parse_plans(os.environ.get("MP_GUMROAD_PLANS"))
+_LICENSE_CACHE = licensing.StatusCache()
+_LICENSE_POST = licensing.http_post
+# Activation is limited per client AND per key. Client identity can be spoofed
+# with forwarding headers, so there is deliberately NO shared daily cap (an
+# attacker rotating fake addresses would exhaust it and lock every buyer out);
+# the per-key limit is the one a spoofer cannot rotate around.
+LICENSE_PER_CLIENT_PER_HOUR = 10
+LICENSE_PER_KEY_PER_HOUR = 6
+_UNCAPPED = 10**9
+_LICENSE_LIMITER = grader.GradeLimiter(per_client=LICENSE_PER_CLIENT_PER_HOUR, window_s=3600,
+                                       daily_cap=_UNCAPPED)
+_LICENSE_KEY_LIMITER = grader.GradeLimiter(per_client=LICENSE_PER_KEY_PER_HOUR, window_s=3600,
+                                           daily_cap=_UNCAPPED)
+_LICENSE_SECRET: list = []
+_LICENSE_SECRET_LOCK = threading.Lock()
+
+
+def _license_secret() -> str | None:
+    with _LICENSE_SECRET_LOCK:
+        if not _LICENSE_SECRET:
+            _LICENSE_SECRET.append(licensing.license_secret())
+        return _LICENSE_SECRET[0]
+
+
+def license_entitlement(headers) -> "licensing.Entitlement":
+    """The gate for Pro-only actions: key, token and device ride in headers
+    (never the URL, which gets logged)."""
+    return licensing.check(
+        headers.get("X-MP-License-Key") or "", headers.get("X-MP-License-Token") or "",
+        headers.get("X-MP-Device") or "", _LICENSE_PLANS, _license_secret(), _LICENSE_CACHE,
+        post=_LICENSE_POST)
 
 
 def _cached(key: str):
@@ -1302,6 +1340,34 @@ class Handler(BaseHTTPRequestHandler):
             print(f"[error] /api/grade-reason: {exc}", file=sys.stderr)
             return self._json({"error": GRADER_ERROR_MESSAGE}, code=502)
 
+    def _license(self, path: str, body: dict):
+        """Activate / check / release a license seat. The key is never echoed."""
+        fields = {k: body.get(k, "") for k in ("key", "device", "token")}
+        if not all(isinstance(v, str) for v in fields.values()):
+            return self._json({"error": "key, device and token must be strings"}, code=400)
+        key, device, token = (fields[k].strip() for k in ("key", "device", "token"))
+        seller = os.environ.get("MP_GUMROAD_TOKEN") or None
+        if path == "/api/license/activate":
+            allowed, _ = _LICENSE_LIMITER.allow(grader.client_key(self.headers, self.client_address[0]))
+            if allowed:
+                allowed, _ = _LICENSE_KEY_LIMITER.allow(licensing.key_fingerprint(key))
+            if not allowed:
+                return self._json({"ok": False, "message": "Too many activation attempts. "
+                                   "Wait an hour and try again."}, code=429)
+            out = licensing.activate(key, device, _LICENSE_PLANS, _license_secret(),
+                                     post=_LICENSE_POST, seller_token=seller)
+            return self._json(out, code=200 if out.get("ok") else 403)
+        if path == "/api/license/status":
+            e = licensing.check(key, token, device, _LICENSE_PLANS, _license_secret(),
+                                _LICENSE_CACHE, post=_LICENSE_POST)
+            # "unreachable" lets the app keep a valid license through a Gumroad
+            # blip instead of wiping it and making the buyer burn another seat.
+            return self._json({"active": e.active, "tier": e.tier, "billing": e.billing,
+                               "unreachable": e.unreachable, "reason": licensing.explain(e)})
+        out = licensing.deactivate(key, token, device, _LICENSE_PLANS, _license_secret(),
+                                   seller_token=seller, post=_LICENSE_POST)
+        return self._json(out, code=200 if out.get("ok") else 403)
+
     # Strategies are posted rather than put in a query string: a rule set is
     # structured and can be long, and URLs get logged.
     MAX_BODY_BYTES = 64 * 1024
@@ -1310,7 +1376,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path not in ("/api/paper/scan", "/api/strategy/validate",
                         "/api/options/mark", "/api/options/open",
-                        "/api/options/book/export", "/api/grade-reason"):
+                        "/api/options/book/export", "/api/grade-reason",
+                        "/api/license/activate", "/api/license/status",
+                        "/api/license/deactivate"):
             return self._send(404, b"Not found", "text/plain")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1328,6 +1396,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/grade-reason":
                 return self._grade_reason(body)
+
+            if path.startswith("/api/license/"):
+                return self._license(path, body)
 
             if path == "/api/strategy/validate":
                 problems = rules_engine.validate(body.get("strategy"))
@@ -1585,6 +1656,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"query": q, "results": search_symbols(q[:64])})
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": self._upstream_failed(path, exc)}, code=502)
+
+        if path == "/api/license":
+            return self._json({"enabled": bool(_LICENSE_PLANS) and bool(_license_secret()),
+                               "plans": [{"tier": p.tier, "billing": p.billing, "devices": p.devices,
+                                          "accounts": p.accounts} for p in _LICENSE_PLANS.values()]})
 
         if path == "/api/universe":
             return self._json({
