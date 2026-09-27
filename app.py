@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -54,6 +55,15 @@ try:
     import options_paper
 except ModuleNotFoundError:
     options_paper = None
+# The Trade desk ships in the Pro download only; its money core lives in agent/.
+# Appended, not prepended, so an agent module can never shadow an app module.
+_AGENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent")
+if os.path.isdir(_AGENT_DIR) and _AGENT_DIR not in sys.path:
+    sys.path.append(_AGENT_DIR)
+try:
+    import desk_api
+except ModuleNotFoundError:
+    desk_api = None
 
 _INSTALLED = {
     "proof": backtest is not None,
@@ -1368,6 +1378,16 @@ class Handler(BaseHTTPRequestHandler):
                                    seller_token=seller, post=_LICENSE_POST)
         return self._json(out, code=200 if out.get("ok") else 403)
 
+    def _desk(self, method: str, path: str, body: dict | None):
+        """The Trade desk: only on the buyer's own computer (desk_api decides
+        who may ask). Everywhere else it simply does not exist."""
+        if desk_api is None or not desk_api.enabled(self.server.server_address):
+            return self._send(404, b"Not found", "text/plain")
+        code, out = desk_api.handle(method, path, self.headers, body,
+                                    port=self.server.server_address[1],
+                                    license_check=license_entitlement)
+        return self._json(out, code=code)
+
     # Strategies are posted rather than put in a query string: a rule set is
     # structured and can be long, and URLs get logged.
     MAX_BODY_BYTES = 64 * 1024
@@ -1378,7 +1398,7 @@ class Handler(BaseHTTPRequestHandler):
                         "/api/options/mark", "/api/options/open",
                         "/api/options/book/export", "/api/grade-reason",
                         "/api/license/activate", "/api/license/status",
-                        "/api/license/deactivate"):
+                        "/api/license/deactivate") and not path.startswith("/api/desk/"):
             return self._send(404, b"Not found", "text/plain")
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1392,6 +1412,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "body must be JSON"}, code=400)
         if not isinstance(body, dict):
             return self._json({"error": "body must be a JSON object"}, code=400)
+
+        if path.startswith("/api/desk/"):
+            return self._desk("POST", path, body)
 
         try:
             if path == "/api/grade-reason":
@@ -1440,6 +1463,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
+
+        if path.startswith("/api/desk/"):
+            return self._desk("GET", path, None)
 
         if path == "/api/markets":
             try:
@@ -1702,6 +1728,25 @@ def main():
     server = ThreadingHTTPServer((host, PORT), Handler)
     shown = "127.0.0.1" if host == "127.0.0.1" else host
     print(f"\n  MarketPulse running -> http://{shown}:{PORT}\n  (Ctrl+C to stop)\n")
+    open_browser = os.environ.get("MP_OPEN_BROWSER") == "1"   # set by run.bat / run.sh
+    if desk_api is not None and desk_api.enabled(server.server_address):
+        # The desk link carries its token in the #fragment; only this console
+        # (and the owner-only launch page) ever sees it.
+        # The link unlocks the desk: show it in an interactive window only, never
+        # in a log file someone redirected the output to.
+        link = (desk_api.desk_url(shown, PORT) if sys.stdout.isatty()
+                else f"http://{shown}:{PORT}/app (unlock link hidden: output is not a console)")
+        print(f"  Trade desk (this computer only): {link}\n")
+        if open_browser:
+            webbrowser.open(desk_api.open_page(shown, PORT))
+        # Scans for proposals while the app is open; auto-exits only if switched on.
+        try:
+            every = float(os.environ.get("MP_DESK_SCAN_MIN", "15"))
+        except ValueError:
+            every = 15.0
+        desk_api.start_loop(every)
+    elif open_browser:
+        webbrowser.open(f"http://{shown}:{PORT}/app")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

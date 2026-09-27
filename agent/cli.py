@@ -13,6 +13,9 @@ Usage (from the agent/ directory):
   python cli.py panic  [reason]     engage kill switch (blocks all sends)
   python cli.py resume              release kill switch
   python cli.py audit  [n]          tail the decision log
+  python cli.py tick                one background pass: expire, scan, auto-exits (if on)
+  python cli.py report [days]       what the agent did (paper vs live), default 7 days
+  python cli.py pilot start|stop|status   the owner's one-week live pilot window
   python cli.py strategy init       write a starter rules file you then edit
   python cli.py strategy validate   check your rules before they trade
   python cli.py strategy show       print the rules currently in force
@@ -29,14 +32,16 @@ import agent_config as config
 import credentials
 import desk
 import guardrails
+import pilot
 import proposer
 import store
 
 
 def _owner_pilot() -> bool:
-    """The CLI's live permission during the owner's one-week pilot: an explicit
-    MP_OWNER_PILOT=1 on the owner's own machine. The app uses a Pro license."""
-    return os.environ.get("MP_OWNER_PILOT") == "1"
+    """The CLI's live permission: the owner's pilot, which needs MP_OWNER_PILOT=1
+    on the owner's own machine AND a started, unexpired one-week window
+    (pilot.py). The app also accepts a Pro license."""
+    return pilot.active()
 
 
 def _fmt_money(v) -> str:
@@ -131,12 +136,44 @@ def cmd_approve(pid: str) -> None:
 
 
 def cmd_reject(pid: str) -> None:
-    updated = store.update_proposal(pid, status="rejected")
-    if updated:
-        store.audit("rejected", {"id": pid})
-        print(f"  Rejected {pid}.")
-    else:
-        print(f"  No proposal {pid}.")
+    # desk.reject, not a raw store write: only a PENDING proposal can be
+    # rejected, under the approval lock, so a sent order is never relabelled.
+    print("  " + desk.reject(pid)["message"])
+
+
+def cmd_tick() -> None:
+    print("  ", desk.tick(live_permitted=_owner_pilot()))
+
+
+def cmd_report(days: float) -> None:
+    r = desk.report(days)
+    print(f"\n  Last {r['days']:g} days: {r['proposed']} proposals  {r['by_status']}")
+    for mode, m in sorted(r["modes"].items()):
+        print(f"  {mode.upper():<6} buys {m['buys']}  sells {m['sells']} (auto {m['auto_sells']})  "
+              f"filled {m['filled']}  bought {_fmt_money(m['bought_usd'])}")
+    for mode, pl in sorted(r["exit_pl_usd"].items()):
+        print(f"  {mode.upper():<6} P/L at exit over {r['exits']} closes: {_fmt_money(pl)}")
+    print()
+
+
+def cmd_pilot(args: list[str]) -> int:
+    sub = (args[0] if args else "status").lower()
+    try:
+        if sub == "start":
+            w = pilot.start()
+            print(f"  Live pilot started. It ends by itself on {pilot.status()['ends']} (UTC).")
+            print(f"  Caps: {_fmt_money(config.LIVE_MAX_SINGLE_TX_USD)} a trade, "
+                  f"{_fmt_money(config.LIVE_MAX_DAILY_SPEND_USD)} a day.")
+            return 0 if w else 1
+        if sub == "stop":
+            pilot.stop()
+            print("  Live pilot stopped. Live orders are refused again.")
+            return 0
+    except pilot.PilotError as exc:
+        print(f"  {exc}")
+        return 1
+    print("  ", pilot.status())
+    return 0
 
 
 def cmd_panic(reason: str) -> None:
@@ -244,6 +281,12 @@ def main(argv: list[str]) -> int:
         cmd_resume()
     elif cmd == "audit":
         cmd_audit(int(rest[0]) if rest else 30)
+    elif cmd == "tick":
+        cmd_tick()
+    elif cmd == "report":
+        cmd_report(float(rest[0]) if rest else 7)
+    elif cmd == "pilot":
+        return cmd_pilot(rest)
     elif cmd == "strategy":
         return cmd_strategy(rest)
     else:

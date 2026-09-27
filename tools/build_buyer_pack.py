@@ -66,6 +66,7 @@ BASE = [
     "static/panels.js",
     "static/home.js",
     "static/license.js",
+    "static/desk.js",       # Trade desk UI; hides itself unless the local desk API answers
     "static/wizards.js",
     "static/paper.js",
     # Ships in BOTH editions even though the options engine is Pro: index.html
@@ -119,6 +120,12 @@ PRO_ONLY = [
     "agent/broker.py",
     "agent/proposer.py",
     "agent/cli.py",
+    "agent/oslock.py",
+    "agent/pilot.py",
+    "agent/notify.py",
+    "desk_api.py",          # the Trade desk's local-only HTTP API
+    "tests/test_trade_desk.py",
+    "tests/test_desk_api.py",
     "tests/test_guardrails.py",
     "tests/test_money_core.py",   # needs agent/
 ]

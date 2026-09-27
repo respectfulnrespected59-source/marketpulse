@@ -37,6 +37,7 @@ WATCHED = [
     "home.js", "learn.js", "paper.js", "quickfill.js", "styles.css",
     "index.html", "sw.js",
     "landing.html", "landing/landing.js", "landing/landing.css", "brand.css",
+    "license.js", "desk.js",
 ]
 
 # A line-count match is strong but not proof. These are strings whose presence
@@ -51,6 +52,9 @@ MARKERS = {
     "function forwardToApp": ("landing/landing.js", True),  # installed app -> /app
     "api/markets?kind=": ("home.js", False),
     "@keyframes mp-mol": ("brand.css", True),  # the heartbeat -> melanin loop
+    "/api/desk/ping": ("desk.js", True),       # desk shows only where a local desk answers
+    "/api/desk/session": ("desk.js", False),   # the old token hand-out must never come back
+    ".tab[hidden]": ("styles.css", True),      # else the hidden Trade tab shows on the hosted site
 }
 
 TIMEOUT_S = 60
@@ -114,6 +118,23 @@ def audit_markers(host: str) -> list[str]:
     return drift
 
 
+def audit_no_desk(host: str) -> list[str]:
+    """The hosted site must have NO Trade desk: it can place real orders.
+    Asks the running host, not the code, and goes red if the desk answers."""
+    print("\n--- the hosted site must not offer the Trade desk ---")
+    try:
+        with urllib.request.urlopen(f"{host}/api/desk/ping", timeout=TIMEOUT_S) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"  ! could not reach {host}: {exc}")
+        return ["desk check: host unreachable"]
+    ok = status == 404
+    print(f"  {'OK   ' if ok else 'DRIFT'}  /api/desk/ping -> {status} (expected 404)")
+    return [] if ok else [f"/api/desk/ping answered {status} on the HOSTED site: the desk must be local-only"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit what the live host actually serves.")
     parser.add_argument("--host", default=DEFAULT_HOST)
@@ -123,7 +144,7 @@ def main() -> int:
     print(f"System 3* audit -> {host}")
     print("(bypasses git; asks the running host what it serves)\n")
 
-    drift = audit_assets(host) + audit_markers(host)
+    drift = audit_assets(host) + audit_markers(host) + audit_no_desk(host)
 
     print()
     if drift:

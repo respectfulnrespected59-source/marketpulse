@@ -22,3 +22,6 @@ for _p in (ROOT, AGENT):          # drop any stale entries first...
         sys.path.remove(_p)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, AGENT)         # ...so AGENT ends up at index 0 and wins for `config`
+
+# The desk's background tick pops a desktop toast for new buys. Never from tests.
+os.environ["MP_NOTIFY"] = "0"

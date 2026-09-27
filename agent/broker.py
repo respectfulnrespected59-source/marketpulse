@@ -17,9 +17,11 @@ broker just does what it's told once a request has been authorized.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import agent_config as config
@@ -78,6 +80,8 @@ _ALLOWED_EXACT = (
     # crypto approval was refused for "no live price" (fail-safe, but crypto
     # could never trade). Found by tests/test_money_core.py.
     ("GET",  "/v1beta3/crypto/us/latest/trades"),
+    # Settle an order whose reply never arrived: look it up by OUR id.
+    ("GET",  "/v2/orders:by_client_order_id"),
 )
 # Reading one order back (its fill) is safe; cancelling or listing-to-cancel is not allowed.
 # Prefixes, for paths that legitimately carry a symbol segment.
@@ -126,6 +130,12 @@ class NotFoundError(BrokerError):
     """A genuine HTTP 404 (e.g. no position held), never inferred from message text."""
 
 
+class TransportError(BrokerError):
+    """No usable answer came back (timeout, dropped connection, unreadable
+    success reply). For an ORDER this means "may or may not have been placed",
+    never "refused": the desk marks it unconfirmed and asks Alpaca later."""
+
+
 _DUPLICATE_CODE = 40010001
 
 
@@ -152,7 +162,9 @@ def _urlopen_transport(method: str, url: str, headers: dict, body: str | None) -
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
     except urllib.error.URLError as exc:
-        raise BrokerError(f"Network error reaching Alpaca: {exc.reason}") from exc
+        raise TransportError(f"Network error reaching Alpaca: {exc.reason}") from exc
+    except (TimeoutError, ConnectionError, http.client.HTTPException) as exc:
+        raise TransportError(f"Alpaca didn't answer ({type(exc).__name__})") from exc
 
 
 # Swappable so tests can stand in a faithful fake Alpaca; production uses urlopen.
@@ -170,7 +182,7 @@ def _request(method: str, path: str, body: dict | None = None, base: str | None 
         try:
             return json.loads(raw) if raw else {}
         except ValueError:
-            raise BrokerError(f"Alpaca sent an unreadable reply ({status}): {raw[:120]!r}") from None
+            raise TransportError(f"Alpaca sent an unreadable reply ({status}): {raw[:120]!r}") from None
     if status in (401, 403):
         raise AuthError(f"Alpaca auth failed ({status}): {raw[:300]}")
     if status == 404:
@@ -213,6 +225,13 @@ def clock() -> dict:
 
 def get_order(order_id: str) -> dict:
     return _request("GET", f"/v2/orders/{order_id}")
+
+
+def get_order_by_client_id(client_order_id: str) -> dict:
+    """The order we sent under our own id (the proposal id). NotFoundError
+    means Alpaca never received it."""
+    q = urllib.parse.urlencode({"client_order_id": client_order_id})
+    return _request("GET", f"/v2/orders:by_client_order_id?{q}")
 
 
 def latest_price(symbol: str) -> float:
