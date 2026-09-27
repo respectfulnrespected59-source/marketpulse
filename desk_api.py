@@ -11,9 +11,14 @@ pass all of these, in order:
   3. Browser fetch metadata. Sec-Fetch-Site, when sent, is same-origin (or
      "none" for a GET typed into the address bar); a POST must carry an
      Origin equal to http://<Host>. Cross-site forms and fetches are refused.
-  4. A per-process token in the X-MP-Desk header on every call but /session.
-     A custom header forces a CORS preflight, which this server never grants
-     (there is no OPTIONS handler), so no other website can even send one.
+  4. The desk token in the X-MP-Desk header on every call but /ping. It lives
+     in an owner-only file (agent/data/desk_token) and reaches the browser only
+     through the launcher: app.py opens an owner-only local page that forwards
+     to /app#desk=<token>. A fragment never reaches a server or a log. There
+     is deliberately NO endpoint that hands the token out: any local program,
+     or another user on this computer, could fake a browser's headers to ask.
+     The custom header also forces a CORS preflight, which this server never
+     grants (there is no OPTIONS handler).
 
 Keys are write-only: the browser can hand them over, never read them back.
 All money decisions stay in agent/desk.py and agent/guardrails.py; this file
@@ -22,7 +27,9 @@ only checks who is asking and translates HTTP to those calls.
 from __future__ import annotations
 
 import hmac
+import json
 import os
+import pathlib
 import re
 import secrets
 import sys
@@ -39,7 +46,10 @@ import store
 LOOPBACK_BIND = ("127.0.0.1", "::1", "localhost")
 LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
 TOKEN_HEADER = "X-MP-Desk"
-_TOKEN = secrets.token_urlsafe(32)          # new every time the app starts
+TOKEN_FILE = "desk_token"
+OPEN_PAGE = "open_desk.html"
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{40,}$")
+_TOKEN_CACHE: dict = {}
 _ID = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 GRANT_S = 3600                               # a verified Pro license covers the loop for an hour
 _GRANT = {"until": 0.0}
@@ -47,6 +57,53 @@ _LOOP = {"every_min": 0, "last": None, "last_result": None, "thread": None}
 
 LIVE_NEEDS = ("Real money needs MarketPulse Pro (or the owner's pilot). "
               "Paper trading is always available.")
+
+
+# ------------------------------------------------------------------ the token
+def _owner_only_write(path: str, text: str) -> None:
+    tmp = path + ".tmp"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    credentials._lock_to_this_user(tmp)      # Windows ignores 0600; icacls instead
+    os.replace(tmp, path)
+
+
+def session_token() -> str:
+    """The desk token: made once, kept in an owner-only file, so a bookmark
+    keeps working across restarts while other users on this PC can't read it."""
+    cached = _TOKEN_CACHE.get(config.DATA_DIR)
+    if cached:
+        return cached
+    path = os.path.join(config.DATA_DIR, TOKEN_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            token = fh.read().strip()
+    except OSError:
+        token = ""
+    if not _TOKEN_RE.match(token):
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        token = secrets.token_urlsafe(32)
+        _owner_only_write(path, token)
+    _TOKEN_CACHE[config.DATA_DIR] = token
+    return token
+
+
+def desk_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}/app#desk={session_token()}"
+
+
+def open_page(host: str, port: int) -> str:
+    """An owner-only local page that forwards the browser to the desk URL, so
+    the token never appears on a command line (which other users can read on
+    some systems). Returns its file:// URL for webbrowser.open."""
+    target = json.dumps(desk_url(host, port))
+    path = os.path.join(config.DATA_DIR, OPEN_PAGE)
+    _owner_only_write(path, "<!doctype html><meta charset=utf-8><title>MarketPulse</title>"
+                            f"<script>location.replace({target});</script>")
+    return pathlib.Path(path).resolve().as_uri()
 
 
 # ------------------------------------------------------------------ who may ask
@@ -77,9 +134,9 @@ def _refusal(method: str, path: str, headers, port: int) -> tuple[int, dict] | N
         return 403, {"ok": False, "message": "Cross-site request refused."}
     if origin is not None and origin.lower() != expected:
         return 403, {"ok": False, "message": "Cross-site request refused."}
-    if path != "/api/desk/session":
+    if path != "/api/desk/ping":
         sent = headers.get(TOKEN_HEADER) or ""
-        if not hmac.compare_digest(sent.encode(), _TOKEN.encode()):
+        if not hmac.compare_digest(sent.encode(), session_token().encode()):
             return 401, {"ok": False, "message": "Reload the app to reconnect the Trade desk."}
     return None
 
@@ -125,12 +182,14 @@ def _state(headers, license_check) -> dict:
     mode = creds.mode if creds else "paper"
     single, daily = config.caps(mode)
     permitted, why = live_permission(headers, license_check)
+    live_bits, broker_error = _broker_view(creds)     # also settles fills, so the list below is current
     proposals = store.load_proposals()
     out = {
         "ok": True,
         "connected": credentials.masked(creds),
         "mode": mode,
         "caps": {"per_trade": str(single), "daily": str(daily)},
+        "ttl_s": config.PROPOSAL_TTL,
         "halted": store.is_halted(),
         "halt_reason": store.load_circuit().get("reason") or "",
         "live": {"permitted": permitted, "why": why},
@@ -140,28 +199,33 @@ def _state(headers, license_check) -> dict:
         "pending": [_view(p) for p in proposals if p.get("status") == "pending"],
         "recent": [_view(p) for p in proposals if p.get("status") != "pending"][-15:][::-1],
         "report": desk.report(7),
-        "account": None, "positions": [], "clock": None, "error": None,
+        **live_bits, "error": broker_error,
     }
     try:
         out["spent_24h"] = store.spend_last_24h(mode)
     except store.LedgerError as exc:
         out["spent_24h"], out["error"] = None, str(exc)
+    return out
+
+
+def _broker_view(creds) -> tuple[dict, str | None]:
+    bits = {"account": None, "positions": [], "clock": None}
     if creds is None:
-        return out
+        return bits, None
     try:
         a = broker.account()
-        out["account"] = {k: a.get(k) for k in ("status", "equity", "last_equity", "cash", "buying_power")}
-        out["positions"] = [{k: p.get(k) for k in ("symbol", "qty", "market_value", "avg_entry_price",
-                                                     "unrealized_pl", "unrealized_plpc")}
-                            for p in broker.positions()]
+        bits["account"] = {k: a.get(k) for k in ("status", "equity", "last_equity", "cash", "buying_power")}
+        bits["positions"] = [{k: p.get(k) for k in ("symbol", "qty", "market_value", "avg_entry_price",
+                                                      "unrealized_pl", "unrealized_plpc")}
+                             for p in broker.positions()]
         c = broker.clock()
-        out["clock"] = {k: c.get(k) for k in ("is_open", "next_open", "next_close")}
+        bits["clock"] = {k: c.get(k) for k in ("is_open", "next_open", "next_close")}
         desk.refresh_fills(limit=5)
     except broker.AuthError:
-        out["error"] = "Alpaca did not accept the saved keys. Reconnect them below."
+        return bits, "Alpaca did not accept the saved keys. Reconnect them below."
     except broker.BrokerError:
-        out["error"] = "Couldn't reach Alpaca just now. Trading is paused until it answers."
-    return out
+        return bits, "Couldn't reach Alpaca just now. Trading is paused until it answers."
+    return bits, None
 
 
 # ------------------------------------------------------------------ actions
@@ -231,8 +295,8 @@ def handle(method: str, path: str, headers, body: dict | None, *, port: int,
     if refused:
         return refused
     try:
-        if method == "GET" and path == "/api/desk/session":
-            return 200, {"ok": True, "token": _TOKEN}
+        if method == "GET" and path == "/api/desk/ping":
+            return 200, {"ok": True}          # "a desk lives here"; says nothing else
         if method == "GET" and path == "/api/desk/state":
             return 200, _state(headers, license_check)
         if method == "POST":

@@ -4,6 +4,7 @@ cd /d "%~dp0"
 echo Starting MarketPulse...
 REM Tells licensing this is the buyer's own computer (it may keep a local signing secret).
 set MP_LICENSE_LOCAL=1
-start "" http://127.0.0.1:8000/app
+REM app.py opens the browser itself once it is listening (with the Trade desk unlocked).
+set MP_OPEN_BROWSER=1
 python app.py
 pause

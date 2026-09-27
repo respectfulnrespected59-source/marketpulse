@@ -169,12 +169,11 @@ def update_equity_and_check(equity: float) -> None:
     Consecutive-loss tracking is updated separately via record_trade_result.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    state = store.load_circuit()
-
-    if state.get("day") != today or state.get("day_start_equity", 0) <= 0:
-        state = {**state, "day": today, "day_start_equity": equity}
-        store.save_circuit(state)
-        return
+    with store.locked():
+        state = store.load_circuit()
+        if state.get("day") != today or state.get("day_start_equity", 0) <= 0:
+            store.save_circuit({**state, "day": today, "day_start_equity": equity})
+            return
 
     start = state["day_start_equity"]
     if start <= 0:
@@ -189,9 +188,10 @@ def update_equity_and_check(equity: float) -> None:
 
 def record_trade_result(is_win: bool) -> None:
     """Track consecutive losses; halt after the configured streak."""
-    state = store.load_circuit()
-    losses = 0 if is_win else state.get("consecutive_losses", 0) + 1
-    store.save_circuit({**state, "consecutive_losses": losses})
+    with store.locked():
+        state = store.load_circuit()
+        losses = 0 if is_win else state.get("consecutive_losses", 0) + 1
+        store.save_circuit({**state, "consecutive_losses": losses})
     if losses >= config.MAX_CONSECUTIVE_LOSSES:
         store.engage_halt(f"{losses} consecutive losses")
 

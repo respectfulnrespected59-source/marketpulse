@@ -38,13 +38,19 @@ import app  # noqa: E402  (provides fetch_stocks / fetch_crypto with signals)
 import strategy  # noqa: E402  (the rule engine lives at the root, beside app)
 
 
-def _held_symbols() -> set[str]:
-    """Set of symbols we currently hold, normalized to slashless crypto form."""
+def _held_symbols() -> set[str] | None:
+    """Symbols we currently hold (slashless crypto form). Offline (no keys) that
+    is nothing. Connected but unreadable is None, NOT "nothing": reading a
+    failed positions call as flat would propose a second buy of something
+    already held."""
+    if not _connected():
+        return set()
     try:
         import broker
         return {p["symbol"].replace("/", "") for p in broker.positions()}
-    except Exception:  # noqa: BLE001 — proposing must work even offline
-        return set()
+    except Exception as exc:  # noqa: BLE001
+        store.audit("held_symbols_failed", {"error": type(exc).__name__})
+        return None
 
 
 def _pending_symbols() -> set[str]:
@@ -212,6 +218,9 @@ def _scan_locked() -> list[dict]:
         return []
 
     held = _held_symbols()
+    if held is None:
+        store.audit("scan_blocked", {"reason": "positions unreadable"})
+        return []
     pending = _pending_symbols()
     new: list[dict] = []
 

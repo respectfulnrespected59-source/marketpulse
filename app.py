@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1727,13 +1728,21 @@ def main():
     server = ThreadingHTTPServer((host, PORT), Handler)
     shown = "127.0.0.1" if host == "127.0.0.1" else host
     print(f"\n  MarketPulse running -> http://{shown}:{PORT}\n  (Ctrl+C to stop)\n")
+    open_browser = os.environ.get("MP_OPEN_BROWSER") == "1"   # set by run.bat / run.sh
     if desk_api is not None and desk_api.enabled(server.server_address):
+        # The desk link carries its token in the #fragment; only this console
+        # (and the owner-only launch page) ever sees it.
+        print(f"  Trade desk (this computer only): {desk_api.desk_url(shown, PORT)}\n")
+        if open_browser:
+            webbrowser.open(desk_api.open_page(shown, PORT))
         # Scans for proposals while the app is open; auto-exits only if switched on.
         try:
             every = float(os.environ.get("MP_DESK_SCAN_MIN", "15"))
         except ValueError:
             every = 15.0
         desk_api.start_loop(every)
+    elif open_browser:
+        webbrowser.open(f"http://{shown}:{PORT}/app")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

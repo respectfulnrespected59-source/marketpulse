@@ -79,6 +79,13 @@ STORE_LOCK_FILE = ".store.lock"
 
 
 @contextlib.contextmanager
+def locked():
+    """Public name: guardrails' circuit-breaker read-modify-writes use it too."""
+    with _locked():
+        yield
+
+
+@contextlib.contextmanager
 def _locked():
     with _STORE_LOCK:
         depth = getattr(_HELD, "depth", 0)
@@ -98,16 +105,35 @@ def _locked():
 
 
 # ----------------------------------------------------------------- audit
+_AUDIT_LOCK = threading.Lock()
+AUDIT_LOCK_FILE = ".audit.lock"
+
+
 def audit(event: str, detail: dict | None = None) -> None:
-    """Append one immutable line. Every decision is logged, success or not."""
+    """Append one immutable line. Every decision is logged, success or not.
+
+    Appends from the app, its loop and the CLI are serialised by a leaf lock
+    (it never takes another lock), so two lines can't interleave. If that lock
+    is somehow stuck, the line is written anyway: losing the record of a send,
+    or failing the send over its log line, would both be worse."""
     _ensure()
-    line = {
+    line = json.dumps({
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": event,
         "detail": detail or {},
-    }
-    with open(_path(_AUDIT), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(line) + "\n")
+    }) + "\n"
+    with _AUDIT_LOCK:
+        lock = oslock.FileLock(AUDIT_LOCK_FILE, timeout=5.0)
+        try:
+            lock.acquire()
+        except oslock.BusyError:
+            lock = None
+        try:
+            with open(_path(_AUDIT), "a", encoding="utf-8") as fh:
+                fh.write(line)
+        finally:
+            if lock is not None:
+                lock.release()
 
 
 def read_audit(limit: int = 50) -> list[dict]:
@@ -234,18 +260,20 @@ def is_halted() -> bool:
 
 def engage_halt(reason: str) -> None:
     _ensure()
-    with open(_path(_HALT), "w", encoding="utf-8") as fh:
-        fh.write(f"{datetime.now(timezone.utc).isoformat()} {reason}\n")
-    state = load_circuit()
-    save_circuit({**state, "halted": True, "reason": reason})
+    with _locked():   # the circuit is read-modify-write, shared with the loop and the CLI
+        with open(_path(_HALT), "w", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now(timezone.utc).isoformat()} {reason}\n")
+        state = load_circuit()
+        save_circuit({**state, "halted": True, "reason": reason})
     audit("halt_engaged", {"reason": reason})
 
 
 def release_halt() -> None:
     path = _path(_HALT)
-    if os.path.isfile(path):
-        os.remove(path)
-    state = load_circuit()
-    save_circuit({**state, "halted": False, "reason": "",
-                  "consecutive_losses": 0})
+    with _locked():
+        if os.path.isfile(path):
+            os.remove(path)
+        state = load_circuit()
+        save_circuit({**state, "halted": False, "reason": "",
+                      "consecutive_losses": 0})
     audit("halt_released", {})

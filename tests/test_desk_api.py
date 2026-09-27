@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import stat
+import subprocess
 import threading
 import time
 from http.server import ThreadingHTTPServer
@@ -31,6 +34,7 @@ def isolated(tmp_path, monkeypatch):
     for var in ("MP_ALPACA_KEY_ID", "MP_ALPACA_SECRET", "MP_ALPACA_PAPER", "MP_OWNER_PILOT", "RENDER"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(desk_api, "_GRANT", {"until": 0.0})
+    monkeypatch.setattr(desk_api, "_TOKEN_CACHE", {})
     yield
 
 
@@ -66,7 +70,7 @@ def good(port):
     """What the app's own page sends: same host, same origin, the token."""
     host = f"127.0.0.1:{port}"
     return {"Host": host, "Origin": f"http://{host}", "Sec-Fetch-Site": "same-origin",
-            desk_api.TOKEN_HEADER: desk_api._TOKEN}
+            desk_api.TOKEN_HEADER: desk_api.session_token()}
 
 
 def call(port, method, path, body=None, **override):
@@ -92,20 +96,58 @@ def add(pid, side="buy", symbol="BTC/USD", kind="crypto"):
 
 
 # ------------------------------------------------------------------ who may ask
-def test_the_page_gets_a_session_token(server):
-    status, out = call(server, "GET", "/api/desk/session")
-    assert status == 200 and out["token"] == desk_api._TOKEN
+def test_ping_says_a_desk_lives_here_and_nothing_else(server):
+    status, out = call(server, "GET", "/api/desk/ping", **{desk_api.TOKEN_HEADER: None})
+    assert status == 200 and out == {"ok": True}
+
+
+def test_no_endpoint_hands_out_the_token(server):
+    token = desk_api.session_token()
+    for path in ("/api/desk/session", "/api/desk/token", "/api/desk/ping", "/api/desk/state"):
+        status, out = call(server, "GET", path, **{desk_api.TOKEN_HEADER: None})
+        assert token not in json.dumps(out), path
+
+
+def test_the_token_lives_in_an_owner_only_file_and_survives_a_restart(monkeypatch):
+    if os.name == "nt":   # readable-by-all folder FIRST, so the test can fail if the lock doesn't strip it
+        subprocess.run(["icacls", config.DATA_DIR, "/grant", "*S-1-5-32-545:(OI)(CI)R"],
+                       capture_output=True, check=True)
+    first = desk_api.session_token()
+    monkeypatch.setattr(desk_api, "_TOKEN_CACHE", {})
+    assert desk_api.session_token() == first
+    path = os.path.join(config.DATA_DIR, desk_api.TOKEN_FILE)
+    if os.name == "nt":
+        acl = subprocess.run(["icacls", path], capture_output=True, text=True).stdout
+        assert "Everyone" not in acl and "BUILTIN\\Users" not in acl and "(F)" in acl
+    else:
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_a_damaged_token_file_is_replaced_not_trusted(monkeypatch):
+    with open(os.path.join(config.DATA_DIR, desk_api.TOKEN_FILE), "w") as fh:
+        fh.write("short")
+    monkeypatch.setattr(desk_api, "_TOKEN_CACHE", {})
+    assert desk_api.session_token() != "short" and len(desk_api.session_token()) >= 40
+
+
+def test_the_launch_page_forwards_with_the_token_in_the_fragment():
+    uri = desk_api.open_page("127.0.0.1", 8000)
+    assert uri.startswith("file:")
+    with open(os.path.join(config.DATA_DIR, desk_api.OPEN_PAGE), encoding="utf-8") as fh:
+        html = fh.read()
+    assert f"http://127.0.0.1:8000/app#desk={desk_api.session_token()}" in html
+    assert "?desk=" not in html                       # never a query string (servers log those)
 
 
 def test_dns_rebinding_host_is_refused_even_with_the_token(server):
-    status, _ = call(server, "GET", "/api/desk/session", Host=f"evil.example:{server}")
+    status, _ = call(server, "GET", "/api/desk/ping", Host=f"evil.example:{server}")
     assert status == 403
     status, _ = call(server, "GET", "/api/desk/state", Host=f"evil.example:{server}")
     assert status == 403
 
 
 def test_a_host_on_another_port_is_refused(server):
-    status, _ = call(server, "GET", "/api/desk/session", Host="127.0.0.1:1")
+    status, _ = call(server, "GET", "/api/desk/ping", Host="127.0.0.1:1")
     assert status == 403
 
 
@@ -116,7 +158,7 @@ def test_localhost_name_is_accepted(server):
 
 
 def test_cross_site_fetch_metadata_is_refused(server):
-    status, _ = call(server, "GET", "/api/desk/session", **{"Sec-Fetch-Site": "cross-site"})
+    status, _ = call(server, "GET", "/api/desk/ping", **{"Sec-Fetch-Site": "cross-site"})
     assert status == 403
     status, _ = call(server, "POST", "/api/desk/halt", {}, **{"Sec-Fetch-Site": "same-site"})
     assert status == 403
@@ -144,7 +186,7 @@ def test_cors_preflight_is_never_granted(server):
 
 def test_the_hosted_site_has_no_desk_at_all(server, monkeypatch):
     monkeypatch.setenv("RENDER", "true")
-    assert call(server, "GET", "/api/desk/session")[0] == 404
+    assert call(server, "GET", "/api/desk/ping")[0] == 404
     assert call(server, "POST", "/api/desk/halt", {})[0] == 404
     assert store.is_halted() is False
 

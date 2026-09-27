@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime
 from decimal import Decimal
 
 import agent_config as config
@@ -48,6 +47,25 @@ def FileLock(timeout: float = 10.0) -> oslock.FileLock:  # noqa: N802 — kept a
     """Cross-process exclusive lock on agent/data/.desk.lock."""
     return oslock.FileLock(LOCK_FILE, timeout, DeskBusyError,
                            "Another approval is in progress. Try again in a moment.")
+
+class _SentButUnrecorded(Exception):
+    """Alpaca accepted the order but the 'submitted' record could not be saved."""
+
+    def __init__(self, oid, mode):
+        super().__init__(oid)
+        self.oid, self.mode = oid, mode
+
+
+class _MaybeSent(Exception):
+    """The order may have reached Alpaca and even 'unconfirmed' couldn't be saved."""
+
+    def __init__(self, mode):
+        super().__init__(mode)
+        self.mode = mode
+
+
+SEND_STUCK_S = 300      # a 'sending' this old was interrupted mid-send: settle it with Alpaca
+
 
 def _result(ok: bool, pid: str, status: str, message: str, **extra) -> dict:
     return {"ok": ok, "id": pid, "status": status, "message": message, **extra}
@@ -76,13 +94,24 @@ def _approve_locked(pid: str, *, live_permitted: bool, auto: bool) -> dict:
         return _result(False, pid, p.get("status", "unknown"),
                        f"This proposal is already {p.get('status')}; nothing was sent.")
     try:
-        store.update_proposal(pid, status="sending")
+        store.update_proposal(pid, status="sending", sending_since=time.time())
     except Exception as exc:  # noqa: BLE001 — could not claim it: send nothing, say so
         store.audit("claim_failed", {"id": pid, "error": type(exc).__name__})
         return _result(False, pid, "pending",
                        f"Could not save the approval ({type(exc).__name__}); nothing was sent. Try again.")
     try:
         return _send(p, live_permitted=live_permitted, auto=auto)
+    except _SentButUnrecorded as exc:   # never "not sent": Alpaca HAS this order
+        store.audit("bookkeeping_failed", {"id": pid, "order_id": exc.oid, "stage": "submitted"})
+        return _result(True, pid, "submitted",
+                       f"SENT: order {exc.oid} was accepted by Alpaca, but saving that here failed. "
+                       "Do NOT approve it again; the desk will settle it with Alpaca.",
+                       mode=exc.mode, order_id=exc.oid)
+    except _MaybeSent as exc:
+        store.audit("bookkeeping_failed", {"id": pid, "stage": "unconfirmed"})
+        return _result(False, pid, "unconfirmed",
+                       "Alpaca didn't answer and the desk couldn't save that. The order MAY have been "
+                       "placed: check your Alpaca orders before doing anything else.", mode=exc.mode)
     except Exception as exc:  # noqa: BLE001 — never leave a proposal stuck in 'sending'
         current = store.get_proposal(pid) or {}
         status = current.get("status")
@@ -149,11 +178,19 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
         store.audit("duplicate", {"id": pid, "mode": mode})
         return _result(False, pid, "duplicate",
                        "Alpaca already has this order, so it was not sent again. Check your Alpaca orders.")
+    except broker.TransportError as exc:
+        return _unconfirmed(p, mode, auto, exc)
     except broker.BrokerError as exc:
         return _block(pid, f"Alpaca refused the order: {exc}", "send_failed")
 
-    oid = order.get("id")
-    store.update_proposal(pid, status="submitted", broker_order_id=oid, mode=mode, auto=auto)
+    # From here on Alpaca HAS the order: no failure may ever read as "not sent".
+    oid = order.get("id") if isinstance(order, dict) else None
+    try:
+        _mark_submitted(pid, broker_order_id=oid, mode=mode, auto=auto, exit_pl=exit_pl)
+    except _SentButUnrecorded:
+        raise
+    except Exception:  # noqa: BLE001
+        raise _SentButUnrecorded(oid, mode) from None
     try:
         if p["side"] == "buy":
             guardrails.record_spend(Decimal(str(p["notional"])), symbol, oid, mode=mode)
@@ -165,6 +202,36 @@ def _send(p: dict, *, live_permitted: bool, auto: bool) -> dict:
                                   "order_id": oid, "auto": auto})
     return _result(True, pid, "submitted", f"{p['side'].upper()} {symbol} sent to Alpaca ({mode}).",
                    mode=mode, order_id=oid)
+
+
+def _mark_submitted(pid: str, **fields) -> None:
+    """Record an order Alpaca accepted. Retried, because a lost write here would
+    otherwise read as "not sent" for an order that exists."""
+    for attempt in range(3):
+        try:
+            store.update_proposal(pid, status="submitted", **fields)
+            return
+        except Exception:  # noqa: BLE001
+            time.sleep(0.2 * (attempt + 1))
+    raise _SentButUnrecorded(fields.get("broker_order_id"), fields.get("mode"))
+
+
+def _unconfirmed(p: dict, mode: str, auto: bool, exc: Exception) -> dict:
+    """No usable reply to an order: it may or may not exist. Never call that
+    "refused". A buy's spend is counted now (the safe side of the daily cap)
+    and refresh_fills settles the truth with Alpaca by our own order id."""
+    pid = p["id"]
+    try:
+        store.update_proposal(pid, status="unconfirmed", mode=mode, auto=auto,
+                              note="Alpaca didn't answer in time; checking whether the order was placed.")
+        if p["side"] == "buy":
+            guardrails.record_spend(Decimal(str(p["notional"])), p["symbol"], None, mode=mode)
+    except Exception:  # noqa: BLE001
+        raise _MaybeSent(mode) from None
+    store.audit("unconfirmed", {"id": pid, "mode": mode, "error": type(exc).__name__})
+    return _result(False, pid, "unconfirmed",
+                   "Alpaca didn't answer in time. The order MAY have been placed; the desk is checking "
+                   "with Alpaca. Don't place it again by hand.", mode=mode)
 
 
 def reject(pid: str) -> dict:
@@ -240,21 +307,63 @@ def tick(*, live_permitted: bool, scan=None) -> dict:
 _FINAL = {"filled", "canceled", "expired", "rejected", "done_for_day", "replaced"}
 
 
+def _fill(o: dict) -> dict:
+    return {"status": o.get("status"), "qty": o.get("filled_qty"),
+            "avg_price": o.get("filled_avg_price"), "at": o.get("filled_at")}
+
+
+def reconcile(now: float | None = None) -> int:
+    """Settle orders whose reply never came ('unconfirmed', or a 'sending' left
+    by an interrupted send) by asking Alpaca for OUR id. Found: submitted.
+    Alpaca has none: blocked, never sent. Runs under the approval lock so it
+    can never race a send in progress."""
+    now = time.time() if now is None else now
+
+    def stuck(p: dict) -> bool:
+        return p.get("status") == "unconfirmed" or (
+            p.get("status") == "sending"
+            and now - float(p.get("sending_since") or p.get("ts") or 0) > SEND_STUCK_S)
+
+    if not any(stuck(p) for p in store.load_proposals()):
+        return 0
+    settled = 0
+    with _LOCK:
+        try:
+            with FileLock(timeout=0):
+                for p in [p for p in store.load_proposals() if stuck(p)]:
+                    try:
+                        o = broker.get_order_by_client_id(p["id"])
+                    except broker.NotFoundError:
+                        store.update_proposal(p["id"], status="blocked",
+                                              note="Alpaca has no order with this id: it was never placed.")
+                        store.audit("reconciled", {"id": p["id"], "found": False})
+                    except broker.BrokerError:
+                        continue          # still no answer: ask again next pass
+                    else:
+                        store.update_proposal(p["id"], status="submitted", broker_order_id=o.get("id"),
+                                              mode=p.get("mode"), fill=_fill(o))
+                        store.audit("reconciled", {"id": p["id"], "found": True, "order_id": o.get("id")})
+                    settled += 1
+        except DeskBusyError:
+            return settled
+    return settled
+
+
 def refresh_fills(limit: int = 10) -> int:
-    """Read the fill (qty, average price) of recently sent orders back from
-    Alpaca, so the desk shows what actually happened, not just "sent"."""
+    """Read the fill (qty, average price) of sent orders back from Alpaca, so
+    the desk shows what actually happened, not just "sent". Oldest first: a
+    newest-first slice could leave an old unresolved order unread forever."""
+    reconcile()
     todo = [p for p in store.load_proposals()
             if p.get("status") == "submitted" and p.get("broker_order_id")
-            and (p.get("fill") or {}).get("status") not in _FINAL][-limit:]
+            and (p.get("fill") or {}).get("status") not in _FINAL][:limit]
     done = 0
     for p in todo:
         try:
             o = broker.get_order(p["broker_order_id"])
         except broker.BrokerError:
             continue          # try again next pass; a receipt is never worth a crash
-        store.update_proposal(p["id"], fill={
-            "status": o.get("status"), "qty": o.get("filled_qty"),
-            "avg_price": o.get("filled_avg_price"), "at": o.get("filled_at")})
+        store.update_proposal(p["id"], fill=_fill(o))
         done += 1
     return done
 
@@ -281,19 +390,14 @@ def report(days: float = 7, now: float | None = None) -> dict:
             m["filled"] += 1
             if p["side"] == "buy":
                 m["bought_usd"] += float(fill.get("qty") or 0) * float(fill.get("avg_price") or 0)
-    exits = [a for a in store.read_audit(5000) if a.get("event") == "exit_result"
-             and _audit_ts(a) >= since]
+    # P/L on each position at the moment it was closed, kept on the proposal
+    # itself (not scraped from the audit log, whose tail can roll past a week).
+    exits = [p for p in rows if p.get("status") == "submitted" and p.get("side") == "sell"
+             and p.get("exit_pl") is not None]
     pl: dict = {}
-    for a in exits:
-        mode = a["detail"].get("mode") or "paper"
-        pl[mode] = round(pl.get(mode, 0.0) + float(a["detail"].get("unrealized_pl") or 0), 2)
-    out["exit_pl_usd"] = pl          # P/L on each position at the moment it was closed
+    for p in exits:
+        mode = p.get("mode") or "paper"
+        pl[mode] = round(pl.get(mode, 0.0) + float(p["exit_pl"]), 2)
+    out["exit_pl_usd"] = pl
     out["exits"] = len(exits)
     return out
-
-
-def _audit_ts(row: dict) -> float:
-    try:
-        return datetime.fromisoformat(row["ts"]).timestamp()
-    except (KeyError, TypeError, ValueError):
-        return 0.0

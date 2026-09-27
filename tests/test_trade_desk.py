@@ -24,10 +24,26 @@ pytestmark = pytest.mark.unit
 
 
 class FillingAlpaca(FakeAlpaca):
-    """FakeAlpaca plus GET /v2/orders/<id> answering with a fill."""
+    """FakeAlpaca plus GET /v2/orders/<id> answering with a fill, lookup by our
+    client_order_id, and two ways for an order's reply to go missing."""
+
+    lose_order_reply = False      # Alpaca takes the order, the reply never arrives
+    garble_order_reply = False    # Alpaca takes the order, the reply is not JSON
 
     def __call__(self, method, url, headers, body):
         path = url.split(".markets", 1)[1]
+        if method == "GET" and path.startswith("/v2/orders:by_client_order_id"):
+            self.calls.append((method, url))
+            cid = path.split("client_order_id=", 1)[1]
+            if cid not in self.seen_client_ids:
+                return 404, json.dumps({"message": "order not found"})
+            return 200, json.dumps({"id": "ord-found", "client_order_id": cid, "status": "filled",
+                                    "filled_qty": "0.2", "filled_avg_price": "100.0"})
+        if method == "POST" and path == "/v2/orders" and (self.lose_order_reply or self.garble_order_reply):
+            status, raw = super().__call__(method, url, headers, body)
+            if self.lose_order_reply:
+                raise broker.TransportError("Alpaca didn't answer (TimeoutError)")
+            return status, "<html>502 bad gateway</html>"
         if method == "GET" and path.startswith("/v2/orders/"):
             self.calls.append((method, url))
             oid = path.rsplit("/", 1)[1]
@@ -273,3 +289,130 @@ def test_cli_reject_cannot_relabel_a_sent_order(alpaca, capsys):
     desk.approve("b1", live_permitted=False)
     cli.cmd_reject("b1")
     assert store.get_proposal("b1")["status"] == "submitted"
+
+
+# ------------------------------------------------------------------ an order's reply goes missing
+def test_a_lost_order_reply_is_unconfirmed_never_refused_and_counts_the_spend(alpaca):
+    connect()
+    alpaca.lose_order_reply = True
+    add("b1")
+    r = desk.approve("b1", live_permitted=False)
+    assert r["status"] == "unconfirmed" and "refused" not in r["message"].lower()
+    assert store.get_proposal("b1")["status"] == "unconfirmed"
+    assert store.spend_last_24h("paper") == 20.0          # counted until proven unsent
+
+
+def test_a_garbled_success_reply_is_unconfirmed_not_refused(alpaca):
+    connect()
+    alpaca.garble_order_reply = True
+    add("b1")
+    assert desk.approve("b1", live_permitted=False)["status"] == "unconfirmed"
+
+
+def test_reconcile_finds_an_unconfirmed_order_alpaca_actually_has(alpaca):
+    connect()
+    alpaca.lose_order_reply = True
+    add("b1")
+    desk.approve("b1", live_permitted=False)
+    alpaca.lose_order_reply = False
+    assert desk.reconcile() == 1
+    p = store.get_proposal("b1")
+    assert p["status"] == "submitted" and p["broker_order_id"] == "ord-found"
+    assert p["fill"]["status"] == "filled"
+    assert len(alpaca.orders) == 1                         # settled by asking, never by resending
+
+
+def test_reconcile_blocks_an_unconfirmed_order_alpaca_never_got():
+    store.add_proposal({"id": "ghost", "ts": time.time(), "kind": "crypto", "symbol": "BTC/USD",
+                        "side": "buy", "notional": "20", "ref_price": 100.0, "status": "unconfirmed"})
+    fake = FillingAlpaca()
+    import broker as b
+    old = b._TRANSPORT
+    b._TRANSPORT = fake
+    try:
+        connect()
+        assert desk.reconcile() == 1
+    finally:
+        b._TRANSPORT = old
+    p = store.get_proposal("ghost")
+    assert p["status"] == "blocked" and "never placed" in p["note"]
+
+
+def test_an_interrupted_send_is_settled_only_after_it_has_been_stuck_a_while(alpaca):
+    connect()
+    store.add_proposal({"id": "mid", "ts": time.time(), "kind": "crypto", "symbol": "BTC/USD",
+                        "side": "buy", "notional": "20", "ref_price": 100.0, "status": "sending",
+                        "sending_since": time.time()})
+    assert desk.reconcile() == 0                            # a send may be in flight right now
+    assert desk.reconcile(now=time.time() + desk.SEND_STUCK_S + 1) == 1
+    assert store.get_proposal("mid")["status"] == "blocked"
+
+
+def test_a_failed_submitted_write_still_reports_sent_never_blocked(alpaca, monkeypatch):
+    connect()
+    add("b1")
+    real = store.update_proposal
+
+    def flaky(pid, **changes):
+        if changes.get("status") == "submitted":
+            raise OSError("disk full")
+        return real(pid, **changes)
+
+    monkeypatch.setattr(store, "update_proposal", flaky)
+    monkeypatch.setattr(desk.time, "sleep", lambda s: None)
+    r = desk.approve("b1", live_permitted=False)
+    assert r["ok"] is True and r["status"] == "submitted" and "Do NOT approve it again" in r["message"]
+    assert len(alpaca.orders) == 1
+    assert real("b1")["status"] == "sending"                # can't be approved again
+    monkeypatch.setattr(store, "update_proposal", real)
+    assert desk.approve("b1", live_permitted=False)["ok"] is False
+    assert len(alpaca.orders) == 1
+
+
+def test_unreadable_positions_stop_the_scan_instead_of_proposing_a_second_buy(alpaca, monkeypatch):
+    connect()
+    monkeypatch.setattr(broker, "positions", lambda: (_ for _ in ()).throw(broker.BrokerError("503")))
+    monkeypatch.setattr(proposer.app, "fetch_stocks", lambda syms: [])
+    monkeypatch.setattr(proposer.app, "fetch_crypto",
+                        lambda ids: [{"signal": {"label": "STRONG BUY", "score": 9}, "price": 100.0}])
+    assert proposer.scan() == []
+    assert store.load_proposals() == []
+
+
+def test_concurrent_audit_lines_never_interleave():
+    def burst(i):
+        for j in range(25):
+            store.audit("probe", {"i": i, "j": j, "pad": "x" * 200})
+
+    threads = [threading.Thread(target=burst, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with open(os.path.join(config.DATA_DIR, "audit.log.jsonl"), encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    assert len(lines) == 200 and all(json.loads(ln)["event"] == "probe" for ln in lines)
+
+
+def test_fill_receipts_read_the_oldest_unresolved_orders_first(alpaca, monkeypatch):
+    for i in range(12):
+        store.add_proposal({"id": f"o{i:02d}", "ts": time.time() + i, "kind": "crypto", "symbol": "BTC/USD",
+                            "side": "buy", "notional": "20", "status": "submitted",
+                            "broker_order_id": f"ord-{i}"})
+    connect()
+    asked = []
+    monkeypatch.setattr(broker, "get_order", lambda oid: asked.append(oid) or {"status": "filled"})
+    desk.refresh_fills(limit=10)
+    assert asked[:2] == ["ord-0", "ord-1"] and len(asked) == 10
+    desk.refresh_fills(limit=10)
+    assert asked[-2:] == ["ord-10", "ord-11"]
+
+
+def test_exit_pl_lives_on_the_proposal_not_the_audit_tail(alpaca, monkeypatch):
+    connect()
+    alpaca.held = {"BTCUSD": "0.5"}
+    add("s1", side="sell")
+    desk.approve("s1", live_permitted=False)
+    assert store.get_proposal("s1")["exit_pl"] == 1.25
+    monkeypatch.setattr(store, "read_audit", lambda limit=50: [])
+    assert desk.report(7)["exit_pl_usd"] == {"paper": 1.25}
