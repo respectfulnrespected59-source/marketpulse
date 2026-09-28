@@ -238,3 +238,134 @@ def test_one_ticker_call_serves_every_timeframe(monkeypatch):
     assert app._coinbase_last_trade("ZZ-USD") == 101.5
     assert len(calls) == 1
     app._cache.clear()
+
+
+# ------------------------------------------------------------------ boards: stale-while-refresh
+class TestBoards:
+    @pytest.fixture(autouse=True)
+    def clean(self):
+        app._cache.clear()
+        app._refreshing.clear()
+        yield
+        app._cache.clear()
+        app._refreshing.clear()
+
+    def _age(self, key, seconds):
+        stamp, value = app._cache.get(key)
+        app._cache[key] = (stamp - seconds, value)
+
+    def test_a_fresh_board_is_reused(self):
+        calls = []
+        load = lambda: calls.append(1) or ["fresh"]
+        app._board("k", load, True)
+        rows, _ = app._board("k", load, True)
+        assert rows == ["fresh"] and len(calls) == 1
+
+    def test_a_stale_board_is_served_at_once_and_refreshed_once_behind_it(self, monkeypatch):
+        started = []
+        monkeypatch.setattr(app, "_refresh_in_background", lambda key, loader: started.append(key))
+        app._store("k", ["old"])
+        self._age("k", app.CACHE_TTL + 5)
+        rows, read_at = app._board("k", lambda: ["new"], True)
+        assert rows == ["old"]
+        assert read_at < app.time.time() - app.CACHE_TTL      # honest: says when it was read
+        assert started == ["k"]
+
+    def test_the_background_refresh_runs_once_per_board(self, monkeypatch):
+        gate, runs = app.threading.Event(), []
+        def slow():
+            runs.append(1)
+            gate.wait(2)
+            return ["new"]
+        app._store("k", ["old"])
+        self._age("k", app.CACHE_TTL + 5)
+        app._board("k", slow, True)
+        app._board("k", slow, True)                            # a second visitor mid-refresh
+        gate.set()
+        for _ in range(50):
+            if not app._refreshing:
+                break
+            app.time.sleep(0.02)
+        assert len(runs) == 1 and app._board("k", slow, True)[0] == ["new"]
+
+    def test_the_trade_proposer_path_never_gets_a_stale_board(self):
+        app._store("k", ["old"])
+        self._age("k", app.CACHE_TTL + 5)
+        rows, _ = app._board("k", lambda: ["fresh"], False)
+        assert rows == ["fresh"]
+
+    def test_too_old_to_serve_means_a_fresh_read(self):
+        app._store("k", ["ancient"])
+        self._age("k", app.MARKETS_STALE_OK + 5)
+        assert app._board("k", lambda: ["fresh"], True)[0] == ["fresh"]
+
+    def test_fetch_stocks_is_the_fresh_path(self, monkeypatch):
+        monkeypatch.setattr(app, "_load_stocks", lambda symbols: ["fresh"])
+        app._store("stocks:ZZ", ["old"])
+        self._age("stocks:ZZ", app.CACHE_TTL + 5)
+        assert app.fetch_stocks(["ZZ"]) == ["fresh"]
+
+
+def test_markets_reports_when_the_board_was_read(monkeypatch):
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    app._cache.clear()
+    monkeypatch.setattr(app, "_refresh_in_background", lambda key, loader: None)
+    app._store("stocks:ZZ", [{"kind": "stock", "symbol": "ZZ", "price": 1.0}])
+    stamp, value = app._cache.get("stocks:ZZ")
+    app._cache["stocks:ZZ"] = (stamp - 200, value)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/api/markets?type=stocks&symbols=ZZ"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            body = json.loads(resp.read())
+    finally:
+        httpd.shutdown(); httpd.server_close(); app._cache.clear()
+    assert body["rows"][0]["symbol"] == "ZZ"
+    assert abs(body["ts"] - int(stamp - 200)) <= 1
+
+
+def test_coinbase_fallback_reports_24h_dollar_volume(monkeypatch):
+    # newest-first [time, low, high, open, close, volume]; 30 hours of 2 coins at $10
+    rows = [[3600 * i, 9.0, 11.0, 10.0, 10.0, 2.0] for i in range(30)][::-1]
+    monkeypatch.setattr(app, "_get_json", lambda *a, **k: rows)
+    closes, dollars = app._coinbase_hourly("ZZ-USD")
+    assert len(closes) == 30 and dollars == 24 * 2 * 10
+
+
+def test_a_refresher_that_cannot_start_does_not_wedge_the_board(monkeypatch):
+    app._refreshing.clear()
+    class NoThread:
+        def __init__(self, *a, **k): pass
+        def start(self): raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(app.threading, "Thread", NoThread)
+    app._refresh_in_background("k", lambda: ["x"])
+    assert "k" not in app._refreshing
+
+
+def test_the_cache_survives_concurrent_readers_and_evictors():
+    # Forcing constant thread switches makes the old unlocked cache raise
+    # KeyError every run (read, lose the key to an eviction, then move_to_end).
+    import sys
+    import threading
+    from safety import BoundedCache
+    cache, errors = BoundedCache(max_entries=8), []
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    def hammer(offset):
+        try:
+            for i in range(4000):
+                cache[f"k{(i + offset) % 32}"] = (0.0, i)
+                cache.get(f"k{(i * 7 + offset) % 32}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+    threads = [threading.Thread(target=hammer, args=(n,)) for n in range(8)]
+    try:
+        for t in threads: t.start()
+        for t in threads: t.join()
+    finally:
+        sys.setswitchinterval(old_interval)
+    assert not errors and len(cache) <= 8

@@ -254,6 +254,54 @@ def _store(key: str, value):
     return value
 
 
+# A board older than CACHE_TTL but younger than this is served AS IS while a
+# fresh read runs in the background. Reading 17 stocks takes ~20s on the host,
+# and at low traffic the cache has almost always lapsed, so without this nearly
+# every visitor waited on a blank panel. Opt-in: the page boards use it, the
+# trade proposer never does, and the response says when the data was read.
+MARKETS_STALE_OK = 10 * 60
+_refreshing: set[str] = set()
+_refresh_lock = threading.Lock()
+
+
+def _board(key: str, loader, allow_stale: bool) -> tuple[list, float]:
+    """(rows, read_at) for a market board, from cache when it can be."""
+    hit = _cache.get(key)
+    age = time.time() - hit[0] if hit else None
+    if hit and age < CACHE_TTL:
+        return hit[1], hit[0]
+    if hit and allow_stale and age < MARKETS_STALE_OK:
+        _refresh_in_background(key, loader)
+        return hit[1], hit[0]
+    rows = loader()
+    _store(key, rows)
+    return rows, time.time()
+
+
+def _refresh_in_background(key: str, loader) -> None:
+    """One refresh per board at a time; a failure keeps the old board."""
+    with _refresh_lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def run():
+        try:
+            _store(key, loader())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] background refresh {key}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(key)
+
+    try:
+        threading.Thread(target=run, name=f"refresh:{key[:40]}", daemon=True).start()
+    except RuntimeError as exc:           # no thread to be had: don't wedge the board
+        with _refresh_lock:
+            _refreshing.discard(key)
+        print(f"[warn] background refresh {key} not started: {exc}", file=sys.stderr)
+
+
 def _get_json(url: str, headers: dict | None = None, timeout: int = 12):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": "Mozilla/5.0 MarketPulse"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -693,6 +741,16 @@ def _coinbase_closes(product: str, granularity: int) -> tuple[list[int], list[fl
     return [int(r[0]) for r in rows], [float(r[4]) for r in rows]
 
 
+def _coinbase_hourly(product: str) -> tuple[list[float], int | None]:
+    """(closes, dollars traded over the last 24 hourly candles) from one call.
+    Volume is in coins, so each hour is priced at its own close."""
+    raw = _get_json(f"{COINBASE_API}/products/{product}/candles?granularity=3600")
+    rows = sorted((r for r in raw if r and r[4] is not None), key=lambda r: r[0])
+    closes = [float(r[4]) for r in rows]
+    dollars = sum(float(r[5] or 0) * float(r[4]) for r in rows[-24:])
+    return closes, _dollars(dollars)
+
+
 def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
     """[[open,high,low,close], ...] ascending from Coinbase candles
     ([time,low,high,open,close,vol] -> reordered to o,h,l,c)."""
@@ -1079,7 +1137,7 @@ def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
     def one(item):
         cg_id, (product, ticker, name) = item
         try:
-            _, closes = _coinbase_closes(product, 3600)  # hourly (~12 days)
+            closes, dollar_vol = _coinbase_hourly(product)  # hourly (~12 days)
             if not closes:
                 return None
             price = closes[-1]
@@ -1087,7 +1145,8 @@ def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
             change = round((price - ref) / ref * 100, 2) if ref else 0
             return {
                 "kind": "crypto", "id": cg_id, "symbol": ticker, "name": name,
-                "price": price, "change": change, "spark": closes[-48:],
+                "price": price, "change": change, "dollar_vol": dollar_vol,
+                "spark": closes[-48:],
                 "signal": _signal_from_closes(closes),
             }
         except Exception:  # noqa: BLE001
@@ -1097,19 +1156,24 @@ def _crypto_from_coinbase(ids: list[str]) -> list[dict]:
         return [r for r in pool.map(one, targets) if r]
 
 
-def fetch_crypto(ids: list[str]) -> list[dict]:
-    key = "crypto:" + ",".join(ids)
-    cached = _cached(key)
-    if cached is not None:
-        return cached
+def _load_crypto(ids: list[str]) -> list[dict]:
     try:
         rows = _crypto_from_coingecko(ids)
         if rows:
-            return _store(key, rows)
+            return rows
     except Exception:  # noqa: BLE001  (429/geo/timeout) -> keyless fallback
         pass
-    rows = _crypto_from_coinbase(ids)
-    return _store(key, rows)
+    return _crypto_from_coinbase(ids)
+
+
+def fetch_crypto(ids: list[str]) -> list[dict]:
+    """Fresh crypto rows (at most CACHE_TTL old). The trade proposer reads these,
+    so this path never serves a stale board."""
+    return crypto_board(ids, allow_stale=False)[0]
+
+
+def crypto_board(ids: list[str], allow_stale: bool = True) -> tuple[list[dict], float]:
+    return _board("crypto:" + ",".join(ids), lambda: _load_crypto(ids), allow_stale)
 
 
 # ---------------------------------------------------------------- stocks
@@ -1232,14 +1296,19 @@ def fetch_one_stock(symbol: str) -> dict | None:
                 "error": UPSTREAM_ERROR_MESSAGE}
 
 
-def fetch_stocks(symbols: list[str]) -> list[dict]:
-    key = "stocks:" + ",".join(symbols)
-    cached = _cached(key)
-    if cached is not None:
-        return cached
+def _load_stocks(symbols: list[str]) -> list[dict]:
     with ThreadPoolExecutor(max_workers=8) as pool:
-        rows = [r for r in pool.map(fetch_one_stock, symbols) if r]
-    return _store(key, rows)
+        return [r for r in pool.map(fetch_one_stock, symbols) if r]
+
+
+def fetch_stocks(symbols: list[str]) -> list[dict]:
+    """Fresh stock rows (at most CACHE_TTL old). The trade proposer reads these,
+    so this path never serves a stale board."""
+    return stocks_board(symbols, allow_stale=False)[0]
+
+
+def stocks_board(symbols: list[str], allow_stale: bool = True) -> tuple[list[dict], float]:
+    return _board("stocks:" + ",".join(symbols), lambda: _load_stocks(symbols), allow_stale)
 
 
 # ---------------------------------------------------------------- live quote
@@ -1551,13 +1620,14 @@ class Handler(BaseHTTPRequestHandler):
                     symbols = [s.strip().upper() for s in syms.split(",")] if syms else DEFAULT_STOCKS
                     if cap:
                         symbols = symbols[:cap]
-                    return self._json({"type": "stocks", "rows": fetch_stocks(symbols),
-                                       "ts": int(time.time())})
+                    rows, read_at = stocks_board(symbols)
+                    # ts = when the board was READ, never when it was served.
+                    return self._json({"type": "stocks", "rows": rows, "ts": int(read_at)})
                 ids = [s.strip().lower() for s in syms.split(",")] if syms else DEFAULT_CRYPTO
                 if cap:
                     ids = ids[:cap]
-                return self._json({"type": "crypto", "rows": fetch_crypto(ids),
-                                   "ts": int(time.time())})
+                rows, read_at = crypto_board(ids)
+                return self._json({"type": "crypto", "rows": rows, "ts": int(read_at)})
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001

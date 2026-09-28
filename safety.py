@@ -13,6 +13,7 @@ an HTTP server.
 from __future__ import annotations
 
 import re
+import threading
 from collections import OrderedDict
 
 # Longest ticker we will pass upstream. Real symbols are short: the longest
@@ -63,6 +64,10 @@ class BoundedCache:
     `cache.get(key)` and `cache[key] = (timestamp, value)`. The difference is
     that inserting past `max_entries` evicts the least recently used entry
     instead of growing forever.
+
+    Every operation holds one lock: request threads and the background board
+    refresher share this cache, and a read that finds a key, then loses it to
+    another thread's eviction before marking it used, raised KeyError.
     """
 
     def __init__(self, max_entries: int = 512) -> None:
@@ -70,27 +75,33 @@ class BoundedCache:
             raise ValueError("max_entries must be at least 1")
         self._max = max_entries
         self._data: OrderedDict[str, tuple[float, object]] = OrderedDict()
+        self._lock = threading.Lock()
 
     def get(self, key: str, default=None):
-        hit = self._data.get(key)
-        if hit is None:
-            return default
-        # Reading counts as use, so hot symbols survive eviction pressure.
-        self._data.move_to_end(key)
-        return hit
+        with self._lock:
+            hit = self._data.get(key)
+            if hit is None:
+                return default
+            # Reading counts as use, so hot symbols survive eviction pressure.
+            self._data.move_to_end(key)
+            return hit
 
     def __setitem__(self, key: str, value: tuple[float, object]) -> None:
-        if key in self._data:
-            self._data.move_to_end(key)
-        self._data[key] = value
-        while len(self._data) > self._max:
-            self._data.popitem(last=False)
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+            self._data[key] = value
+            while len(self._data) > self._max:
+                self._data.popitem(last=False)
 
     def __contains__(self, key: str) -> bool:
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
     def __len__(self) -> int:
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
     def clear(self) -> None:
-        self._data.clear()
+        with self._lock:
+            self._data.clear()
