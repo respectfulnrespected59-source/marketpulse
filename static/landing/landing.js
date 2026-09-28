@@ -34,7 +34,7 @@ var PRICING = [
     features: [
       ["Everything in Free", 0],
       ["Real-money trading on 1 brokerage account", 1],
-      ["Approve every trade, or switch on auto with hard limits", 1],
+      ["Approve every buy; auto only closes positions", 1],
       ["Kill switch, daily spend cap, loss circuit breaker", 1],
       ["License for the web app and the download", 1],
     ],

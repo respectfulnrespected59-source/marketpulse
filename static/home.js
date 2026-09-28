@@ -21,7 +21,7 @@
 const ONBOARD_KEY = "mp_onboard";
 const ONBOARD = [
   { view: "stocks",    title: "Read the board",
-    blurb: "RSI, MACD and trend on real prices. Four factors have to agree before it says STRONG BUY." },
+    blurb: "Seven checks on real prices each vote up or down. STRONG BUY needs a net score of 3 or more." },
   { view: "pot",       title: "Set your pot",
     blurb: "The money you can afford to be wrong with. Everything else sizes off this number." },
   { view: "options",   title: "Find a play you can afford",

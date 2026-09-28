@@ -570,7 +570,8 @@ async function init() {
   if (typeof CHART_PAGE !== "undefined" && CHART_PAGE) { bootChartPage(); return; }
 
   // Deep-link support for PWA home-screen shortcuts (e.g. /?view=dca).
-  const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "dca", "live", "proof"];
+  // Every public tab. "trade" stays out: the desk shows itself only when it answers.
+  const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "coach", "dca", "live", "paper", "proof"];
   const wanted = new URLSearchParams(location.search).get("view");
   const initial = (wanted && VIEWS.includes(wanted)) ? wanted : state.view;
   // Activate the initial view. Home is a panel, so it needs setView to hide the
