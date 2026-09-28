@@ -264,11 +264,11 @@ _refreshing: set[str] = set()
 _refresh_lock = threading.Lock()
 
 
-def _board(key: str, loader, allow_stale: bool) -> tuple[list, float]:
+def _board(key: str, loader, allow_stale: bool, ttl: int = CACHE_TTL) -> tuple[list, float]:
     """(rows, read_at) for a market board, from cache when it can be."""
     hit = _cache.get(key)
     age = time.time() - hit[0] if hit else None
-    if hit and age < CACHE_TTL:
+    if hit and age < ttl:
         return hit[1], hit[0]
     if hit and allow_stale and age < MARKETS_STALE_OK:
         _refresh_in_background(key, loader)
@@ -1257,7 +1257,10 @@ def _scan_one(symbol: str, pot: float) -> dict | None:
         return None
 
 
-def fetch_one_stock(symbol: str) -> dict | None:
+def fetch_one_stock(symbol: str, extras: bool = True) -> dict | None:
+    """One stock's row. `extras` adds the weekly squeeze and the MA/VWAP guides
+    the app's grid shows: two more upstream calls and most of the CPU, which
+    the landing page never uses."""
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
         "?range=1y&interval=1d"
@@ -1285,8 +1288,8 @@ def fetch_one_stock(symbol: str) -> dict | None:
             "dollar_vol": _dollars(price * shares) if shares else None,
             "spark": [_px(c) for c in closes[-48:]],
             "signal": sig,
-            "squeeze": _weekly_squeeze(symbol),
-            "guides": _decision_guides(symbol, closes),
+            "squeeze": _weekly_squeeze(symbol) if extras else None,
+            "guides": _decision_guides(symbol, closes) if extras else None,
         }
     except Exception as exc:  # noqa: BLE001 — one bad symbol shouldn't kill the grid
         # Detail to the log; the row itself only says the quote didn't load, so
@@ -1296,9 +1299,9 @@ def fetch_one_stock(symbol: str) -> dict | None:
                 "error": UPSTREAM_ERROR_MESSAGE}
 
 
-def _load_stocks(symbols: list[str]) -> list[dict]:
+def _load_stocks(symbols: list[str], extras: bool = True) -> list[dict]:
     with ThreadPoolExecutor(max_workers=8) as pool:
-        return [r for r in pool.map(fetch_one_stock, symbols) if r]
+        return [r for r in pool.map(lambda s: fetch_one_stock(s, extras), symbols) if r]
 
 
 def fetch_stocks(symbols: list[str]) -> list[dict]:
@@ -1307,7 +1310,19 @@ def fetch_stocks(symbols: list[str]) -> list[dict]:
     return stocks_board(symbols, allow_stale=False)[0]
 
 
-def stocks_board(symbols: list[str], allow_stale: bool = True) -> tuple[list[dict], float]:
+# The landing page's board: price, move, signal and dollar volume only, read at
+# most every 5 minutes. On the host's small CPU share a full 17-stock read
+# starved the landing's live chart for ~10s; the lite read costs ~1/3 as much
+# and runs 5x less often. Signals come from daily bars, and the live price on
+# the landing comes from the chart itself, so nothing on the page goes stale.
+LITE_BOARD_TTL = 5 * 60
+
+
+def stocks_board(symbols: list[str], allow_stale: bool = True,
+                 lite: bool = False) -> tuple[list[dict], float]:
+    if lite:
+        return _board("stocks-lite:" + ",".join(symbols),
+                      lambda: _load_stocks(symbols, extras=False), allow_stale, ttl=LITE_BOARD_TTL)
     return _board("stocks:" + ",".join(symbols), lambda: _load_stocks(symbols), allow_stale)
 
 
@@ -1620,7 +1635,8 @@ class Handler(BaseHTTPRequestHandler):
                     symbols = [s.strip().upper() for s in syms.split(",")] if syms else DEFAULT_STOCKS
                     if cap:
                         symbols = symbols[:cap]
-                    rows, read_at = stocks_board(symbols)
+                    lite = params.get("lite", ["0"])[0] == "1"
+                    rows, read_at = stocks_board(symbols, lite=lite)
                     # ts = when the board was READ, never when it was served.
                     return self._json({"type": "stocks", "rows": rows, "ts": int(read_at)})
                 ids = [s.strip().lower() for s in syms.split(",")] if syms else DEFAULT_CRYPTO

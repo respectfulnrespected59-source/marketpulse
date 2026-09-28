@@ -175,6 +175,10 @@
     tickClock();
   }
 
+  /* Candles draw the moment they arrive; the EMA lines join when their own
+   * request answers. Waiting for both let the slower one hold the chart blank.
+   * The overlay is matched by SYMBOL, not by poll: on a busy host it can land
+   * after the next poll has started and must still be used. */
   function load(identityChanged) {
     if (!pick || !ensure()) return;
     var c = pick, my = ++seq, key = c.kind + ":" + c.symbol;
@@ -182,16 +186,21 @@
     var needOverlay = identityChanged || Date.now() - lastOverlayAt > OVERLAY_MS;
     // Stamped when the request STARTS, so two polls landing before it answers
     // don't both fetch; a failure clears the stamp so the next poll retries.
-    if (needOverlay) lastOverlayAt = Date.now();
-    var ov = needOverlay
-      ? getJSON("/api/chart-overlay?symbol=" + sym + "&kind=" + c.kind + "&tf=" + TF + "&ema=" + EMA.join(",") + "&squeeze=0&prepost=0")
-          .catch(function () { lastOverlayAt = 0; return null; })
-      : Promise.resolve(overlay);
-    Promise.all([getJSON("/api/intraday?symbol=" + sym + "&kind=" + c.kind + "&tf=" + TF), ov]).then(function (res) {
-      if (my !== seq) return;                  // a newer pick owns the chart now
-      if (res[1] && !res[1].error) overlay = res[1];
-      var last = draw(res[0], identityChanged || hc.key !== key);
+    if (needOverlay) {
+      lastOverlayAt = Date.now();
+      getJSON("/api/chart-overlay?symbol=" + sym + "&kind=" + c.kind + "&tf=" + TF + "&ema=" + EMA.join(",") + "&squeeze=0&prepost=0")
+        .then(function (o) {
+          if (!o || o.error || !pick || pick.kind + ":" + pick.symbol !== key) return;
+          overlay = o;
+          if (hc.lastData && hc.key === key) draw(hc.lastData, false);
+        })
+        .catch(function () { lastOverlayAt = 0; });
+    }
+    getJSON("/api/intraday?symbol=" + sym + "&kind=" + c.kind + "&tf=" + TF).then(function (d) {
+      if (my !== seq) return;                  // a newer poll or pick owns the chart now
+      var last = draw(d, identityChanged || hc.key !== key);
       hc.key = key;
+      hc.lastData = d;
       header(c, last === false ? null : last);
       el("heroChart").classList.toggle("is-stale", last === false);
     }).catch(function () {
