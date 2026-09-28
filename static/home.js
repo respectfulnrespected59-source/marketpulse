@@ -146,10 +146,23 @@ async function renderHomeState() {
       + `<div class="hs-head">${head}</div>`
       + `<div class="hs-body">${body}</div>`
       + `<div class="hs-foot">${cadenceLine()}</div></div>`;
+    _renderHomeMap(stocks.rows || [], crypto.rows || []);
   } catch (e) {
     box.innerHTML = `<div class="hs hs-scan">Board unavailable (${esc(e.message)}).
       Nothing to act on until it reads clean.</div>`;
   }
+}
+
+/* The Market Map under the board read: the same rows, drawn as a heatmap. A
+ * tile opens that name on the full chart page. */
+function _renderHomeMap(stocks, crypto) {
+  if (!window.MarketMap) return;
+  try {
+    window.MarketMap.render($("#homeMap"), {
+      groups: [{ key: "stocks", title: "Stocks", rows: stocks }, { key: "crypto", title: "Crypto", rows: crypto }],
+      chartHref: (r) => chartPageUrl(r.kind === "crypto" ? String(r.symbol).toLowerCase() : r.symbol, r.kind, "5m"),
+    });
+  } catch (e) { /* the map is extra; the board read above stands on its own */ }
 }
 
 function renderHomePlans() {

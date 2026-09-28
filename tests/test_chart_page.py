@@ -92,7 +92,9 @@ def test_vendored_files_are_exempt_from_line_ending_conversion():
 
 
 def test_engine_keeps_the_tradingview_attribution_on():
-    assert re.search(r"attributionLogo:\s*true", _read("chart-engine.js"))
+    # The shared theme builds every chart's options, the app's and the landing's.
+    assert re.search(r"attributionLogo:\s*true", _read("chart-theme.js"))
+    assert "attributionLogo: false" not in _read("landing/hero-chart.js")
 
 
 # ------------------------------------------------------------------ PWA shell

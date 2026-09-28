@@ -69,8 +69,8 @@ function _palBuild() {
     const li = e.target.closest("[data-i]");
     if (li) _palChoose(pal.items[Number(li.dataset.i)]);
   });
-  return { root, input, list, status: root.querySelector(".pal-status"),
-           items: [], active: 0, timer: 0, seq: 0, returnFocus: null };
+  return { root, input, list, status: root.querySelector(".pal-status"), items: [], active: 0,
+           timer: 0, seq: 0, returnFocus: null, shownFor: "", inflight: null, inflightFor: null };
 }
 
 function openPalette() {
@@ -102,6 +102,7 @@ function _palShowDefaults() {
   if (recent.length) sections.push({ title: "Recent", items: recent });
   sections.push({ title: "Popular", items: popular });
   _palRender(sections);
+  pal.shownFor = "";
   pal.status.textContent = "";
 }
 
@@ -110,7 +111,17 @@ function _palQueue(raw) {
   pal.timer = 0;
   const q = raw.trim();
   if (!q) { pal.seq++; _palShowDefaults(); return; }
-  pal.timer = setTimeout(() => { pal.timer = 0; _palSearch(q); }, PAL_DEBOUNCE_MS);
+  pal.timer = setTimeout(() => { pal.timer = 0; _palStartSearch(q); }, PAL_DEBOUNCE_MS);
+}
+
+/* Which query the list on screen answers (pal.shownFor) and which one is still
+ * on the wire (pal.inflightFor). Enter must open a result for what was TYPED:
+ * pressed while a search is loading, it used to open whatever the list showed
+ * a moment earlier, the Popular list, so "AMD" + Enter opened NVDA. */
+function _palStartSearch(q) {
+  pal.inflightFor = q;
+  pal.inflight = _palSearch(q);
+  return pal.inflight;
 }
 
 async function _palSearch(q) {
@@ -135,6 +146,7 @@ async function _palSearch(q) {
     items.push({ symbol: typed, kind: "stock", name: `Open "${typed}" as typed`, typed: true });
   }
   _palRender([{ title: failed ? "Search is unavailable" : "Results", items }]);
+  pal.shownFor = q;
   pal.status.textContent = failed ? "Couldn't reach search" : (hits.length ? "" : "No matches");
   return true;
 }
@@ -176,11 +188,13 @@ function _palKeys(e) {
   else if (e.key === "ArrowUp") { e.preventDefault(); _palActivate(pal.active - 1); }
   else if (e.key === "Enter") {
     e.preventDefault();
-    // Enter before the debounce fires must search what was typed, not open
-    // whatever the list happened to be showing a keystroke ago.
-    if (pal.timer && pal.input.value.trim()) {
+    // The list on screen may not answer what was typed yet (debounce pending,
+    // or the search still loading): wait for the answer, then take its top hit.
+    const q = pal.input.value.trim();
+    if (q && pal.shownFor !== q) {
       clearTimeout(pal.timer); pal.timer = 0;
-      _palSearch(pal.input.value.trim()).then((fresh) => { if (fresh && pal.items[0]) _palChoose(pal.items[0]); });
+      const wait = (pal.inflightFor === q && pal.inflight) || _palStartSearch(q);
+      wait.then((fresh) => { if (fresh && pal.shownFor === q && pal.items[0]) _palChoose(pal.items[0]); });
       return;
     }
     if (pal.items[pal.active]) _palChoose(pal.items[pal.active]);

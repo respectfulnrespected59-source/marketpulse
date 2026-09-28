@@ -13,8 +13,16 @@
   <meta property="og:description" content="Transparent signals, risk-capped sizing, and published backtests. Free to use." />
   <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="/landing/landing.css" />
+  <link rel="stylesheet" href="/market-map.css" />
   <!-- Runs before paint: an installed app or an old deep link goes straight to /app. -->
   <script src="/landing/landing.js"></script>
+  <!-- The hero's live chart is the app's own chart: same engine, same look.
+       TradingView Lightweight Charts v5.2.1 (Apache-2.0), vendored and pinned. -->
+  <script defer src="/vendor/lightweight-charts.standalone.production.js"
+          integrity="sha384-KkYqTZlM13Zya6fVUF3IGCBOQ1ehFeJVVgxaVvD/0MebineF9EI8Jkd3NnWNChqN"></script>
+  <script defer src="/chart-theme.js"></script>
+  <script defer src="/landing/hero-chart.js"></script>
+  <script defer src="/market-map.js"></script>
 </head>
 <body id="landing">
   <div class="liquid" aria-hidden="true">
@@ -48,6 +56,7 @@
 <span class="mp-word"><span class="mp-mk">Market</span><span class="mp-ps" data-t="PULSE">PULSE</span></span>
     </a>
     <nav class="nav-links" id="navLinks">
+      <a href="#map">Market map</a>
       <a href="#engine">How it works</a>
       <a href="#method">Method</a>
       <a href="#proof">Receipts</a>
@@ -99,6 +108,9 @@
             <span class="chip-mono" data-live="featTag">…</span>
             <span class="ep-feat"><b data-live="featSym">…</b> <span data-live="featPrice">…</span> <span data-live="featChg">…</span></span>
           </div>
+          <div class="hc-chips" id="heroChips" role="group" aria-label="Pick a chart"></div>
+          <div class="hero-chart" id="heroChart" role="img" aria-label="Live candlestick chart with EMA lines"></div>
+          <!-- Fallback: if the chart engine can't load, the daily sketch still tells the story. -->
           <svg class="spark" id="heroSpark" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="Recent daily closes of the featured name">
             <defs>
               <linearGradient id="sparkFill" x1="0" x2="0" y1="0" y2="1">
@@ -110,7 +122,11 @@
             <path class="spark-line" d="" />
             <circle class="spark-head" r="5" cx="-10" cy="-10" />
           </svg>
-          <p class="ep-note">Real daily closes · not a simulated equity curve</p>
+          <div class="hc-foot">
+            <p class="ep-note hc-live-note"><i class="dot on"></i>Live <span class="hc-clock" id="heroClock"></span> · <span id="heroStamp">connecting</span></p>
+            <p class="ep-note hc-sketch-note">Real daily closes · not a simulated equity curve</p>
+            <a class="hc-open" id="heroOpen" href="/chart">Open the full chart <span aria-hidden="true">→</span></a>
+          </div>
         </div>
         <div class="ep-rows" id="heroRows">
           <div class="ep-row skeleton"></div><div class="ep-row skeleton"></div>
@@ -124,6 +140,19 @@
   <div class="marquee" aria-label="Latest prices">
     <div class="marquee-track" id="marquee"><span class="mq-item muted">Loading real prices…</span></div>
   </div>
+
+  <!-- ============================== MARKET MAP -->
+  <section class="section alt" id="map">
+    <div class="wrap">
+      <header class="sec-head center reveal">
+        <p class="kicker">Market map</p>
+        <h2>See where the money is moving.</h2>
+        <p>Every tile is a real name, sized by the dollars traded today and colored by its move, with our read printed on it. A gold edge means STRONG BUY. Tap any tile to open its live chart.</p>
+      </header>
+      <div class="map-card glass reveal" id="marketMap"><p class="map-wait">Loading the map…</p></div>
+      <p class="map-note">Stocks show the latest session. Crypto is a rolling 24 hours. Real data from the same feeds the app uses. Educational, not advice.</p>
+    </div>
+  </section>
 
   <!-- ============================== WATCH IT WORK -->
   <section class="section" id="live">

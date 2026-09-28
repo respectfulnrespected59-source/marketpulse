@@ -12,7 +12,7 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v22";
+const SHELL_VERSION = "mp-shell-v23";
 const SHELL_ASSETS = [
   "/",
   "/app",
@@ -20,10 +20,14 @@ const SHELL_ASSETS = [
   "/index.html",
   "/landing/landing.css",
   "/landing/landing.js",
+  "/landing/hero-chart.js",
+  "/market-map.css",
+  "/market-map.js",
   "/brand.css",
   "/styles.css",
   "/chart.css",
   "/app.js",
+  "/chart-theme.js",
   "/chart-draw.js",
   "/chart-engine.js",
   "/chart.js",

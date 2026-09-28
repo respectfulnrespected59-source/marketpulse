@@ -15,14 +15,10 @@
  * runs at load time; the chart is built on the first render.
  */
 
-const PC_RIGHT_PAD = 6;        // empty slots right of the newest bar: where the live candle forms
 const PC_SNAP_PX = 18;         // snap radius in screen pixels
 const PC_HIT_PX = 12;          // grab radius for an existing mark or line end
 const PC_MIN_BAR_PX = 7;       // narrowest candle slot the default window will open at
 const PC_MIN_BARS = 20;        // ...but never fewer bars than this, however narrow
-const PC_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const PC_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // TTM momentum, four colours: the slope matters as much as the sign.
 const PC_MOM = { upRising: "rgba(45,212,191,0.95)", upFalling: "rgba(59,130,246,0.65)",
                  dnFalling: "rgba(248,113,113,0.95)", dnRising: "rgba(190,60,80,0.60)" };
@@ -41,45 +37,6 @@ let pcHoverIdx = null;          // bar under the crosshair, for the OHLC legend
 // reports a change, and the viewport logic reads that instead.
 let pcPendingRange = null;
 
-/* Lightweight Charts has no time zone setting and labels everything in UTC. The
- * documented fix is to hand it times already shifted into local time, so the
- * axis reads the same clock the old chart did. The shift can run a bar
- * backwards across a DST fall-back, and the library rejects unsorted data, so
- * each time is forced strictly past the one before it. Nothing converts a
- * chart time back into a real one: every lookup goes through the bar index. */
-function _pcTimes(ts, n) {
-  const out = new Array(n);
-  let prev = -Infinity;
-  for (let i = 0; i < n; i++) {
-    const t = ts[i] - new Date(ts[i] * 1000).getTimezoneOffset() * 60;
-    prev = t > prev ? t : prev + 1;
-    out[i] = prev;
-  }
-  return out;
-}
-
-function _pcToken(name, fallback) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
-
-function _pcPad(v) { return String(v).padStart(2, "0"); }
-
-function _pcTickLabel(time, type) {
-  const d = new Date(time * 1000);            // shifted: read it back with UTC getters
-  if (type === 0) return String(d.getUTCFullYear());
-  if (type === 1) return PC_MONTHS[d.getUTCMonth()];
-  if (type === 2) return `${PC_MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-  return `${_pcPad(d.getUTCHours())}:${_pcPad(d.getUTCMinutes())}`;
-}
-
-function _pcCrosshairTime(time) {
-  const d = new Date(time * 1000);
-  const day = `${PC_DAYS[d.getUTCDay()]} ${PC_MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-  if (!TIME_AXIS_TFS.has(pcTape.tf)) return `${day} ${d.getUTCFullYear()}`;
-  return `${day}  ${_pcPad(d.getUTCHours())}:${_pcPad(d.getUTCMinutes())}`;
-}
-
 /* Build the chart once. Returns null when the library or container is missing,
  * so a failed vendor load degrades to the "can't draw" message, not a throw. */
 function pcEnsure() {
@@ -87,23 +44,18 @@ function pcEnsure() {
   const LW = window.LightweightCharts;
   const el = document.getElementById("liveTradeChart");
   if (!LW || !el) return null;
-  const colors = { line: _pcToken("--line", "#2c2140"), dim: _pcToken("--text-dim", "#a99fc0"),
-                   buy: _pcToken("--buy", "#2fd180"), sell: _pcToken("--sell", "#ff5d6c") };
-  const chart = LW.createChart(el, _pcChartOptions(LW, colors));
+  const colors = pcColors();
+  const chart = LW.createChart(el, pcChartOptions(LW, colors, () => pcTape.tf));
   const candles = chart.addSeries(LW.CandlestickSeries, {
-    upColor: colors.buy, downColor: colors.sell, wickUpColor: colors.buy, wickDownColor: colors.sell,
-    borderVisible: false, priceLineStyle: LW.LineStyle.Dotted,
+    ...pcCandleOptions(LW, colors),
     // Replay pins the ladder to the whole session so it doesn't lurch per step.
     autoscaleInfoProvider: (base) => (pcFixed
       ? { priceRange: { minValue: pcFixed.min, maxValue: pcFixed.max } } : base()),
   }, 0);
-  const volume = chart.addSeries(LW.HistogramSeries, {
-    priceScaleId: "vol", priceFormat: { type: "volume" },
-    lastValueVisible: false, priceLineVisible: false,
+  const volume = pcAddVolume(chart, LW, {
     autoscaleInfoProvider: (base) => (pcFixed && pcFixed.volMax
       ? { priceRange: { minValue: 0, maxValue: pcFixed.volMax } } : base()),
-  }, 0);
-  chart.priceScale("vol", 0).applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
+  });
   const draw = new PcDrawings();
   candles.attachPrimitive(draw);
   pc = { LW, chart, el, candles, volume, draw, emas: [], bands: {}, mom: null, dots: null,
@@ -117,32 +69,6 @@ function pcEnsure() {
   return pc;
 }
 
-/* The terminal look: transparent over the card, hairline grid, gold crosshair. */
-function _pcChartOptions(LW, c) {
-  const cross = { color: "rgba(232,194,90,0.55)", width: 1, style: LW.LineStyle.Dashed,
-                  labelBackgroundColor: "#2c2140" };
-  return {
-    autoSize: true,
-    layout: {
-      background: { type: LW.ColorType.Solid, color: "transparent" },
-      textColor: c.dim,
-      fontFamily: _pcToken("--mono", "ui-monospace, monospace"),
-      fontSize: 11,
-      attributionLogo: true,   // the library's license notice asks for this credit
-      panes: { separatorColor: c.line, separatorHoverColor: "rgba(232,194,90,0.35)", enableResize: true },
-    },
-    grid: { vertLines: { color: "rgba(169,159,192,0.05)" }, horzLines: { color: "rgba(169,159,192,0.07)" } },
-    crosshair: { mode: LW.CrosshairMode.Normal, vertLine: cross, horzLine: cross },
-    rightPriceScale: { borderColor: c.line, scaleMargins: { top: 0.08, bottom: 0.18 } },
-    timeScale: {
-      borderColor: c.line, rightOffset: PC_RIGHT_PAD, barSpacing: 8, minBarSpacing: 1,
-      timeVisible: true, secondsVisible: false,
-      tickMarkFormatter: _pcTickLabel,
-    },
-    localization: { timeFormatter: _pcCrosshairTime },
-    handleScroll: _pcScroll(true),
-  };
-}
 
 /* ---- data mapping ------------------------------------------------------ */
 
@@ -175,7 +101,7 @@ function _pcSetEmas(overlay, show, lastTs) {
   const periods = (show && overlay && overlay.emas) ? (overlay.periods || []).map(String) : [];
   while (pc.emas.length > periods.length) pc.chart.removeSeries(pc.emas.pop());
   periods.forEach((key, idx) => {
-    const color = EMA_COLORS[idx % EMA_COLORS.length];
+    const color = PC_EMA_COLORS[idx % PC_EMA_COLORS.length];
     if (!pc.emas[idx]) {
       pc.emas[idx] = _pcLineSeries({ color, lineWidth: 2, lastValueVisible: true }, 0);
     }
@@ -237,14 +163,6 @@ function _pcSetMomentum(series, show, lastTs) {
     }
   }
   pc.dots.setData(dots);
-}
-
-/* Enough decimals to see the digits that move, from $1,800 stocks to PEPE. */
-function _pcPrecision(price) {
-  if (!(price > 0)) return 2;
-  if (price >= 1) return 2;
-  if (price >= 0.01) return 4;
-  return Math.min(10, Math.floor(-Math.log10(price)) + 4);
 }
 
 function _pcSetEntry(entry) {
@@ -371,11 +289,11 @@ function pcRender(m) {
   const n = Math.min((d.ohlc || []).length, (d.ts || []).length);
   const prev = (pcTape.key === m.identity) ? _pcCaptureView() : null;
   if (pcTape.key !== m.identity) pcReplayFramedFor = null;
-  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: _pcTimes(d.ts, n),
+  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: pcTimes(d.ts, n),
              ts: d.ts, ohlc: d.ohlc, vol: d.volume || [], tf: m.tf };
   const { ohlc, revealed } = pcTape;
 
-  const precision = _pcPrecision(ohlc[revealed - 1] && ohlc[revealed - 1][3]);
+  const precision = pcPrecision(ohlc[revealed - 1] && ohlc[revealed - 1][3]);
   if (precision !== pc.precision) {
     pc.precision = precision;
     pc.candles.applyOptions({ priceFormat: { type: "price", precision, minMove: Math.pow(10, -precision) } });
@@ -430,17 +348,10 @@ function pcRenderLegend() {
   const shown = f(Math.abs(chg));
   const sign = /[1-9]/.test(shown) ? (chg > 0 ? "+" : "−") : "";
   const v = pcTape.vol[i];
-  const volTxt = v ? ` <span class="pc-k">Vol</span> ${_pcCompact(v)}` : "";
+  const volTxt = v ? ` <span class="pc-k">Vol</span> ${pcCompact(v)}` : "";
   box.innerHTML = `<span class="pc-k">O</span> ${f(o)} <span class="pc-k">H</span> ${f(h)} `
     + `<span class="pc-k">L</span> ${f(l)} <span class="pc-k">C</span> <b class="${dir}">${f(c)}</b> `
     + `<b class="${dir}">${sign}${shown} (${sign}${Math.abs(pct).toFixed(2)}%)</b>${volTxt}`;
-}
-
-function _pcCompact(v) {
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
-  return String(Math.round(v));
 }
 
 /* ---- pixel <-> (bar, price) ------------------------------------------- */
@@ -510,9 +421,5 @@ function pcRedrawDrawings() { if (pc) pc.draw.requestUpdate(); }
  * The wheel keeps zooming, and a vertical swipe always scrolls the page, so
  * the chart never traps a phone user halfway down the screen. */
 function pcSetInteractive(on) {
-  if (pc) pc.chart.applyOptions({ handleScroll: _pcScroll(on) });
-}
-
-function _pcScroll(drag) {
-  return { mouseWheel: true, pressedMouseMove: drag, horzTouchDrag: drag, vertTouchDrag: false };
+  if (pc) pc.chart.applyOptions({ handleScroll: pcScrollOpts(on) });
 }
