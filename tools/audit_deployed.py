@@ -41,6 +41,8 @@ WATCHED = [
     # The Lightweight Charts engine, the /chart page and quick search (09-27).
     "chart.css", "chart-draw.js", "chart-engine.js", "chart-page.js", "palette.js",
     "vendor/lightweight-charts.standalone.production.js",
+    # The landing's live chart, the shared chart theme and the Market Map (09-27).
+    "chart-theme.js", "landing/hero-chart.js", "market-map.js", "market-map.css",
 ]
 
 # A line-count match is strong but not proof. These are strings whose presence
@@ -63,6 +65,11 @@ MARKERS = {
     "function bootChartPage": ("chart-page.js", True),
     'href="chart.css"': ("index.html", True),
     "function openPalette": ("palette.js", True),
+    "function pcChartOptions": ("chart-theme.js", True),     # one look for app + landing
+    "window.HeroChart": ("landing/hero-chart.js", True),
+    'id="heroChart"': ("landing.html", True),                # the landing actually hosts it
+    "window.MarketMap": ("market-map.js", True),
+    'id="homeMap"': ("index.html", True),
 }
 
 TIMEOUT_S = 60

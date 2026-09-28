@@ -74,7 +74,7 @@ let liveOverlayKey = null;               // kind:symbol:tf:periods:squeeze
 let liveOverlayAt = 0;                   // ms epoch of last successful fetch
 const OVERLAY_TTL_MS = 60 * 1000;
 // Assigned by position, so the first period a trader lists always gets gold.
-const EMA_COLORS = ["#f5c66b", "#5b8def", "#c471ed", "#4ecb8f"];
+const EMA_COLORS = PC_EMA_COLORS;          // chart-theme.js, shared with the landing chart
 
 // In-memory snapshot of the last loaded intraday payload. Learning Mode reads
 // the tape from here, and the drawing tools read which symbol is on screen.
@@ -626,7 +626,7 @@ function _renderReplayStatus(ts) {
 // chart covering one 6.5-hour session printed "Jul 30" at all six ticks —
 // six identical labels that tell you nothing about where you are in the day.
 // The date still gets said once per session change, by the session dividers in chart-draw.js.
-const TIME_AXIS_TFS = new Set(["1m", "5m", "10m", "15m", "30m", "1h"]);
+const TIME_AXIS_TFS = PC_INTRADAY_TFS;    // chart-theme.js
 
 function _fmtAxisTime(dt, tf) {
   if (TIME_AXIS_TFS.has(tf)) {

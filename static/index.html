@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="chart.css" />
+  <link rel="stylesheet" href="market-map.css" />
   <!-- /chart is this same app with only the chart showing (chart-page.js).
        Flag it before first paint so the full app layout never flashes. -->
   <script>if (/^\/chart\/?$/.test(location.pathname)) document.documentElement.classList.add("mode-chart");</script>
@@ -91,6 +92,14 @@
     </div>
     <div id="homeOnboard"></div>
     <div id="homeState"></div>
+    <!-- Market map: the same board as the read above, drawn as a heatmap (market-map.js). -->
+    <div class="home-map">
+      <div class="home-plans-head">
+        <h3><i class="mi mi-bars" aria-hidden="true"></i>Market map</h3>
+        <span class="home-map-note">size = dollars traded · color = today's move · tap a tile for its chart</span>
+      </div>
+      <div id="homeMap"></div>
+    </div>
     <div class="home-grid">
       <div class="home-card" id="homePot"></div>
       <div class="home-card" id="homeLive"></div>
@@ -612,6 +621,7 @@
   <!-- All of these are declaration-only and share one global scope. app.js
        loads LAST because it calls init() on its final line, and that path
        reaches into every file above it. -->
+  <script src="chart-theme.js"></script>
   <script src="chart-draw.js"></script>
   <script src="chart-engine.js"></script>
   <script src="chart.js"></script>
@@ -627,6 +637,7 @@
   <script src="wizards.js"></script>
   <script src="paper.js"></script>
   <script src="options-paper.js"></script>
+  <script src="market-map.js"></script>
   <script src="palette.js"></script>
   <script src="app.js"></script>
   <script>

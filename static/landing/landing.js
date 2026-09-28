@@ -131,7 +131,7 @@ function drawSpark(values) {
 }
 
 /* ------------------------------------------------------------ render */
-function render(rows, ts) {
+function render(rows, ts, cryptoRows) {
   var scored = rows.filter(function (r) { return r && r.signal && r.price != null; });
   if (!scored.length) throw new Error("no rows");
   var bull = scored.filter(function (r) { return r.signal.score > 0; }).length;
@@ -148,11 +148,16 @@ function render(rows, ts) {
     return Math.abs(b.signal.score) - Math.abs(a.signal.score);
   });
   var feat = byConviction[0];
-  setLive("featTag", "Strongest read · " + feat.signal.label);
-  setLive("featSym", feat.symbol);
-  setLive("featPrice", money(feat.price));
-  setLive("featChg", pct(feat.change), feat.change >= 0 ? "up" : "down");
-  drawSpark(feat.spark);
+  var crypto = (cryptoRows || []).filter(function (r) { return r && !r.error && r.price != null; });
+  if (!showLiveChart(byConviction, crypto)) {
+    // The chart engine didn't load: the daily sketch of the strongest read stands in.
+    setLive("featTag", "Strongest read · " + feat.signal.label);
+    setLive("featSym", feat.symbol);
+    setLive("featPrice", money(feat.price));
+    setLive("featChg", pct(feat.change), feat.change >= 0 ? "up" : "down");
+    drawSpark(feat.spark);
+  }
+  showMarketMap(scored, crypto);
 
   $("#heroRows").innerHTML = byConviction.slice(0, 4).map(function (r) {
     return '<div class="ep-row"><b>' + esc(r.symbol) + '</b><span class="sig ' + sigClass(r.signal.label) + '">' +
@@ -181,6 +186,38 @@ function render(rows, ts) {
   $("#marquee").innerHTML = items + items;
 }
 
+/* ------------------------------------------------------------ live chart + map */
+function chartHref(r) {
+  var crypto = r.kind === "crypto";
+  var sym = crypto ? String(r.symbol).toLowerCase() : String(r.symbol).toUpperCase();
+  return "/chart?symbol=" + encodeURIComponent(sym) + "&kind=" + (crypto ? "crypto" : "stock") + "&tf=5m";
+}
+
+/* The three strongest reads plus Bitcoin, which trades while stocks sleep.
+ * Guarded: nothing the chart does may take the rest of the panel down. */
+function showLiveChart(byConviction, crypto) {
+  try {
+    if (!window.HeroChart || !window.HeroChart.ok()) return false;
+    var btc = crypto.filter(function (r) { return r.symbol === "BTC"; })[0];
+    var choices = byConviction.slice(0, 3).map(function (r) { return { symbol: r.symbol, kind: "stock", row: r }; });
+    choices.push({ symbol: "BTC", kind: "crypto", row: btc });
+    window.HeroChart.setChoices(choices);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function showMarketMap(stocks, crypto) {
+  try {
+    if (!window.MarketMap) return;
+    window.MarketMap.render($("#marketMap"), {
+      groups: [{ key: "stocks", title: "Stocks", rows: stocks }, { key: "crypto", title: "Crypto", rows: crypto }],
+      chartHref: chartHref,
+    });
+  } catch (e) { /* the map is a bonus; the scan above it must still render */ }
+}
+
 /* ------------------------------------------------------------ data */
 var symbolsCache = null;
 function getJSON(url) {
@@ -200,10 +237,14 @@ function loadSymbols() {
   });
 }
 function load() {
+  // Crypto feeds the map and the chart's Bitcoin chip; if it fails, stocks still render.
+  var crypto = getJSON("/api/markets?type=crypto").then(function (d) { return d.rows || []; })
+    .catch(function () { return []; });
   return loadSymbols().then(function (syms) {
-    return getJSON("/api/markets?type=stocks&symbols=" + encodeURIComponent(syms.join(",")));
-  }).then(function (d) {
-    render(d.rows || [], d.ts || Math.floor(Date.now() / 1000));
+    return Promise.all([getJSON("/api/markets?type=stocks&symbols=" + encodeURIComponent(syms.join(","))), crypto]);
+  }).then(function (res) {
+    var d = res[0];
+    render(d.rows || [], d.ts || Math.floor(Date.now() / 1000), res[1]);
     setTimeout(load, REFRESH_MS);
   }).catch(function () {
     setStatus("off", "Waking up, retrying");

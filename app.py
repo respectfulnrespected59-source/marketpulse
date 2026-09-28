@@ -294,6 +294,17 @@ def _px(value) -> float:
     return symbol_catalog.round_price(float(value))
 
 
+def _dollars(value) -> int | None:
+    """A positive dollar amount as a whole number, or None when the source gave
+    nothing usable. Sizes the Market Map's tiles; a missing figure stays
+    missing so the map can fall back to equal sizes instead of inventing one."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(round(v)) if 0 < v < float("inf") else None
+
+
 def coinbase_product(symbol: str) -> str | None:
     """The Coinbase product for a slug or ticker, or None if it isn't tradable."""
     return symbol_catalog.resolve_crypto_product(symbol, COINBASE_MAP, listed_crypto())
@@ -665,6 +676,8 @@ def _crypto_from_coingecko(ids: list[str]) -> list[dict]:
             "name": c.get("name"),
             "price": c.get("current_price"),
             "change": round(c.get("price_change_percentage_24h") or 0, 2),
+            # CoinGecko already quotes 24h volume in dollars.
+            "dollar_vol": _dollars(c.get("total_volume")),
             "spark": closes[-48:],
             "signal": _signal_from_closes(closes),
         })
@@ -774,6 +787,61 @@ def is_regular_bar(ts: int, gmtoffset: int | None) -> bool:
     return _REGULAR_OPEN_SOD <= sod < _REGULAR_CLOSE_SOD
 
 
+CRYPTO_LIVE_TTL = 5  # seconds
+
+
+def _coinbase_last_trade(product: str) -> float | None:
+    """The latest trade price from Coinbase's public ticker, or None. A miss is
+    harmless: the published candles still stand on their own. Cached per coin,
+    so every timeframe and every viewer share one call per refresh window."""
+    key = f"ticker:{product}"
+    hit = _cache.get(key)
+    if hit and (time.time() - hit[0]) < CRYPTO_LIVE_TTL:
+        return hit[1]
+    try:
+        price = float((_get_json(f"{COINBASE_API}/products/{product}/ticker") or {}).get("price"))
+    except Exception:  # noqa: BLE001
+        return None
+    out = _px(price) if 0 < price < float("inf") else None
+    _cache[key] = (time.time(), out)
+    return out
+
+
+def _apply_live_trade(ohlc: list, ts: list, vol: list, price: float | None,
+                      bar_s: int, now: int) -> tuple[list, list, list]:
+    """Carry the latest trade into the forming candle, the way a trading screen
+    does. Coinbase republishes candles about once a minute, so without this the
+    newest bar sits frozen between publications while the price moves.
+
+    Inside the last bar's window the trade moves its close and stretches its
+    high/low; once the window has passed it opens the next bar at the current
+    bucket. Returns new lists and never mutates the ones passed in.
+    """
+    if not ohlc or not ts or price is None or bar_s <= 0 or now < ts[-1]:
+        return ohlc, ts, vol
+    start = ts[-1]
+    if now < start + bar_s:
+        o, h, l, _c = ohlc[-1]
+        return ohlc[:-1] + [[o, max(h, price), min(l, price), price]], ts, vol
+    bucket = start + ((now - start) // bar_s) * bar_s
+    return ohlc + [[price, price, price, price]], ts + [int(bucket)], vol + [0.0]
+
+
+def _intraday_ttl(kind: str, tf: str) -> int:
+    """How long a fetched tape stays fresh.
+
+    Daily and weekly bars only change once a session. Coins trade around the
+    clock, so their forming candle is refetched every few seconds: that is what
+    makes a live chart visibly MOVE, and one fetch serves every viewer. Stock
+    tapes keep Yahoo's pace, snappier only on the 1-minute chart.
+    """
+    if tf in SLOW_TF:
+        return 300
+    if kind == "crypto":
+        return CRYPTO_LIVE_TTL
+    return 20 if tf == "1m" else QUOTE_TTL
+
+
 def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
                    prepost: bool = False) -> dict:
     """Recent intraday OHLC candles for the live trading chart, at a chosen
@@ -790,9 +858,7 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
     # for regular hours (or worse, the reverse into an indicator).
     key = f"intraday:{kind}:{symbol.lower()}:{tf}:{int(bool(prepost))}"
     hit = _cache.get(key)
-    # 1-min tape needs a snappier cache so a live poll actually shows new bars;
-    # daily and weekly bars only change once a session.
-    ttl = 20 if tf == "1m" else (300 if tf in SLOW_TF else QUOTE_TTL)
+    ttl = _intraday_ttl(kind, tf)
     if hit and (time.time() - hit[0]) < ttl:
         return hit[1]
     ohlc: list[list[float]] = []
@@ -814,6 +880,11 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
                     ohlc.append([_px(r[3]), _px(r[2]), _px(r[1]), _px(r[4])])
                     ts_arr.append(int(r[0]))
                     vol_arr.append(round(float(r[5] or 0), 2))
+                # Native bars only: a folded timeframe drops its forming group,
+                # so there is no live bar there to carry the trade into.
+                if _agg == 1:
+                    ohlc, ts_arr, vol_arr = _apply_live_trade(
+                        ohlc, ts_arr, vol_arr, _coinbase_last_trade(prod), gran, int(time.time()))
             except Exception:  # noqa: BLE001
                 ohlc, ts_arr, vol_arr = [], [], []
     else:
@@ -1138,12 +1209,16 @@ def fetch_one_stock(symbol: str) -> dict | None:
         change = round((price - prev) / prev * 100, 2) if prev else 0.0
         sig = indicators.score_signals(closes)
         meta = result.get("meta", {})
+        # Shares traded in the latest session, from the same response: no extra call.
+        vols = [v for v in (result["indicators"]["quote"][0].get("volume") or []) if v]
+        shares = meta.get("regularMarketVolume") or (vols[-1] if vols else None)
         return {
             "kind": "stock",
             "symbol": symbol.upper(),
             "name": meta.get("longName") or meta.get("shortName") or symbol.upper(),
             "price": _px(price),
             "change": change,
+            "dollar_vol": _dollars(price * shares) if shares else None,
             "spark": [_px(c) for c in closes[-48:]],
             "signal": sig,
             "squeeze": _weekly_squeeze(symbol),
