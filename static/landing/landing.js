@@ -199,7 +199,9 @@ function showLiveChart(byConviction, crypto) {
   try {
     if (!window.HeroChart || !window.HeroChart.ok()) return false;
     var btc = crypto.filter(function (r) { return r.symbol === "BTC"; })[0];
-    var choices = byConviction.slice(0, 3).map(function (r) { return { symbol: r.symbol, kind: "stock", row: r }; });
+    var choices = byConviction.slice(0, 3).map(function (r, i) {
+      return { symbol: r.symbol, kind: "stock", row: r, rank: i + 1 };
+    });
     choices.push({ symbol: "BTC", kind: "crypto", row: btc });
     window.HeroChart.setChoices(choices);
     return true;

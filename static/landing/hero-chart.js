@@ -20,6 +20,7 @@
   // faster than that would only fetch the same candle again.
   var POLL_MS = { crypto: 5000, stock: 15000 };
   var CLOCK_MS = 1000;
+  var EARLY_MS = 2500;               // longest the chart waits on the scan during market hours
   var OVERLAY_MS = 60000;
   var EMA = [14, 21, 57];
   var MIN_BAR_PX = 7, MAX_BARS = 84;
@@ -157,7 +158,9 @@
   function header(c, last) {
     var row = c.row || {};
     var sig = (row.signal && row.signal.label) || "";
-    setLive("featTag", (c.kind === "crypto" ? "Trades 24/7" : "Strongest read") + (sig ? " · " + sig : ""));
+    var tag = c.kind === "crypto" ? "Trades 24/7"
+      : c.rank === 1 ? "Strongest read" : c.rank ? "Top read #" + c.rank : "Live";
+    setLive("featTag", tag + (sig ? " · " + sig : ""));
     setLive("featSym", c.symbol.toUpperCase());
     setLive("featPrice", money(last != null ? last : row.price));
     if (row.change != null) {
@@ -241,6 +244,11 @@
     choices = list.filter(function (c) { return c && c.symbol; });
     if (!choices.length || !ensure()) return;
     var same = pick && choices.find(function (c) { return c.kind === pick.kind && c.symbol === pick.symbol; });
+    if (userPicked && pick && !same) {
+      // The visitor chose a name the scan didn't rank: it stays, as an extra chip.
+      choices = choices.concat([pick]);
+      same = pick;
+    }
     var crypto = choices.find(function (c) { return c.kind === "crypto"; });
     var auto = (!usMarketOpen() && crypto) || choices[0];
     if (same && (userPicked || same === auto)) { pick = same; renderChips(); return; }
@@ -251,7 +259,23 @@
     schedule();
     if (document.visibilityState === "visible" && pick) load(false);
   });
+  /* Don't make a visitor wait on the scan: a cold scan of 17 stocks can take
+   * ~20s on the host. Coins trade now, so with the market closed the chart
+   * opens on BTC immediately; with it open, the strongest read is worth a
+   * short wait, but never longer than EARLY_MS. The scan's chips join later. */
+  function bootEarly() {
+    if (!ensure()) return;
+    if (!usMarketOpen()) {
+      if (!pick) setChoices([{ symbol: "BTC", kind: "crypto", row: null }]);
+      return;
+    }
+    setTimeout(function () {
+      if (!pick) setChoices([{ symbol: "NVDA", kind: "stock", row: null }]);
+    }, EARLY_MS);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    bootEarly();
     var panel = el("enginePanel");
     if (panel && "IntersectionObserver" in window) {
       new IntersectionObserver(function (entries) {
