@@ -22,6 +22,8 @@ import build_buyer_pack  # noqa: E402
 pytestmark = pytest.mark.unit
 
 ALL_SHIPPED = set(build_buyer_pack.BASE) | set(build_buyer_pack.PRO_ONLY)
+# Pages app.py serves from index.html. Links to them are navigation, not files.
+PAGE_ROUTES = {"/app", "/app/", "/chart", "/chart/"}
 
 
 def _local_assets_in_index_html() -> set[str]:
@@ -33,6 +35,10 @@ def _local_assets_in_index_html() -> set[str]:
         if ref.startswith(("http://", "https://", "//", "data:", "#")):
             continue
         if ref.endswith("/"):  # <base href="/"> is a URL root, not a file
+            continue
+        # A link to one of the server's own pages (the chart page's "back to the
+        # app") is navigation, not a file the pack has to carry.
+        if ref.split("?", 1)[0] in PAGE_ROUTES:
             continue
         assets.add(f"static/{ref.lstrip('/')}")
     return assets

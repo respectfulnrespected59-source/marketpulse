@@ -566,6 +566,9 @@ async function init() {
   setInterval(tickClock, 1000);
   startAuto();
 
+  // /chart is this app with only the chart showing (chart-page.js).
+  if (typeof CHART_PAGE !== "undefined" && CHART_PAGE) { bootChartPage(); return; }
+
   // Deep-link support for PWA home-screen shortcuts (e.g. /?view=dca).
   const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "dca", "live", "proof"];
   const wanted = new URLSearchParams(location.search).get("view");

@@ -843,54 +843,6 @@ body {
 }
 .qf-convert b { color: var(--buy); font-weight: 700; }
 
-/* ---- Live trading chart (neon-drip build) ---- */
-.live-chart-card {
-  position: relative;
-  background:
-    radial-gradient(1200px 260px at 10% -20%, rgba(232, 194, 90,0.10), transparent 60%),
-    radial-gradient(900px 240px at 110% 120%, rgba(47,209,128,0.09), transparent 65%),
-    linear-gradient(180deg, var(--surface), var(--bg-2));
-  border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 14px 16px; margin: 4px 0 18px;
-  box-shadow: var(--shadow), 0 0 0 1px rgba(232, 194, 90,0.06) inset;
-  overflow: hidden;
-  transition: box-shadow 220ms var(--ease), border-color 220ms var(--ease);
-}
-/* Animated neon accent border — the "drip". */
-.live-chart-card::before {
-  content: ""; position: absolute; inset: -1px; border-radius: inherit;
-  padding: 1px; pointer-events: none;
-  background: linear-gradient(120deg,
-    rgba(232, 194, 90,0.55) 0%, rgba(47,209,128,0.35) 35%,
-    rgba(93,161,255,0.35) 60%, rgba(232, 194, 90,0.55) 100%);
-  background-size: 200% 200%;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude;
-  opacity: 0.55; animation: ltcNeon 10s linear infinite;
-}
-@keyframes ltcNeon {
-  0% { background-position: 0% 0%; }
-  100% { background-position: 200% 0%; }
-}
-.ltc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; position: relative; z-index: 1; }
-.ltc-title { display: flex; align-items: baseline; gap: 8px; }
-.ltc-title b { font-size: 20px; font-weight: 800; letter-spacing: 0.01em;
-  text-shadow: 0 0 12px rgba(232, 194, 90,0.35); }
-.ltc-kind { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
-.ltc-price { display: flex; align-items: baseline; gap: 8px; }
-.ltc-price > b { font-family: var(--mono); font-size: 22px; font-weight: 700; }
-.ltc-chg { font-family: var(--mono); font-size: 13px; font-weight: 700; }
-.ltc-chg.up { color: var(--buy); text-shadow: 0 0 10px rgba(47,209,128,0.45); }
-.ltc-chg.down { color: var(--sell); text-shadow: 0 0 10px rgba(255,93,108,0.45); }
-
-/* Toolbar row */
-.ltc-toolbar {
-  position: relative; z-index: 1;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin: 6px 0 10px; flex-wrap: wrap;
-}
-.ltc-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-.ltc-tools.ltc-actions { margin-left: auto; }
 
 /* Paper trading — rules on the left, the record on the right. */
 .paper-grid {
@@ -944,37 +896,6 @@ body {
 .paper-row.win { border-left: 3px solid #4ecb8f; }
 .paper-row.loss { border-left: 3px solid #ff6b6b; }
 
-/* Indicator controls — deliberately quiet. They sit under the tools and read
-   as settings, not as actions competing with Mark entry / Trend line. */
-.ltc-indbar {
-  position: relative; z-index: 1;
-  display: flex; align-items: center; gap: 10px;
-  margin: -4px 0 10px; flex-wrap: wrap;
-  padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
-  background: rgba(15, 20, 27, 0.4);
-}
-.ltc-ind {
-  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--text-dim); letter-spacing: 0.02em;
-  transition: color 160ms var(--ease);
-}
-.ltc-ind:hover { color: var(--text); }
-.ltc-ind input { accent-color: #f5c66b; cursor: pointer; margin: 0; }
-.ltc-ind-input {
-  width: 92px; padding: 4px 7px;
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--text); background: rgba(9, 12, 17, 0.8);
-  border: 1px solid var(--line); border-radius: 6px;
-}
-.ltc-ind-input:focus {
-  outline: none; border-color: #f5c66b;
-  box-shadow: 0 0 0 2px rgba(245, 198, 107, 0.15);
-}
-.ltc-ind-note {
-  font-family: var(--mono); font-size: 10px; color: var(--text-dim);
-  opacity: 0.75; margin-left: auto;
-}
 .ltc-tool {
   padding: 5px 10px; font-family: var(--mono); font-size: 11px; font-weight: 700;
   color: var(--text-dim); background: rgba(15,20,27,0.6); border: 1px solid var(--line);
@@ -990,83 +911,6 @@ body {
 }
 .ltc-tool.ghost { background: transparent; }
 
-/* Chart overlays row: TTM squeeze chip + EMA legend (14/21/57). Sits between
-   the tool toolbar and the chart itself; hides cleanly when overlay data
-   hasn't landed yet so the layout doesn't shift. */
-.ltc-overlays { position: relative; z-index: 1; display: flex; flex-wrap: wrap;
-  align-items: center; gap: 8px; margin: 0 0 8px; min-height: 22px; }
-.ltc-sqz { display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 9px; border-radius: 999px; font-family: var(--mono);
-  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
-  color: var(--text-dim); background: rgba(15,20,27,0.6);
-  border: 1px solid var(--line); }
-.ltc-sqz b { color: var(--text); font-weight: 800; }
-.ltc-sqz .ltc-sqz-arr { font-size: 12px; line-height: 1; }
-.ltc-sqz.on { color: #e8b03a; border-color: rgba(232,176,58,0.5);
-  background: rgba(232,176,58,0.10); box-shadow: 0 0 12px rgba(232,176,58,0.25); }
-.ltc-sqz.on b { color: #e8b03a; }
-.ltc-sqz.fired { color: var(--buy); border-color: rgba(47,209,128,0.45);
-  background: rgba(47,209,128,0.10); box-shadow: 0 0 12px rgba(47,209,128,0.25); }
-.ltc-sqz.fired b { color: var(--buy); }
-.ltc-sqz.bull .ltc-sqz-arr { color: var(--buy); }
-.ltc-sqz.bear .ltc-sqz-arr { color: var(--sell); }
-.ltc-emas { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ltc-ema-chip { display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border-radius: 6px; font-family: var(--mono);
-  font-size: 11px; font-weight: 700; color: var(--text-dim);
-  background: rgba(15,20,27,0.55); border: 1px solid var(--line); }
-.ltc-ema-chip i { display: inline-block; width: 10px; height: 2.5px;
-  border-radius: 2px; }
-.ltc-ema-chip b { color: var(--text); font-weight: 800; margin-left: 2px; }
-
-.ltc-chart-wrap {
-  position: relative; width: 100%; aspect-ratio: 25 / 9;
-  background:
-    radial-gradient(600px 220px at 50% 110%, rgba(47,209,128,0.05), transparent 70%),
-    linear-gradient(180deg, rgba(255,255,255,0.015), transparent 40%);
-  border-radius: 10px; overflow: hidden;
-  box-shadow: inset 0 0 0 1px rgba(120,150,190,0.08);
-}
-/* Default cursor is "grab" — the whole chart is scroll/zoom surface by
-   default (Webull-style: drag to pan, wheel to zoom, double-click to fit). */
-/* Session replay bar. `.ltc-tool.is-active` already exists above and is what
-   marks the Replay button as engaged — deliberately not redefined here. */
-.ltc-replaybar {
-  display: flex; align-items: center; gap: 8px;
-  flex-wrap: wrap; margin: 6px 0 2px;
-}
-.rp-controls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.rp-scrub {
-  width: clamp(120px, 26vw, 320px);
-  accent-color: var(--gold);
-  cursor: pointer;
-}
-.rp-speed { width: 68px; padding: 2px 4px; }
-.rp-clock {
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--gold); letter-spacing: 0.04em; min-width: 96px;
-}
-
-/* GO LIVE. Inert (and unmistakably so) while the chart already is live; the
-   moment the dial is parked behind the edge it becomes the loudest control on
-   the bar, because "you are not looking at the market right now" is the thing
-   that most needs saying. */
-.rp-live {
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  letter-spacing: 0.04em; white-space: nowrap;
-}
-.rp-live:disabled { opacity: 0.42; cursor: default; }
-.rp-live.is-behind {
-  background: var(--sell); border-color: var(--sell); color: #07050d;
-  animation: rpLivePulse 1.6s ease-in-out infinite;
-}
-@keyframes rpLivePulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 93, 108, 0.55); }
-  50%      { box-shadow: 0 0 0 6px rgba(255, 93, 108, 0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .rp-live.is-behind { animation: none; }
-}
 
 /* ---- Coach panel ------------------------------------------------------ */
 /* Same frame as the other panels — without this the heading sits flush against
@@ -1177,119 +1021,8 @@ body {
 .grade-error { color: var(--sell); margin: 0; }
 .grade-note { color: #6f7d8e; font-size: 11.5px; margin: 10px 0 0; line-height: 1.45; }
 
-/* Learning Mode: the call row. Sits under the dial and only appears while the
-   chart is rewound, because a read with the answer on screen isn't a read. */
-.rp-call {
-  display: flex; align-items: center; gap: 6px;
-  flex-wrap: wrap; margin: 6px 0 2px; width: 100%;
-}
-.rp-call-label {
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: #a99fc0; letter-spacing: 0.06em; text-transform: uppercase;
-}
-.rp-conf { width: 84px; padding: 2px 4px; }
-.call-up.ltc-tool    { border-color: var(--buy); color: var(--buy); }
-.call-down.ltc-tool  { border-color: var(--sell); color: var(--sell); }
-.call-stand.ltc-tool { border-color: #a99fc0; color: #a99fc0; }
-.call-up.ltc-tool:hover    { background: var(--buy); color: #07050d; }
-.call-down.ltc-tool:hover  { background: var(--sell); color: #07050d; }
-.call-stand.ltc-tool:hover { background: #a99fc0; color: #07050d; }
-.rp-call-result {
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  letter-spacing: 0.02em; flex: 1 1 240px; min-width: 0;
-}
-.rp-call-result.is-win  { color: var(--buy); }
-.rp-call-result.is-loss { color: var(--sell); }
-/* Flat and warn share the muted tone on purpose: "that wasn't a trade" and
-   "you can't call that yet" are both non-events, not verdicts. */
-.rp-call-result.is-flat,
-.rp-call-result.is-warn { color: var(--gold); }
-
-/* "as of 10:15 · not live" — sits with the price, because the price is the
-   number being qualified. */
-.ltc-asof {
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--sell); letter-spacing: 0.03em; margin-left: 8px;
-  white-space: nowrap;
-}
-/* Rewound: desaturate the headline price so a historical number cannot be
-   mistaken for the live one at a glance. */
-.live-chart-card.is-rewound .ltc-price > b { color: #a99fc0; }
-.live-chart-card.is-rewound .ltc-chg { opacity: 0.55; }
-
-#liveTradeChart { width: 100%; height: 100%; display: block; cursor: grab; }
-#liveTradeChart:active { cursor: grabbing; }
-.ltc-cursor-readout { display: none; }
-/* Mode cursors: Mark / Trend tools switch to crosshair for precision. */
-.ltc-chart-wrap.tool-mark #liveTradeChart,
-.ltc-chart-wrap.tool-line #liveTradeChart { cursor: crosshair; }
-.ltc-chart-wrap.tool-active { box-shadow: inset 0 0 0 1px rgba(232, 194, 90,0.35),
-  0 0 24px rgba(232, 194, 90,0.12); }
-
-.ltc-hint {
-  position: absolute; top: 8px; left: 10px;
-  padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
-  color: var(--gold); background: rgba(232, 194, 90,0.10);
-  border: 1px solid rgba(232, 194, 90,0.35);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 0 14px rgba(232, 194, 90,0.25); pointer-events: none;
-}
-.ltc-cursor-readout {
-  position: absolute; bottom: 8px; right: 10px;
-  padding: 4px 8px; border-radius: 6px; font-family: var(--mono);
-  font-size: 11px; font-weight: 700; color: var(--text);
-  background: rgba(7, 5, 13,0.72); border: 1px solid var(--line);
-  pointer-events: none; letter-spacing: 0.02em;
-}
-
-.ltc-foot { margin-top: 8px; font-size: 11px; color: var(--text-faint); line-height: 1.45; position: relative; z-index: 1; }
 .qf-over { color: var(--sell); font-weight: 600; }
 
-/* live chart timeframe toggle */
-.ltc-tf { display: inline-flex; gap: 4px; margin-left: 10px; }
-.ltc-tf button {
-  padding: 3px 9px; font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--line);
-  border-radius: 7px; cursor: pointer; transition: all var(--duration-fast, 150ms) var(--ease);
-}
-.ltc-tf button:hover { color: var(--text); border-color: var(--gold);
-  box-shadow: 0 0 10px rgba(232, 194, 90,0.22); }
-.ltc-tf button.is-active { color: #07050d; background: var(--gold); border-color: var(--gold);
-  box-shadow: 0 0 12px rgba(232, 194, 90,0.55); }
-
-/* Fullscreen mode — the "REALLY get into it" view */
-.live-chart-card {
-  view-transition-name: mp-live-chart;
-}
-.live-chart-card.is-fullscreen {
-  position: fixed; inset: 0; margin: 0; z-index: 9999;
-  border-radius: 0; padding: 18px 24px;
-  display: flex; flex-direction: column;
-  /* Opaque, or the page underneath bleeds through: the tab's disclaimer line
-     and the QMM footer were rendering straight across the middle of the chart
-     at full screen, which reads as a glitch on a tool whose whole pitch is
-     that it's precise. Caught while filming the demo. */
-  background: var(--bg);
-}
-.live-chart-card.is-fullscreen .ltc-chart-wrap {
-  flex: 1 1 auto; aspect-ratio: auto; height: auto; min-height: 0;
-}
-.live-chart-card.is-fullscreen::before { opacity: 0.85; }
-body.mp-lock-scroll { overflow: hidden; }
-/* The fullscreen card is fixed at z-index 9999, but the page footer sits in a
-   later stacking context and painted straight through it — the site disclaimer
-   and "A Quantum Melanin Media tool" rendered across the middle of the chart,
-   which reads as a rendering glitch on a tool whose whole pitch is precision.
-   An opaque card background does not fix it, because the footer is on top, not
-   behind. Hiding the page chrome for the duration is what actually works.
-   Caught while filming the demo. */
-body.mp-lock-scroll .foot { display: none; }
-/* View-transition tuning — Chromium uses these to cross-fade + morph. */
-::view-transition-old(mp-live-chart),
-::view-transition-new(mp-live-chart) {
-  animation-duration: 320ms;
-  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-}
 
 /* ---- Sprint 3: Cockpit / Home ---- */
 .home { padding: 18px 26px 40px; }

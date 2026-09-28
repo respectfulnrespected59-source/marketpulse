@@ -59,9 +59,14 @@ BASE = [
     "static/landing/landing.js",
     "static/brand.css",
     "static/styles.css",
+    "static/chart.css",
     "static/app.js",
+    "static/chart-draw.js",
+    "static/chart-engine.js",
     "static/chart.js",
     "static/chart-tools.js",
+    "static/chart-page.js",
+    "static/palette.js",
     "static/learn.js",
     "static/panels.js",
     "static/home.js",
@@ -75,6 +80,10 @@ BASE = [
     "static/options-paper.js",
     "static/quickfill.js",
     "static/vendor/big.min.js",
+    # TradingView Lightweight Charts (Apache-2.0). Redistributing it means the
+    # license travels with it, so the notice file is not optional either.
+    "static/vendor/lightweight-charts.standalone.production.js",
+    "static/vendor/LIGHTWEIGHT-CHARTS-LICENSE.txt",
     # PWA shell — index.html links the manifest and registers the worker.
     "static/sw.js",
     "static/manifest.webmanifest",

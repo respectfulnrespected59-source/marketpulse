@@ -1,0 +1,5 @@
+# Vendored third-party builds ship byte-for-byte: no line-ending conversion.
+# Their hashes are pinned (tests/test_chart_page.py) and the browser checks the
+# chart engine's with Subresource Integrity, so a CRLF rewrite on a Windows
+# checkout would stop the chart loading.
+static/vendor/** -text

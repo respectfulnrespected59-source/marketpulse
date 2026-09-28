@@ -22,6 +22,10 @@
 
   <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="chart.css" />
+  <!-- /chart is this same app with only the chart showing (chart-page.js).
+       Flag it before first paint so the full app layout never flashes. -->
+  <script>if (/^\/chart\/?$/.test(location.pathname)) document.documentElement.classList.add("mode-chart");</script>
 </head>
 <body>
   <div class="bg-grain" aria-hidden="true"></div>
@@ -50,6 +54,7 @@
 <!-- MP-EMBLEM:END -->
 <span class="mp-word"><span class="mp-mk">Market</span><span class="mp-ps" data-t="PULSE">PULSE</span></span>
     </a>
+    <a class="pc-back" href="/app?view=live">&larr; Back to the app</a>
 
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-view="home"><i class="mi mi-home" aria-hidden="true"></i>Home</button>
@@ -67,6 +72,8 @@
     </nav>
 
     <div class="topbar-right">
+      <button type="button" class="pc-search-btn" id="paletteBtn"
+              title="Search any stock or coin (Ctrl+K)" aria-label="Search markets"><i class="mi mi-search" aria-hidden="true"></i><span>Search</span><kbd id="paletteKbd">Ctrl K</kbd></button>
       <span class="clock" id="clock">—</span>
       <label class="auto">
         <input type="checkbox" id="autoRefresh" checked /> Auto
@@ -313,26 +320,42 @@
     </div>
 
     <div class="live-chart-card" id="liveTradeCard">
+      <!-- Row 1: what you are looking at. The symbol opens quick search (Ctrl+K). -->
       <div class="ltc-head">
-        <div class="ltc-title"><b id="ltcSym">—</b><span class="ltc-kind" id="ltcKind"></span><span class="ltc-tf" id="ltcTf"></span></div>
+        <div class="ltc-title">
+          <button type="button" class="pc-sym" id="ltcSymBtn"
+                  title="Search any stock or coin (Ctrl+K)" aria-label="Change symbol">
+            <b id="ltcSym">—</b><i class="mi mi-search" aria-hidden="true"></i>
+          </button>
+          <span class="ltc-kind" id="ltcKind"></span>
+        </div>
+        <div class="ltc-tf" id="ltcTf" role="group" aria-label="Timeframe"></div>
         <div class="ltc-price"><b id="ltcLast">—</b><span class="ltc-chg" id="ltcChg"></span><span class="ltc-asof" id="ltcAsOf" hidden></span></div>
       </div>
+      <!-- Row 2: ONE toolbar. Drawing on the left, view on the right; the
+           indicator settings fold into a menu so the candles get the height. -->
       <div class="ltc-toolbar" id="ltcToolbar">
         <div class="ltc-tools" role="group" aria-label="Chart tools">
-          <button type="button" class="ltc-tool" data-tool="none" title="Select / no tool">✥</button>
-          <button type="button" class="ltc-tool" data-tool="mark" title="Click chart to mark an entry point">◉ Mark entry</button>
-          <button type="button" class="ltc-tool" data-tool="line" title="Click two points to draw a trend line">╱ Trend line</button>
+          <button type="button" class="ltc-tool" data-tool="none" aria-pressed="true"
+                  title="Pan &amp; zoom (Esc)"><i class="mi mi-move" aria-hidden="true"></i><span class="pc-lbl">Pan</span></button>
+          <button type="button" class="ltc-tool" data-tool="mark" aria-pressed="false"
+                  title="Click the chart to mark an entry (M)"><i class="mi mi-target" aria-hidden="true"></i><span class="pc-lbl">Mark</span></button>
+          <button type="button" class="ltc-tool" data-tool="line" aria-pressed="false"
+                  title="Click a target, then drag to draw a trend line (L)"><i class="mi mi-trend" aria-hidden="true"></i><span class="pc-lbl">Trend</span></button>
+          <span class="pc-sep" aria-hidden="true"></span>
+          <button type="button" class="ltc-tool ghost" id="ltcUndo" title="Undo last mark or line"
+                  aria-label="Undo"><i class="mi mi-undo" aria-hidden="true"></i></button>
+          <button type="button" class="ltc-tool ghost" id="ltcClear" title="Clear all marks &amp; lines for this symbol"
+                  aria-label="Clear drawings"><i class="mi mi-trash" aria-hidden="true"></i></button>
         </div>
         <div class="ltc-tools ltc-actions">
-          <button type="button" class="ltc-tool ghost" id="ltcUndo" title="Undo last mark or line">↶ Undo</button>
-          <button type="button" class="ltc-tool ghost" id="ltcClear" title="Clear all marks & lines for this symbol">✕ Clear</button>
-          <button type="button" class="ltc-tool ghost" id="ltcFit" title="Fit chart to all loaded bars (double-click chart)">⌂ Fit</button>
-          <button type="button" class="ltc-tool ghost" id="ltcFullBtn" title="Fullscreen chart">⛶ Fullscreen</button>
-        </div>
-      </div>
-      <!-- Indicator controls. Every one of these is measured on the timeframe
-           you're looking at, and the settings persist across reloads. -->
-      <div class="ltc-indbar" id="ltcIndBar" role="group" aria-label="Indicators">
+          <div class="pc-menu-wrap">
+            <button type="button" class="ltc-tool" id="ltcIndBtn" aria-haspopup="true"
+                    aria-expanded="false" aria-controls="ltcIndBar"
+                    title="EMA, TTM squeeze, volume, overnight"><i class="mi mi-bars" aria-hidden="true"></i><span class="pc-lbl">Indicators</span></button>
+            <!-- Every one of these is measured on the timeframe you're looking
+                 at, and the settings persist across reloads. -->
+            <div class="ltc-indbar pc-menu" id="ltcIndBar" role="group" aria-label="Indicators" hidden>
         <label class="ltc-ind"><input type="checkbox" id="indEma"> EMA</label>
         <input type="text" id="indEmaPeriods" class="ltc-ind-input"
                inputmode="numeric" spellcheck="false" maxlength="19"
@@ -344,6 +367,26 @@
         <button type="button" class="ltc-tool ghost" id="indReset"
                 title="Back to EMA 14/21/57 with squeeze and volume on">Reset</button>
         <span class="ltc-ind-note" id="indNote"></span>
+      </div>
+          </div>
+          <button type="button" class="ltc-tool ghost" id="ltcFit" title="Show every loaded bar (double-click the chart to reset)"
+                  aria-label="Fit all bars"><i class="mi mi-fit" aria-hidden="true"></i><span class="pc-lbl">Fit</span></button>
+          <button type="button" class="ltc-tool ghost" id="ltcFullBtn" title="Open the full-screen chart page"
+                  aria-label="Open full chart"><i class="mi mi-expand" aria-hidden="true"></i><span class="pc-lbl" id="ltcFullLbl">Full chart</span></button>
+        </div>
+      </div>
+      <div class="ltc-chart-wrap" id="liveTradeWrap">
+        <div id="liveTradeChart" class="pc-chart" role="img" aria-label="Live candlestick chart"></div>
+        <!-- The legend floats over the top-left of the candles, the way every
+             trading terminal does it: O/H/L/C of the bar under the cursor. -->
+        <div class="pc-legend">
+          <div class="pc-ohlc" id="ltcOhlc"></div>
+          <div class="ltc-overlays">
+            <span class="ltc-emas" id="ltcEmas" hidden></span>
+            <span class="ltc-sqz" id="ltcSqz" hidden></span>
+          </div>
+        </div>
+        <div class="ltc-hint" id="ltcHint" hidden></div>
       </div>
       <!-- Replay. Walk the session one candle at a time, the way you'd study it
            after the close — except the dial stays unlocked while the market is
@@ -385,16 +428,7 @@
           <span class="rp-call-result" id="rpCallResult" role="status" aria-live="polite"></span>
         </span>
       </div>
-      <div class="ltc-overlays">
-        <span class="ltc-sqz" id="ltcSqz" hidden></span>
-        <span class="ltc-emas" id="ltcEmas" hidden></span>
-      </div>
-      <div class="ltc-chart-wrap" id="liveTradeWrap">
-        <svg id="liveTradeChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg>
-        <div class="ltc-hint" id="ltcHint" hidden></div>
-        <div class="ltc-cursor-readout" id="ltcCursor" hidden></div>
-      </div>
-      <div class="ltc-foot" id="ltcFoot">Live candles · gold line = your entry · refreshes ~20s · educational, not advice</div>
+      <div class="ltc-foot" id="ltcFoot">Live candles · gold line = your entry · educational, not advice</div>
     </div>
 
     <div class="live-board" id="liveBoard"></div>
@@ -570,12 +604,19 @@
   </div>
 
   <script src="vendor/big.min.js"></script>
+  <!-- TradingView Lightweight Charts v5.2.1 (Apache-2.0), vendored unmodified.
+       License + attribution: vendor/LIGHTWEIGHT-CHARTS-LICENSE.txt -->
+  <script src="vendor/lightweight-charts.standalone.production.js"
+          integrity="sha384-KkYqTZlM13Zya6fVUF3IGCBOQ1ehFeJVVgxaVvD/0MebineF9EI8Jkd3NnWNChqN"></script>
   <script src="quickfill.js"></script>
   <!-- All of these are declaration-only and share one global scope. app.js
        loads LAST because it calls init() on its final line, and that path
        reaches into every file above it. -->
+  <script src="chart-draw.js"></script>
+  <script src="chart-engine.js"></script>
   <script src="chart.js"></script>
   <script src="chart-tools.js"></script>
+  <script src="chart-page.js"></script>
   <!-- Learning Mode. Loads after chart.js so `replay`, `liveLast`, `liveTf`
        and `chartInd` already exist when a Call is recorded. -->
   <script src="learn.js"></script>
@@ -586,6 +627,7 @@
   <script src="wizards.js"></script>
   <script src="paper.js"></script>
   <script src="options-paper.js"></script>
+  <script src="palette.js"></script>
   <script src="app.js"></script>
   <script>
   /* PWA: register the service worker + drive the install affordance.
