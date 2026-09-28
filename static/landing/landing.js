@@ -243,7 +243,8 @@ function load() {
   var crypto = getJSON("/api/markets?type=crypto").then(function (d) { return d.rows || []; })
     .catch(function () { return []; });
   return loadSymbols().then(function (syms) {
-    return Promise.all([getJSON("/api/markets?type=stocks&symbols=" + encodeURIComponent(syms.join(","))), crypto]);
+    // lite: the landing needs price, move and signal, not the grid's extras.
+    return Promise.all([getJSON("/api/markets?type=stocks&lite=1&symbols=" + encodeURIComponent(syms.join(","))), crypto]);
   }).then(function (res) {
     var d = res[0];
     render(d.rows || [], d.ts || Math.floor(Date.now() / 1000), res[1]);

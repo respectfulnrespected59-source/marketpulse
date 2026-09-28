@@ -369,3 +369,55 @@ def test_the_cache_survives_concurrent_readers_and_evictors():
     finally:
         sys.setswitchinterval(old_interval)
     assert not errors and len(cache) <= 8
+
+
+# ------------------------------------------------------------------ the landing's lite board
+class TestLiteBoard:
+    @pytest.fixture(autouse=True)
+    def clean(self):
+        app._cache.clear(); app._refreshing.clear()
+        yield
+        app._cache.clear(); app._refreshing.clear()
+
+    def test_a_lite_row_skips_the_grid_extras_and_their_calls(self, monkeypatch):
+        calls = []
+        def get(url, **kw):
+            calls.append(url)
+            return _daily([100.0, 110.0], [5, 7], meta={"regularMarketVolume": 1000})
+        monkeypatch.setattr(app, "_get_json", get)
+        row = app.fetch_one_stock("ZZTEST", extras=False)
+        assert row["squeeze"] is None and row["guides"] is None
+        assert row["signal"] and row["dollar_vol"] == 110_000
+        assert len(calls) == 1                                  # the daily chart only
+
+    def test_the_lite_board_has_its_own_slot_and_a_longer_life(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(app, "_load_stocks", lambda symbols, extras=True: seen.append(extras) or [{"x": extras}])
+        lite, _ = app.stocks_board(["ZZ"], lite=True)
+        full, _ = app.stocks_board(["ZZ"])
+        assert lite == [{"x": False}] and full == [{"x": True}] and seen == [False, True]
+        stamp, value = app._cache.get("stocks-lite:ZZ")
+        app._cache["stocks-lite:ZZ"] = (stamp - app.CACHE_TTL - 30, value)   # past the grid's TTL
+        assert app.stocks_board(["ZZ"], lite=True)[0] == [{"x": False}] and seen == [False, True]
+        assert app.LITE_BOARD_TTL >= 5 * 60
+
+    def test_markets_honours_lite(self, monkeypatch):
+        import json
+        import threading
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        got = []
+        monkeypatch.setattr(app, "stocks_board", lambda symbols, allow_stale=True, lite=False: got.append(lite) or ([], 0.0))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{httpd.server_address[1]}/api/markets?type=stocks&symbols=ZZ"
+            for q in ("&lite=1", ""):
+                urllib.request.urlopen(base + q, timeout=5).read()
+        finally:
+            httpd.shutdown(); httpd.server_close()
+        assert got == [True, False]
+
+
+def test_the_landing_asks_for_the_lite_board():
+    assert "/api/markets?type=stocks&lite=1" in _read("landing/landing.js")
