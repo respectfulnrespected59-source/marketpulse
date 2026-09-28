@@ -12,18 +12,24 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v21";
+const SHELL_VERSION = "mp-shell-v22";
 const SHELL_ASSETS = [
   "/",
   "/app",
+  "/chart",
   "/index.html",
   "/landing/landing.css",
   "/landing/landing.js",
   "/brand.css",
   "/styles.css",
+  "/chart.css",
   "/app.js",
+  "/chart-draw.js",
+  "/chart-engine.js",
   "/chart.js",
   "/chart-tools.js",
+  "/chart-page.js",
+  "/palette.js",
   "/learn.js",
   "/panels.js",
   "/home.js",
@@ -34,6 +40,7 @@ const SHELL_ASSETS = [
   "/options-paper.js",
   "/quickfill.js",
   "/vendor/big.min.js",
+  "/vendor/lightweight-charts.standalone.production.js",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -73,7 +80,8 @@ self.addEventListener("fetch", (event) => {
   // app, so caching every navigation under one key would let a landing visit
   // overwrite the app shell and open the installed app on the marketing page.
   if (req.mode === "navigate") {
-    const key = url.pathname === "/app/" ? "/app" : url.pathname;
+    const key = (url.pathname === "/app/" || url.pathname === "/chart/")
+      ? url.pathname.slice(0, -1) : url.pathname;
     event.respondWith(
       fetch(req)
         .then((res) => {

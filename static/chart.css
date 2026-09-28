@@ -1,0 +1,374 @@
+/* MarketPulse — the live chart card, the full-screen /chart page, and quick
+ * search (Ctrl+K).
+ *
+ * Direction: a trading terminal inside the QMM dark-luxury frame. Calm chrome,
+ * hairline dividers, mono numerals that don't jitter as they tick, and one
+ * accent (gold) for "this is what's on". The candles get the height; settings
+ * fold into a menu instead of stacking up above the chart.
+ *
+ * `.ltc-tool` itself is shared with the Trade desk and paper trading and stays
+ * in styles.css; the chart toolbar only flattens it here.
+ */
+
+/* ---- line icons the chart adds to the brand set (same mask technique) ---- */
+.mi-move { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3'/%3E%3C/svg%3E"); }
+.mi-trend { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 17.5l13-11'/%3E%3Ccircle cx='4.5' cy='18.5' r='1.8'/%3E%3Ccircle cx='19.5' cy='5.5' r='1.8'/%3E%3C/svg%3E"); }
+.mi-undo { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6L4 11l5 5'/%3E%3Cpath d='M4 11h10a5 5 0 0 1 0 10h-3'/%3E%3C/svg%3E"); }
+.mi-fit { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/%3E%3C/svg%3E"); }
+.mi-expand { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7'/%3E%3C/svg%3E"); }
+
+/* ---- the card ------------------------------------------------------------- */
+.live-chart-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  margin: 4px 0 18px;
+  background: linear-gradient(180deg, var(--surface), var(--bg-2));
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+/* One gold hairline along the top edge: the brand, without the motion. */
+.live-chart-card::before {
+  content: ""; position: absolute; left: 18px; right: 18px; top: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(232, 194, 90, 0.65), transparent);
+  pointer-events: none;
+}
+
+/* Row 1 — symbol, timeframe, price. */
+.ltc-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px;
+  padding: 12px 14px 10px;
+}
+.ltc-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pc-sym {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-left: -8px; padding: 5px 10px 5px 8px;
+  color: var(--text); background: transparent;
+  border: 1px solid transparent; border-radius: 9px; cursor: pointer;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+.pc-sym b { font: 800 21px/1 var(--mono); letter-spacing: 0.01em; }
+.pc-sym .mi { width: 15px; height: 15px; color: var(--text-faint); transition: color 160ms var(--ease); }
+.pc-sym:hover, .pc-sym:focus-visible { background: rgba(255, 255, 255, 0.03); border-color: var(--line); outline: none; }
+.pc-sym:hover .mi, .pc-sym:focus-visible .mi { color: var(--gold); }
+.ltc-kind {
+  font: 600 10.5px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-faint); white-space: nowrap;
+}
+.ltc-tf {
+  display: inline-flex; gap: 2px; padding: 3px; max-width: 100%;
+  background: rgba(0, 0, 0, 0.28); border: 1px solid var(--line); border-radius: 10px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.ltc-tf::-webkit-scrollbar { display: none; }
+.ltc-tf button {
+  flex: none; padding: 6px 9px;
+  font: 700 11px/1 var(--mono); color: var(--text-dim);
+  background: transparent; border: 0; border-radius: 7px; cursor: pointer;
+  transition: color 150ms var(--ease), background 150ms var(--ease);
+}
+.ltc-tf button:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.ltc-tf button:focus-visible { outline: 1px solid var(--gold); outline-offset: -1px; }
+.ltc-tf button.is-active { color: #07050d; background: var(--gold); }
+.ltc-price { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ltc-price > b { font: 700 24px/1 var(--mono); letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.ltc-chg {
+  padding: 5px 8px; border-radius: 7px;
+  font: 700 12.5px/1 var(--mono); font-variant-numeric: tabular-nums;
+}
+.ltc-chg:empty { display: none; }
+.ltc-chg.up { color: var(--buy); background: var(--buy-soft); }
+.ltc-chg.down { color: var(--sell); background: var(--sell-soft); }
+/* "as of 10:15 · not live" — sits with the price, because the price is the
+   number being qualified. */
+.ltc-asof {
+  font: 700 11px/1 var(--mono); letter-spacing: 0.03em; color: var(--sell); white-space: nowrap;
+}
+/* Rewound: desaturate the headline price so a historical number cannot be
+   mistaken for the live one at a glance. */
+.live-chart-card.is-rewound .ltc-price > b { color: var(--text-dim); }
+.live-chart-card.is-rewound .ltc-chg { opacity: 0.55; }
+
+/* Row 2 — one toolbar. */
+.ltc-toolbar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.ltc-tools { display: inline-flex; align-items: center; gap: 4px; }
+.ltc-actions { margin-left: auto; }
+.ltc-toolbar .ltc-tool {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 10px;
+  background: transparent; border-color: transparent; box-shadow: none;
+}
+.ltc-toolbar .ltc-tool .mi { width: 15px; height: 15px; }
+.ltc-toolbar .ltc-tool:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); border-color: var(--line); box-shadow: none; }
+.ltc-toolbar .ltc-tool:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
+.ltc-toolbar .ltc-tool.is-active {
+  color: var(--gold); background: rgba(232, 194, 90, 0.12);
+  border-color: rgba(232, 194, 90, 0.45); box-shadow: none;
+}
+.pc-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
+
+/* Indicator settings: a drop-down, so the candles keep the height. */
+.pc-menu-wrap { position: relative; }
+.pc-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  width: min(300px, calc(100vw - 32px));
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
+  padding: 14px;
+  background: #150e22; border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 22px 48px -14px rgba(0, 0, 0, 0.85);
+}
+.pc-menu[hidden] { display: none; }
+.ltc-ind {
+  display: inline-flex; align-items: center; gap: 8px; flex: 1 1 100%; cursor: pointer;
+  font: 700 11.5px/1.2 var(--mono); letter-spacing: 0.02em; color: var(--text-dim);
+  transition: color 160ms var(--ease);
+}
+.ltc-ind:first-child { flex: 1 1 auto; }
+.ltc-ind:hover { color: var(--text); }
+.ltc-ind input { margin: 0; accent-color: var(--gold); cursor: pointer; }
+.ltc-ind-input {
+  flex: 0 0 118px; padding: 6px 8px;
+  font: 700 11.5px/1 var(--mono); color: var(--text);
+  background: rgba(7, 5, 13, 0.8); border: 1px solid var(--line); border-radius: 7px;
+}
+.ltc-ind-input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 2px rgba(232, 194, 90, 0.15); }
+.ltc-ind-note { flex: 1 1 auto; order: 11; text-align: right; font: 10.5px/1.3 var(--mono); color: var(--text-faint); }
+#indReset { order: 10; }
+
+/* The chart itself. */
+.ltc-chart-wrap {
+  position: relative;
+  height: clamp(380px, 60vh, 700px);
+  background:
+    radial-gradient(900px 300px at 50% 120%, rgba(232, 194, 90, 0.04), transparent 70%),
+    #0a0712;
+}
+.pc-chart { position: absolute; inset: 0; }
+.ltc-chart-wrap.tool-active { box-shadow: inset 0 0 0 1px rgba(232, 194, 90, 0.35); }
+/* The chart library sets its own cursors; a drawing tool must win over them. */
+.ltc-chart-wrap.tool-active .pc-chart,
+.ltc-chart-wrap.tool-active .pc-chart * { cursor: crosshair !important; }
+.pc-chart.is-grab, .pc-chart.is-grab * { cursor: grab !important; }
+.pc-chart.is-grabbing, .pc-chart.is-grabbing * { cursor: grabbing !important; }
+.pc-chart.is-delete, .pc-chart.is-delete * { cursor: not-allowed !important; }
+
+/* Legend: floats over the candles' top-left corner, like any trading terminal. */
+.pc-legend {
+  position: absolute; top: 8px; left: 10px; right: 76px; z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  pointer-events: none;
+}
+.pc-ohlc {
+  max-width: 100%;
+  font: 600 11.5px/1.45 var(--mono); font-variant-numeric: tabular-nums;
+  color: var(--text-dim); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+.pc-ohlc .pc-k { color: var(--text-faint); margin-right: 1px; }
+.pc-ohlc b { font-weight: 700; }
+.pc-ohlc b.up { color: var(--buy); }
+.pc-ohlc b.down { color: var(--sell); }
+.ltc-overlays { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ltc-overlays > * { pointer-events: auto; }
+.ltc-emas { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ltc-ema-chip, .ltc-sqz {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 6px;
+  font: 700 10.5px/1.2 var(--mono); color: var(--text-dim);
+  background: rgba(7, 5, 13, 0.62); border: 1px solid rgba(44, 33, 64, 0.9);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+.ltc-ema-chip i { display: inline-block; width: 10px; height: 2.5px; border-radius: 2px; }
+.ltc-ema-chip b { color: var(--text); font-weight: 800; margin-left: 2px; }
+.ltc-sqz { border-radius: 999px; }
+.ltc-sqz b { color: var(--text); font-weight: 800; }
+.ltc-sqz .ltc-sqz-arr { font-size: 12px; line-height: 1; }
+.ltc-sqz.on { color: #e8b03a; border-color: rgba(232, 176, 58, 0.5); background: rgba(40, 28, 8, 0.7); }
+.ltc-sqz.on b { color: #e8b03a; }
+.ltc-sqz.fired { color: var(--buy); border-color: rgba(47, 209, 128, 0.45); background: rgba(8, 36, 24, 0.7); }
+.ltc-sqz.fired b { color: var(--buy); }
+.ltc-sqz.bull .ltc-sqz-arr { color: var(--buy); }
+.ltc-sqz.bear .ltc-sqz-arr { color: var(--sell); }
+.ltc-hint {
+  position: absolute; left: 50%; bottom: 40px; z-index: 4; transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 5px 11px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: var(--gold); text-align: center;
+  background: rgba(20, 13, 33, 0.88); border: 1px solid rgba(232, 194, 90, 0.4);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+/* Row 3 — replay transport. The dial never locks, so it never hides. */
+.ltc-replaybar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.18); border-top: 1px solid var(--line);
+}
+.ltc-replaybar .ltc-tool { height: 28px; padding: 0 9px; }
+.rp-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.rp-scrub { flex: 1 1 160px; min-width: 120px; max-width: 460px; accent-color: var(--gold); cursor: pointer; }
+.rp-speed { width: 68px; padding: 2px 4px; }
+.rp-clock { min-width: 96px; font: 700 11px/1 var(--mono); letter-spacing: 0.04em; color: var(--gold); }
+/* GO LIVE. Inert (and unmistakably so) while the chart already is live; the
+   moment the dial is parked behind the edge it becomes the loudest control on
+   the bar, because "you are not looking at the market right now" is the thing
+   that most needs saying. */
+.rp-live { font: 700 11px/1 var(--mono); letter-spacing: 0.04em; white-space: nowrap; }
+.rp-live:disabled { opacity: 0.42; cursor: default; }
+.rp-live.is-behind {
+  color: #07050d; background: var(--sell); border-color: var(--sell);
+  animation: rpLivePulse 1.6s ease-in-out infinite;
+}
+@keyframes rpLivePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 93, 108, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 93, 108, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .rp-live.is-behind { animation: none; } }
+
+/* Learning Mode: the call row. Only appears while the chart is rewound,
+   because a read with the answer on screen isn't a read. */
+.rp-call { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; }
+.rp-call-label { font: 700 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.rp-conf { width: 84px; padding: 2px 4px; }
+.call-up.ltc-tool    { border-color: var(--buy); color: var(--buy); }
+.call-down.ltc-tool  { border-color: var(--sell); color: var(--sell); }
+.call-stand.ltc-tool { border-color: var(--text-dim); color: var(--text-dim); }
+.call-up.ltc-tool:hover    { background: var(--buy); color: #07050d; }
+.call-down.ltc-tool:hover  { background: var(--sell); color: #07050d; }
+.call-stand.ltc-tool:hover { background: var(--text-dim); color: #07050d; }
+.rp-call-result { flex: 1 1 240px; min-width: 0; font: 700 11px/1.3 var(--mono); letter-spacing: 0.02em; }
+.rp-call-result.is-win  { color: var(--buy); }
+.rp-call-result.is-loss { color: var(--sell); }
+/* Flat and warn share the muted tone on purpose: "that wasn't a trade" and
+   "you can't call that yet" are both non-events, not verdicts. */
+.rp-call-result.is-flat,
+.rp-call-result.is-warn { color: var(--gold); }
+
+.ltc-foot { padding: 8px 14px 12px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
+
+@media (max-width: 720px) {
+  /* Row 1 = symbol + price, row 2 = timeframes: the candles get the height back. */
+  .ltc-head { padding: 10px 12px 8px; }
+  .ltc-kind { display: none; }
+  .ltc-price { order: 2; gap: 8px; }
+  .ltc-tf { order: 3; width: 100%; }
+  .ltc-price > b { font-size: 20px; }
+  .pc-lbl, .pc-sep { display: none; }
+  .ltc-toolbar { padding: 5px 6px; }
+  .ltc-tools { gap: 2px; }
+  .ltc-toolbar .ltc-tool { padding: 0 8px; }
+  .ltc-chart-wrap { height: clamp(340px, 62vh, 560px); }
+  .pc-legend { right: 64px; }
+  .pc-ohlc { font-size: 10.5px; }
+  /* A phone can't spare the candles: the EMA values are already on the price
+     axis in their own colours, so the chips go and the squeeze reading stays. */
+  .ltc-emas { display: none !important; }
+}
+
+/* ---- the /chart page: this app with only the chart showing ---------------- */
+.pc-back { display: none; }
+.pc-search-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 8px 0 12px;
+  font: 500 13px/1 var(--sans); color: var(--text-dim);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+  transition: color 160ms var(--ease), border-color 160ms var(--ease);
+}
+.pc-search-btn:hover, .pc-search-btn:focus-visible { color: var(--text); border-color: rgba(232, 194, 90, 0.5); outline: none; }
+.pc-search-btn .mi { width: 15px; height: 15px; color: var(--gold); }
+@media (max-width: 640px) { .pc-search-btn span, .pc-search-btn kbd { display: none; } .pc-search-btn { padding: 0 10px; } }
+
+html.mode-chart .tabs,
+html.mode-chart .auto,
+html.mode-chart .refresh,
+html.mode-chart .foot,
+html.mode-chart #livePanel > :not(#liveTradeCard) { display: none !important; }
+html.mode-chart .pc-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px;
+  font: 600 11px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-dim); text-decoration: none;
+  transition: color 160ms var(--ease), border-color 160ms var(--ease);
+}
+html.mode-chart .pc-back:hover, html.mode-chart .pc-back:focus-visible { color: var(--text); border-color: var(--gold); outline: none; }
+html.mode-chart .topbar { padding-top: 10px; padding-bottom: 10px; }
+html.mode-chart .live { padding: 12px 14px 14px; }
+html.mode-chart .live-chart-card { margin: 0; min-height: calc(100dvh - 86px); }
+html.mode-chart .ltc-chart-wrap { flex: 1 1 auto; height: auto; min-height: 360px; }
+@media (max-width: 720px) {
+  html.mode-chart .live { padding: 8px 8px 10px; }
+  html.mode-chart .ltc-chart-wrap { min-height: 54vh; }
+  html.mode-chart .topbar { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  html.mode-chart .clock,
+  html.mode-chart .mp-word { display: none; }
+}
+/* Truly full screen (the button on the chart page). */
+.live-chart-card:fullscreen { margin: 0; border-radius: 0; background: var(--bg); }
+.live-chart-card:fullscreen .ltc-chart-wrap { flex: 1 1 auto; height: auto; }
+
+/* ---- quick search (Ctrl+K) ------------------------------------------------ */
+kbd {
+  display: inline-block; padding: 3px 6px;
+  font: 600 10.5px/1 var(--mono); color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px;
+}
+.pal-backdrop {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(4, 3, 8, 0.62);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.pal-backdrop[hidden] { display: none; }
+.pal {
+  width: min(620px, 100%); overflow: hidden;
+  background: #140d21; border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.9), inset 0 0 0 1px rgba(232, 194, 90, 0.07);
+  animation: palIn 160ms var(--ease);
+}
+@keyframes palIn { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
+@media (prefers-reduced-motion: reduce) { .pal { animation: none; } }
+.pal-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.pal-head .mi { width: 18px; height: 18px; color: var(--gold); }
+/* 16px so iOS doesn't zoom the page when the field takes focus. */
+.pal-input {
+  flex: 1; min-width: 0;
+  font: 500 16px/1.2 var(--sans); color: var(--text);
+  background: transparent; border: 0; outline: none;
+}
+.pal-input::placeholder { color: var(--text-faint); }
+.pal-list { list-style: none; margin: 0; padding: 6px; max-height: min(52vh, 440px); overflow-y: auto; }
+.pal-sec {
+  padding: 10px 10px 5px;
+  font: 600 10px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint);
+}
+.pal-item {
+  display: grid; grid-template-columns: 78px 1fr auto; align-items: center; gap: 12px;
+  padding: 10px; border-radius: 10px; cursor: pointer;
+}
+.pal-item.is-active { background: rgba(232, 194, 90, 0.1); box-shadow: inset 2px 0 0 var(--gold); }
+.pal-sym { font: 800 13.5px/1 var(--mono); color: var(--text); }
+.pal-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-dim); }
+.pal-kind {
+  padding: 4px 8px; white-space: nowrap;
+  font: 600 10px/1 var(--mono); letter-spacing: 0.06em; color: var(--text-faint);
+  border: 1px solid var(--line); border-radius: 999px;
+}
+.pal-kind.is-crypto { color: #b690ea; border-color: rgba(168, 119, 230, 0.4); }
+.pal-foot {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px; border-top: 1px solid var(--line);
+  font-size: 11.5px; color: var(--text-faint);
+}
+.pal-foot kbd { margin-right: 3px; }
+.pal-status { margin-left: auto; }
+@media (max-width: 560px) {
+  .pal-backdrop { padding-top: 12px; }
+  .pal-item { grid-template-columns: 64px 1fr auto; gap: 10px; }
+  .pal-foot span:not(.pal-status) { display: none; }
+}

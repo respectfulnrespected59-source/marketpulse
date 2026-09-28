@@ -38,6 +38,9 @@ WATCHED = [
     "index.html", "sw.js",
     "landing.html", "landing/landing.js", "landing/landing.css", "brand.css",
     "license.js", "desk.js",
+    # The Lightweight Charts engine, the /chart page and quick search (09-27).
+    "chart.css", "chart-draw.js", "chart-engine.js", "chart-page.js", "palette.js",
+    "vendor/lightweight-charts.standalone.production.js",
 ]
 
 # A line-count match is strong but not proof. These are strings whose presence
@@ -55,6 +58,11 @@ MARKERS = {
     "/api/desk/ping": ("desk.js", True),       # desk shows only where a local desk answers
     "/api/desk/session": ("desk.js", False),   # the old token hand-out must never come back
     ".tab[hidden]": ("styles.css", True),      # else the hidden Trade tab shows on the hosted site
+    "LightweightCharts": ("chart-engine.js", True),   # the chart draws with the vendored engine
+    "_userOverlaySVG": ("chart.js", False),           # the old SVG renderer must be gone
+    "function bootChartPage": ("chart-page.js", True),
+    'href="chart.css"': ("index.html", True),
+    "function openPalette": ("palette.js", True),
 }
 
 TIMEOUT_S = 60

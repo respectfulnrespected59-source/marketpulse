@@ -1700,7 +1700,9 @@ class Handler(BaseHTTPRequestHandler):
         # static files
         # "/" is the public landing; the app itself lives at /app.
         rel = {"/": "landing.html", "": "landing.html",
-               "/app": "index.html", "/app/": "index.html"}.get(path, path.lstrip("/"))
+               "/app": "index.html", "/app/": "index.html",
+               # The full-screen chart is the same app shell (static/chart-page.js).
+               "/chart": "index.html", "/chart/": "index.html"}.get(path, path.lstrip("/"))
         full = os.path.normpath(os.path.join(STATIC, rel))
         # Compare whole path components: a bare startswith(STATIC) also admits a
         # sibling like "static-evil/" because "static" is its string prefix.
@@ -1715,6 +1717,7 @@ class Handler(BaseHTTPRequestHandler):
             ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
             ".json": "application/json",
             ".webmanifest": "application/manifest+json",
+            ".txt": "text/plain; charset=utf-8",
         }.get(os.path.splitext(full)[1], "application/octet-stream")
         with open(full, "rb") as fh:
             self._send(200, fh.read(), ctype)

@@ -1,370 +1,261 @@
 /* MarketPulse — chart interaction tools.
  *
- * Click-to-mark, trend-line drawing, crosshair, fullscreen, pan and zoom.
+ * Mark an entry, draw a trend line, retouch or delete either, plus the
+ * toolbar, indicator menu, replay transport and keyboard shortcuts. Pan, zoom
+ * and the crosshair belong to the chart engine now (Lightweight Charts); this
+ * file only takes the pointer when a drawing tool, or a grab on something the
+ * trader drew, actually needs it.
  *
- * Split out of app.js to keep each file readable. Classic script, so it
- * shares one global scope with app.js and the other panels; everything
- * here is a declaration and nothing runs at load time. app.js is loaded
- * last because its init() call reaches into these.
+ * Classic script sharing one global scope with chart.js and app.js; everything
+ * here is a declaration and nothing runs at load time.
  */
 
-/* ---- Chart interaction: click to mark / draw / hover crosshair / fullscreen ---- */
+/* ---- Drawing tools: state ------------------------------------------------ */
 
-function _svgEventToChart(evt) {
-  const svg = $("#liveTradeChart");
-  const rect = svg.getBoundingClientRect();
-  // Use the SVG's current viewBox — it was resized when we moved to the
-  // Webull layout (1000×360), so a hardcoded height throws Y off by 20%.
-  const vb = svg.viewBox && svg.viewBox.baseVal;
-  const W = (vb && vb.width) || 1000;
-  const H = (vb && vb.height) || 360;
-  const x = ((evt.clientX - rect.left) / rect.width) * W;
-  const y = ((evt.clientY - rect.top) / rect.height) * H;
-  return { x, y, W, H, pxPerSvgX: rect.width / W, pxPerSvgY: rect.height / H };
+// Tool mode: "none" | "mark" | "line".
+// Trend line UX: a click drops a pending gold anchor at the target price. Then
+// press-and-drag ANYWHERE on the chart rubber-bands a line from the anchor to
+// the pointer; release commits it. A plain click just relocates the anchor.
+let ltcTool = "none";
+let trendAnchor = null;        // {ts, price} — the pending line's first point
+let trendPreview = null;       // {ax, ay, bx, by} rubber band, in pane pixels
+let gesture = null;            // the pointer gesture this file owns, if any
+let editPreview = null;        // {ts, price} while an existing point is dragged
+let hoverSnap = null;          // snap diamond under the pointer while a tool is armed
+let altHeld = false;           // hold Alt to place freely, without the snap
+const DRAG_THRESHOLD_PX = 4;   // how far the pointer must travel to count as a drag
+
+// Painting reads marks and lines on every frame of a pan; parsing localStorage
+// that often is waste. Cached per symbol and dropped whenever we write.
+let _drawCache = { sym: null, marks: [], lines: [] };
+function _drawChanged() { _drawCache = { sym: null, marks: [], lines: [] }; pcRedrawDrawings(); }
+
+function _toolSym() {
+  return String((liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim()).toUpperCase();
 }
 
-/* One slot in real screen pixels, and its reciprocal.
- *
- * `domW` is the SVG's on-screen width; the candle area is only priceRect.w of
- * the 1000-unit viewBox, and each bar owns one slot of that (plus the
- * right-hand headroom). Every pan path must agree on this or dragging and
- * wheel-panning move by different amounts for the same gesture.
- */
-function _barsPerPx(g, domW) {
-  const w = Math.max(1, domW);
-  if (!g || !g.priceRect || !g.slot) return (g && g.n ? g.n : 1) / w;
-  const candleDomW = w * (g.priceRect.w / g.W);   // strip the price ladder
-  const slotDomPx = candleDomW / g.slot.slots;    // one bar, in screen px
-  return 1 / Math.max(0.0001, slotDomPx);
+/* What the drawing layer (chart-draw.js) paints, with any drag in progress
+ * applied — the stored point only changes when the drag is released. */
+function pcDrawSource() {
+  const sym = liveLast.data && liveLast.data.symbol;
+  if (!sym) return null;
+  if (_drawCache.sym !== sym) _drawCache = { sym, marks: getUserMarks(sym), lines: getUserLines(sym) };
+  let { marks, lines } = _drawCache;
+  const hit = gesture && gesture.kind === "edit" && gesture.moved && editPreview ? gesture.hit : null;
+  if (hit && hit.kind === "mark") {
+    marks = marks.map((m, i) => (i === hit.idx ? { ...m, ...editPreview, editing: true } : m));
+  } else if (hit) {
+    const end = hit.kind === "lineA" ? "a" : "b";
+    lines = lines.map((l, i) => (i === hit.idx ? { ...l, [end]: { ...editPreview }, editing: end } : l));
+  }
+  return { marks, lines, anchor: trendAnchor, preview: trendPreview, snap: hoverSnap };
 }
 
-function _pixelToTsPrice(x, y) {
-  const g = liveLast.geom;
-  if (!g) return null;
-  const r = g.priceRect || { x: g.pad, y: g.pad, w: g.W - g.pad * 2, h: g.H - g.pad * 2 };
-  // Invert through the shared slot mapping so a click lands on the candle the
-  // cursor is actually over, not half a bar off.
-  const raw = g.slot ? g.slot.barAt(x) : ((x - r.x) / r.w) * (g.n - 1);
-  const idx = Math.max(0, Math.min(g.n - 1, Math.round(raw)));
-  const ts = (g.ts && g.ts[idx]) || Math.floor(Date.now() / 1000);
-  const min = g.priceMin != null ? g.priceMin : Math.min(...g.ohlc.map((b) => b[2]));
-  const max = g.priceMax != null ? g.priceMax : Math.max(...g.ohlc.map((b) => b[1]));
-  const span = (max - min) || 1;
-  const price = min + (1 - Math.max(0, Math.min(1, (y - r.y) / r.h))) * span;
-  return { ts, price: +price.toFixed(4), idx };
+/* ---- pointer geometry ------------------------------------------------------ */
+
+function _localXY(evt) {
+  const r = $("#liveTradeChart").getBoundingClientRect();
+  return { x: evt.clientX - r.left, y: evt.clientY - r.top };
+}
+
+function _inPane(x, y) {
+  const p = pcPaneRect();
+  return !!p && x >= 0 && y >= 0 && x <= p.w && y <= p.h;
+}
+
+/* The point a click means: the nearest open/high/low/close when one is close
+ * enough, else exactly where the pointer is. Alt places freely. */
+function _pointFor(x, y) {
+  if (!altHeld) {
+    const s = pcSnap(x, y);
+    if (s) return s;
+  }
+  const p = pcPointAt(x, y);
+  if (!p) return null;
+  const xy = pcXY(p.idx, p.price);
+  return { ...p, x: xy ? xy.x : x, y };
+}
+
+/* An existing mark or trend-line end under the pointer — grabbable from ANY
+ * tool, so a point can be retouched without switching modes. */
+function _hitTest(x, y) {
+  const sym = liveLast.data && liveLast.data.symbol;
+  if (!sym) return null;
+  const at = (p) => { const i = pcIdxOfTs(p && p.ts); return i < 0 ? null : pcXY(i, p.price); };
+  const near = (p) => { const xy = at(p); return !!xy && Math.hypot(xy.x - x, xy.y - y) <= PC_HIT_PX; };
+  const marks = getUserMarks(sym);
+  for (let i = marks.length - 1; i >= 0; i--) {
+    if (near(marks[i])) return { kind: "mark", idx: i, sym, point: marks[i] };
+  }
+  const lines = getUserLines(sym);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (near(lines[i].a)) return { kind: "lineA", idx: i, sym, point: lines[i].a };
+    if (near(lines[i].b)) return { kind: "lineB", idx: i, sym, point: lines[i].b };
+  }
+  return null;
+}
+
+function _deleteHit(hit) {
+  const k = _ltcKeys(hit.sym);
+  if (hit.kind === "mark") {
+    const marks = getUserMarks(hit.sym);
+    marks.splice(hit.idx, 1);
+    _writeArr(k.marks, marks);
+  } else {
+    const lines = getUserLines(hit.sym);
+    lines.splice(hit.idx, 1);
+    _writeArr(k.lines, lines);
+  }
+  _drawChanged();
+  if (typeof toast === "function") toast("sell", "Deleted");
+}
+
+function _commitEdit(hit, to) {
+  const k = _ltcKeys(hit.sym);
+  if (hit.kind === "mark") {
+    const marks = getUserMarks(hit.sym);
+    if (!marks[hit.idx]) return;
+    marks[hit.idx] = { ...marks[hit.idx], ts: to.ts, price: to.price };
+    _writeArr(k.marks, marks);
+  } else {
+    const end = hit.kind === "lineA" ? "a" : "b";
+    const lines = getUserLines(hit.sym);
+    if (!lines[hit.idx]) return;
+    lines[hit.idx] = { ...lines[hit.idx], [end]: { ts: to.ts, price: to.price } };
+    _writeArr(k.lines, lines);
+  }
+  _drawChanged();
+}
+
+/* ---- pointer gestures -------------------------------------------------------- */
+
+function _setHint(text) {
+  const hint = $("#ltcHint");
+  if (!hint) return;
+  hint.hidden = !text;
+  hint.textContent = text || "";
 }
 
 function _setTool(t) {
   ltcTool = t;
-  // Any tool switch clears an in-flight trend gesture.
-  trendAnchor = null; trendDragging = false; trendPreview = null; dragState = null;
+  // Any tool switch drops an in-flight trend gesture.
+  trendAnchor = null; trendPreview = null; gesture = null; hoverSnap = null;
   const wrap = $("#liveTradeWrap");
   if (wrap) {
     wrap.classList.toggle("tool-mark", t === "mark");
     wrap.classList.toggle("tool-line", t === "line");
     wrap.classList.toggle("tool-active", t !== "none");
   }
-  document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) =>
-    b.classList.toggle("is-active", b.dataset.tool === t));
-  const hint = $("#ltcHint");
-  if (hint) {
-    if (t === "mark") { hint.hidden = false; hint.textContent = "Click the chart to drop an entry mark"; }
-    else if (t === "line") { hint.hidden = false; hint.textContent = "Click target price → then press & drag to draw the trend"; }
-    else { hint.hidden = true; hint.textContent = ""; }
-  }
-  if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
-}
-
-function _onChartClick(evt) {
-  if (suppressNextClick) { suppressNextClick = false; return; }
-  if (!liveLast.ok || ltcTool === "none") return;
-  const { x, y } = _svgEventToChart(evt);
-  // Snap to the nearest OHLC point unless Alt held.
-  const snap = altHeld ? null : _getSnapCandidate(x, y);
-  const p = snap ? { ts: snap.ts, price: snap.price, idx: snap.idx } : _pixelToTsPrice(x, y);
-  if (!p) return;
-  const sym = (liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim().toUpperCase();
-  if (ltcTool === "mark") {
-    addUserMark(sym, { ts: p.ts, price: p.price, dir: $("#liveSide").value || "mark", t: Date.now() });
-    // toast() is (kind, title, body) — these were passing (title, kind), which
-    // rendered the message as a CSS class and printed "undefined" as the body.
-    if (typeof toast === "function") toast("buy", `◉ Marked @ ${fmtPrice(p.price)}`, snap ? `snapped to ${snap.kind}` : "");
-    renderLiveTradeChart(liveLast.data, liveLast.kind);
-  } else if (ltcTool === "line") {
-    trendAnchor = { ts: p.ts, price: p.price, x: snap ? snap.x : x, y: snap ? snap.y : y };
-    const hint = $("#ltcHint");
-    if (hint) hint.textContent = `Target @ ${fmtPrice(p.price)}${snap ? " (" + snap.kind + ")" : ""} — press & drag anywhere to draw the trend`;
-    renderLiveTradeChart(liveLast.data, liveLast.kind);
-  }
-}
-
-function _onChartMouseDown(evt) {
-  if (!liveLast.ok) return;
-  const { x, y, pxPerSvgX, pxPerSvgY } = _svgEventToChart(evt);
-  if (liveLast.geom) { liveLast.geom.pxPerSvgX = pxPerSvgX; liveLast.geom.pxPerSvgY = pxPerSvgY; }
-
-  // Hit-test existing markers/endpoints first — works from ANY tool so Rob
-  // can retouch a point without switching modes.
-  const hit = _hitTestMarker(x, y);
-  if (hit) {
-    const sym = liveLast.data && liveLast.data.symbol;
-    if (evt.altKey) {
-      _deleteHit(hit, sym);
-      suppressNextClick = true;
-      renderLiveTradeChart(liveLast.data, liveLast.kind);
-      evt.preventDefault();
-      return;
-    }
-    editState = { kind: hit.kind, idx: hit.idx, sym };
-    // Initialize the preview to the marker's current location so the first
-    // mousemove has something to nudge from.
-    if (hit.kind === "mark") editPreview = { ts: hit.mark.ts, price: hit.mark.price };
-    else editPreview = { ts: hit.line[hit.kind === "lineA" ? "a" : "b"].ts,
-                         price: hit.line[hit.kind === "lineA" ? "a" : "b"].price };
-    evt.preventDefault();
-    return;
-  }
-
-  // Otherwise, arm a potential trend-line drag.
-  if (ltcTool === "line" && trendAnchor) {
-    dragState = { startX: x, startY: y, moved: false };
-    return;
-  }
-  // Default (no tool active, not editing a marker, not a hit): drag = pan.
-  if (ltcTool === "none" && liveLast.geom) {
-    panDrag = { startClientX: evt.clientX, startBar: liveLast.geom.viewStart, moved: false };
-    const svg = $("#liveTradeChart");
-    if (svg) svg.style.cursor = "grab";
-    evt.preventDefault();
-  }
-}
-
-function _scheduleDragRedraw() {
-  if (_rafDrag) return;
-  _rafDrag = requestAnimationFrame(() => {
-    _rafDrag = 0;
-    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.tool === t);
+    b.setAttribute("aria-pressed", String(b.dataset.tool === t));
   });
+  _setHint(t === "mark" ? "Click the chart to drop an entry mark"
+    : t === "line" ? "Click the target price, then press & drag to draw the trend" : "");
+  // While a tool is armed a drag draws instead of panning; the wheel still zooms.
+  pcSetInteractive(t === "none");
+  pcRedrawDrawings();
 }
 
-function _onChartMouseUp(evt) {
-  // Commit an in-flight edit of an existing marker/endpoint.
-  if (editState) {
-    _commitEdit();
-    if (typeof toast === "function") toast("buy", "Adjusted");
-    editState = null; editPreview = null;
-    suppressNextClick = true;
-    const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
-    renderLiveTradeChart(liveLast.data, liveLast.kind);
-    return;
-  }
-  // Finish a pan-drag. Suppress the trailing click so the mouseup doesn't
-  // count as a click on empty chart space.
-  if (panDrag) {
-    const wasDrag = panDrag.moved;
-    panDrag = null;
-    const svg = $("#liveTradeChart"); if (svg) svg.style.cursor = "";
-    if (wasDrag) suppressNextClick = true;
-    return;
-  }
-  if (!dragState) return;
-  const wasDrag = dragState.moved;
-  const startedInLine = ltcTool === "line" && trendAnchor;
-  dragState = null;
-  if (!wasDrag) return;   // wasn't a drag — let the click handler run normally
-  const { x, y } = _svgEventToChart(evt);
-  // Snap the release endpoint for precise line drawing.
-  const snap = altHeld ? null : _getSnapCandidate(x, y);
-  const p = snap ? { ts: snap.ts, price: snap.price } : _pixelToTsPrice(x, y);
-  const sym = (liveLast.data && liveLast.data.symbol) || $("#liveSymbol").value.trim().toUpperCase();
-  if (startedInLine && p) {
-    addUserLine(sym, {
-      a: { ts: trendAnchor.ts, price: trendAnchor.price },
-      b: { ts: p.ts, price: p.price },
-      color: "var(--gold)", t: Date.now(),
-    });
-    if (typeof toast === "function") toast("buy", "╱ Trend line saved", snap ? "endpoint snapped to a wick" : "");
-  }
-  trendDragging = false; trendPreview = null; trendAnchor = null;
-  suppressNextClick = true;  // the release will also fire a `click` — swallow it
-  const hint = $("#ltcHint");
-  if (hint) hint.textContent = "Click target price → then press & drag to draw the trend";
-  renderLiveTradeChart(liveLast.data, liveLast.kind);
-}
-
-function _onChartMove(evt) {
-  if (!liveLast.ok) return;
-  const { x, y, pxPerSvgX, pxPerSvgY } = _svgEventToChart(evt);
-  // Cache scale so snap distance can be enforced in real screen pixels.
-  if (liveLast.geom) { liveLast.geom.pxPerSvgX = pxPerSvgX; liveLast.geom.pxPerSvgY = pxPerSvgY; }
-  _drawCrosshair(x, y);
-
-  const svg = $("#liveTradeChart");
-
-  // Pan-drag beats every other hover behavior — track pixel delta, translate
-  // into full-tape bar units, and re-render on rAF.
-  if (panDrag && liveLast.geom) {
-    const rect = svg.getBoundingClientRect();
-    const dxPx = evt.clientX - panDrag.startClientX;
-    if (!panDrag.moved && Math.abs(dxPx) > DRAG_THRESHOLD_PX) {
-      panDrag.moved = true;
-      if (svg) svg.style.cursor = "grabbing";
-    }
-    if (panDrag.moved) {
-      const g = liveLast.geom;
-      // Bars-per-pixel has to be measured against the CANDLE AREA, not the whole
-      // SVG: the price ladder eats ~6% of the width, so dividing by rect.width
-      // made the tape lag the cursor — you'd drag an inch and the chart moved
-      // slightly less, which is what "it doesn't follow my hand" feels like.
-      const barsPerPx = _barsPerPx(g, rect.width);
-      const deltaBars = -Math.round(dxPx * barsPerPx);
-      const nAll = g.nAll || (g.fullOhlc || []).length;
-      const newStart = Math.max(0, Math.min(Math.max(0, nAll - g.viewCount), panDrag.startBar + deltaBars));
-      chartView = { start: newStart, count: g.viewCount, pinned: (newStart + g.viewCount) >= nAll, anchorTs: null };
-      _scheduleDragRedraw();
-    }
-    return;
-  }
-
-  // Cursor affordance: grab-hand when hovering an editable marker.
-  if (svg && !editState && !dragState) {
-    const hit = _hitTestMarker(x, y);
-    if (hit) svg.style.cursor = evt.altKey ? "not-allowed" : "grab";
-    else svg.style.cursor = ltcTool === "none" ? "grab" : "";
-  }
-
-  // Live-edit an existing marker/endpoint being dragged.
-  if (editState) {
-    const snap = altHeld ? null : _getSnapCandidate(x, y);
-    const p = snap ? { ts: snap.ts, price: snap.price } : _pixelToTsPrice(x, y);
-    editPreview = { ts: p.ts, price: p.price };
-    if (svg) svg.style.cursor = "grabbing";
-    _scheduleDragRedraw();
-    return;
-  }
-
-  // Trend-line drag detection: press-and-drag while trend anchor exists.
-  if (dragState && ltcTool === "line" && trendAnchor) {
-    const dx = x - dragState.startX, dy = y - dragState.startY;
-    if (!dragState.moved && (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)) {
-      dragState.moved = true;
-      trendDragging = true;
-      const a = _tsToXY(liveLast.geom, trendAnchor.ts, trendAnchor.price);
-      trendPreview = {
-        ax: a ? a.x : trendAnchor.x,
-        ay: liveLast.geom.Y(trendAnchor.price),
-        bx: x, by: y,
-      };
-    }
-    if (dragState.moved && trendPreview) {
-      // Snap the drag endpoint too, for precision line drawing.
-      const snap = altHeld ? null : _getSnapCandidate(x, y);
-      trendPreview.bx = snap ? snap.x : x;
-      trendPreview.by = snap ? snap.y : y;
-      _scheduleDragRedraw();
-    }
-  }
-}
-function _onChartLeave() { _clearCrosshair(); }
-
-/* ---- Pan + zoom: viewport ops ------------------------------------------
-   All coord math funnels through liveLast.geom, so pan/zoom just rewrites
-   chartView and triggers a redraw. `pinned` re-latches to true whenever the
-   right edge of the window touches the latest bar, so a user who zooms back
-   in to "now" gets auto-follow again for free. */
-
-function _panBars(deltaBars) {
-  const g = liveLast.geom;
-  if (!g) return;
-  const nAll = g.nAll || (g.fullOhlc || []).length;
-  const count = g.viewCount || g.n;
-  if (!nAll || !count) return;
-  const newStart = Math.max(0, Math.min(Math.max(0, nAll - count), g.viewStart + deltaBars));
-  // anchorTs null = "this start is authoritative"; render re-derives the anchor.
-  chartView = { start: newStart, count, pinned: (newStart + count) >= nAll, anchorTs: null };
-  renderLiveTradeChart(liveLast.data, liveLast.kind);
-}
-
-function _zoomAtBar(anchorBarFull, factor) {
-  const g = liveLast.geom;
-  if (!g) return;
-  const nAll = g.nAll || (g.fullOhlc || []).length;
-  if (!nAll) return;
-  const oldCount = g.viewCount || g.n;
-  const newCount = Math.max(MIN_VISIBLE_BARS, Math.min(nAll, Math.round(oldCount * factor)));
-  if (newCount === oldCount) return;
-  // Keep the bar under the cursor at the same fractional x position.
-  const relCursor = oldCount <= 1 ? 0.5 : (anchorBarFull - g.viewStart) / (oldCount - 1);
-  const newStart = Math.max(0, Math.min(Math.max(0, nAll - newCount),
-    Math.round(anchorBarFull - relCursor * (newCount - 1))));
-  chartView = { start: newStart, count: newCount, pinned: (newStart + newCount) >= nAll, anchorTs: null };
-  renderLiveTradeChart(liveLast.data, liveLast.kind);
-}
-
-function _onChartWheel(evt) {
-  if (!liveLast.ok || !liveLast.geom) return;
+function _claim(evt) {
+  evt.stopPropagation();
   evt.preventDefault();
-  const g = liveLast.geom;
-  const svg = $("#liveTradeChart");
-  const rect = svg.getBoundingClientRect();
-  // Convert the cursor to an SVG x, then to a bar through the shared slots, so
-  // wheel-zoom keeps the candle under the pointer pinned in place.
-  const svgX = ((evt.clientX - rect.left) / Math.max(1, rect.width)) * g.W;
-  const rawBar = g.slot ? g.slot.barAt(svgX)
-    : ((svgX - g.priceRect.x) / g.priceRect.w) * Math.max(0, g.n - 1);
-  const cursorBarInView = Math.max(0, Math.min(g.n - 1, Math.round(rawBar)));
-  _wheelAnchorBarFull = g.viewStart + cursorBarInView;
-  _wheelIsPan = evt.shiftKey || Math.abs(evt.deltaX) > Math.abs(evt.deltaY);
-  // Accumulate raw delta; a single rAF-scheduled callback drains it. Multiple
-  // wheel events between frames collapse into one gentle step.
-  _wheelAccum += _wheelIsPan
-    ? (evt.shiftKey ? evt.deltaY : evt.deltaX)
-    : evt.deltaY;
-  if (_wheelRaf) return;
-  _wheelRaf = requestAnimationFrame(_drainWheel);
+  pcSetInteractive(false);
 }
 
-function _drainWheel() {
-  _wheelRaf = 0;
-  const delta = _wheelAccum;
-  _wheelAccum = 0;
-  if (!liveLast.geom) return;
-  const g = liveLast.geom;
-  if (_wheelIsPan) {
-    const svg = $("#liveTradeChart");
-    const rect = svg.getBoundingClientRect();
-    // Same bars-per-pixel as drag-pan, so a trackpad swipe and a hand-drag of
-    // the same distance move the tape the same number of bars.
-    const step = Math.round(delta * _barsPerPx(g, rect.width) / 3);
-    if (step !== 0) _panBars(step);
+function _onPointerDown(evt) {
+  if (evt.button > 0 || !liveLast.ok) return;
+  const { x, y } = _localXY(evt);
+  if (!_inPane(x, y)) return;
+  const hit = _hitTest(x, y);
+  if (hit && evt.altKey) {
+    _deleteHit(hit);
+    gesture = { kind: "done", startX: x, startY: y, moved: false };
+  } else if (hit) {
+    gesture = { kind: "edit", hit, startX: x, startY: y, moved: false };
+    editPreview = { ts: hit.point.ts, price: hit.point.price };
+  } else if (ltcTool === "mark") {
+    gesture = { kind: "mark", startX: x, startY: y, moved: false };
+  } else if (ltcTool === "line") {
+    gesture = { kind: trendAnchor ? "trend" : "anchor", startX: x, startY: y, moved: false };
+  } else {
+    return;                      // nothing of ours under the pointer: let the chart pan
+  }
+  _claim(evt);
+}
+
+function _onPointerMove(evt) {
+  const el = $("#liveTradeChart");
+  if (!liveLast.ok || !el) return;
+  const { x, y } = _localXY(evt);
+  if (gesture) {
+    if (!gesture.moved && Math.hypot(x - gesture.startX, y - gesture.startY) > DRAG_THRESHOLD_PX) {
+      gesture.moved = true;
+    }
+    if (!gesture.moved) return;
+    const p = _pointFor(x, y);
+    hoverSnap = p && p.kind ? p : null;
+    if (gesture.kind === "edit" && p) {
+      editPreview = { ts: p.ts, price: p.price };
+      el.classList.add("is-grabbing");
+    } else if (gesture.kind === "trend" && trendAnchor) {
+      const i = pcIdxOfTs(trendAnchor.ts);
+      const a = i < 0 ? null : pcXY(i, trendAnchor.price);
+      if (a) trendPreview = { ax: a.x, ay: a.y, bx: p ? p.x : x, by: p ? p.y : y };
+    }
+    pcRedrawDrawings();
     return;
   }
-  // Gentle exponential zoom: 100 units of delta ≈ 4% zoom step. Multi-event
-  // trackpad bursts still add up smoothly instead of stair-stepping.
-  const factor = Math.exp(delta * 0.0004);
-  const clamped = Math.min(2.5, Math.max(0.4, factor));
-  _zoomAtBar(_wheelAnchorBarFull, clamped);
+  const over = _inPane(x, y) && evt.target && el.contains(evt.target);
+  const hit = over ? _hitTest(x, y) : null;
+  el.classList.toggle("is-grab", !!hit && !evt.altKey);
+  el.classList.toggle("is-delete", !!hit && evt.altKey);
+  const snap = over && ltcTool !== "none" && !altHeld ? pcSnap(x, y) : null;
+  if (snap !== hoverSnap && (snap || hoverSnap)) { hoverSnap = snap; pcRedrawDrawings(); }
 }
 
-function _onChartDblClick(evt) {
-  evt.preventDefault();
-  if (liveLast.ok && liveLast.data) { resetChartView(); renderLiveTradeChart(liveLast.data, liveLast.kind); }
+function _onPointerUp(evt) {
+  if (!gesture) return;
+  const g = gesture;
+  gesture = null;
+  pcSetInteractive(ltcTool === "none");
+  $("#liveTradeChart").classList.remove("is-grabbing");
+  const { x, y } = _localXY(evt);
+  const sym = _toolSym();
+  const p = _pointFor(x, y);
+  if (g.kind === "edit") {
+    if (g.moved && editPreview) {
+      _commitEdit(g.hit, editPreview);
+      if (typeof toast === "function") toast("buy", "Adjusted");
+    }
+    editPreview = null;
+  } else if (g.kind === "mark" && !g.moved && p) {
+    addUserMark(sym, { ts: p.ts, price: p.price, dir: $("#liveSide").value || "mark", t: Date.now() });
+    // toast() is (kind, title, body) — keep that order or the message becomes a CSS class.
+    if (typeof toast === "function") toast("buy", `◉ Marked @ ${fmtPrice(p.price)}`, p.kind ? `snapped to ${p.kind}` : "");
+  } else if ((g.kind === "anchor" || (g.kind === "trend" && !g.moved)) && p) {
+    trendAnchor = { ts: p.ts, price: p.price };
+    _setHint(`Target @ ${fmtPrice(p.price)}${p.kind ? " (" + p.kind + ")" : ""} — press & drag anywhere to draw the trend`);
+  } else if (g.kind === "trend" && g.moved && p && trendAnchor) {
+    addUserLine(sym, { a: { ...trendAnchor }, b: { ts: p.ts, price: p.price }, color: "var(--gold)", t: Date.now() });
+    if (typeof toast === "function") toast("buy", "╱ Trend line saved", p.kind ? "endpoint snapped to a wick" : "");
+    trendAnchor = null;
+    _setHint("Click the target price, then press & drag to draw the trend");
+  }
+  trendPreview = null;
+  hoverSnap = null;
+  _drawChanged();
 }
 
-function _toggleFullscreen() {
-  const card = $("#liveTradeCard");
-  if (!card) return;
-  const apply = () => {
-    const on = card.classList.toggle("is-fullscreen");
-    document.body.classList.toggle("mp-lock-scroll", on);
-    const btn = $("#ltcFullBtn");
-    if (btn) btn.textContent = on ? "⤢ Exit" : "⛶ Fullscreen";
-    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
-  };
-  // View Transitions API gives a butter-smooth cross-fade + size morph
-  // on Chromium; graceful fallback keeps other browsers working.
-  if (document.startViewTransition) document.startViewTransition(apply);
-  else apply();
+function _cancelGesture() {
+  if (!gesture && !trendAnchor) return false;
+  gesture = null; editPreview = null; trendPreview = null; trendAnchor = null; hoverSnap = null;
+  pcSetInteractive(ltcTool === "none");
+  const el = $("#liveTradeChart");
+  if (el) el.classList.remove("is-grabbing");
+  if (ltcTool === "line") _setHint("Click the target price, then press & drag to draw the trend");
+  pcRedrawDrawings();
+  return true;
 }
 
 /* Indicator controls — EMA on/off and periods, squeeze on/off, volume on/off.
@@ -457,10 +348,13 @@ function initIndicatorControls() {
   }
 
   if (reset) reset.addEventListener("click", () => {
-    chartInd = { ema: [14, 21, 57], showEma: true, showSqueeze: true, showVolume: true };
-    if (ema) ema.checked = true;
-    if (sqz) sqz.checked = true;
-    if (vol) vol.checked = true;
+    // Every default, overnight included — leaving showPrePost out used to keep
+    // the box ticked while the setting itself went undefined.
+    chartInd = { ...IND_DEFAULTS, ema: [...IND_DEFAULTS.ema] };
+    if (ema) ema.checked = chartInd.showEma;
+    if (sqz) sqz.checked = chartInd.showSqueeze;
+    if (vol) vol.checked = chartInd.showVolume;
+    if (pp) pp.checked = chartInd.showPrePost;
     if (periods) periods.value = chartInd.ema.join(",");
     _applyIndicatorSettings(true);
   });
@@ -493,72 +387,92 @@ function initReplayControls() {
   });
 }
 
+/* ---- toolbar, menu, keyboard ---------------------------------------------- */
+
+/* The indicator settings live in a drop-down so the chart gets the height. */
+function _setIndMenu(open) {
+  const btn = $("#ltcIndBtn"), menu = $("#ltcIndBar");
+  if (!btn || !menu) return;
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  btn.classList.toggle("is-active", open);
+}
+
+function _isTyping(e) {
+  const t = e.target;
+  const tag = (t && t.tagName) || "";
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || !!(t && t.isContentEditable);
+}
+
+function _chartOnScreen() {
+  const panel = $("#livePanel");
+  return !!panel && !panel.hidden;
+}
+
+function _onKeyDown(e) {
+  if (e.key === "Alt") altHeld = true;
+  if (e.key === "Escape") {
+    if (_cancelGesture()) return;
+    _setIndMenu(false);
+    return;
+  }
+  // Single-letter shortcuts must never fire while someone is typing a ticker —
+  // "AMLX" used to arm the mark tool and then the line tool on its way in.
+  if (_isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || !_chartOnScreen()) return;
+  if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
+  if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
+  // Replay: arrows step a candle, space plays/pauses. Only while replay is on,
+  // so these keys stay free for the page otherwise.
+  if (replay.on) {
+    if (e.key === "ArrowRight") { e.preventDefault(); replayStep(1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); replayStep(-1); }
+    if (e.key === " ") { e.preventDefault(); replayPlayPause(); }
+  }
+}
+
 function initLiveChartInteractions() {
-  const svg = $("#liveTradeChart");
-  if (!svg || svg.dataset.wired === "1") return;
-  svg.dataset.wired = "1";
-  svg.addEventListener("click", _onChartClick);
-  svg.addEventListener("mousedown", _onChartMouseDown);
-  svg.addEventListener("mousemove", _onChartMove);
-  svg.addEventListener("mouseleave", _onChartLeave);
-  // Mouseup on window (not just SVG) so a drag that releases outside the chart still commits.
-  window.addEventListener("mouseup", _onChartMouseUp);
-  svg.addEventListener("dblclick", _onChartDblClick);
-  // Wheel-to-zoom / shift-wheel-to-pan. passive:false so preventDefault
-  // suppresses the page's own scroll while the cursor is over the chart.
-  svg.addEventListener("wheel", _onChartWheel, { passive: false });
+  const el = $("#liveTradeChart");
+  if (!el || el.dataset.wired === "1") return;
+  el.dataset.wired = "1";
+  // Capture phase, so a gesture we own never reaches the chart's own pan.
+  el.addEventListener("pointerdown", _onPointerDown, true);
+  for (const type of ["mousedown", "touchstart"]) {
+    el.addEventListener(type, (e) => { if (gesture) e.stopPropagation(); }, { capture: true, passive: true });
+  }
+  window.addEventListener("pointermove", _onPointerMove);
+  window.addEventListener("pointerup", _onPointerUp);
+  window.addEventListener("pointercancel", _cancelGesture);
+  el.addEventListener("pointerleave", () => {
+    if (hoverSnap && !gesture) { hoverSnap = null; pcRedrawDrawings(); }
+  });
+
   document.querySelectorAll(".ltc-tool[data-tool]").forEach((b) =>
     b.addEventListener("click", () => _setTool(b.dataset.tool)));
-  const undo = $("#ltcUndo");
-  if (undo) undo.addEventListener("click", () => {
-    const sym = ($("#liveSymbol").value || "").trim().toUpperCase();
-    const what = popUserLast(sym);
-    if (what && liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
+  on("#ltcUndo", () => {
+    const what = popUserLast(_toolSym());
+    _drawChanged();
     if (typeof toast === "function") toast(what ? "buy" : "", what ? `Undid ${what}` : "Nothing to undo");
   });
-  const clr = $("#ltcClear");
-  if (clr) clr.addEventListener("click", () => {
-    const sym = ($("#liveSymbol").value || "").trim().toUpperCase();
+  on("#ltcClear", () => {
+    const sym = _toolSym();
     if (!confirm(`Clear all marks & trend lines for ${sym}?`)) return;
     clearUserAll(sym);
-    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+    _drawChanged();
   });
-  const full = $("#ltcFullBtn");
-  if (full) full.addEventListener("click", _toggleFullscreen);
-  const fit = $("#ltcFit");
-  if (fit) fit.addEventListener("click", () => {
-    resetChartView();
-    if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
+  on("#ltcFit", pcFitAll);
+  on("#ltcFullBtn", () => { if (typeof chartExpand === "function") chartExpand(); });
+  on("#ltcSymBtn", () => { if (typeof openPalette === "function") openPalette(); });
+  on("#ltcIndBtn", () => _setIndMenu($("#ltcIndBar").hidden));
+  document.addEventListener("pointerdown", (e) => {
+    const menu = $("#ltcIndBar");
+    if (menu && !menu.hidden && !e.target.closest("#ltcIndBar, #ltcIndBtn")) _setIndMenu(false);
   });
+
   initIndicatorControls();
   initReplayControls();
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Alt") { altHeld = true; }
-    if (e.key === "Escape") {
-      if (editState) { editState = null; editPreview = null; renderLiveTradeChart(liveLast.data, liveLast.kind); return; }
-      if (trendAnchor || trendDragging) {
-        trendAnchor = null; trendDragging = false; trendPreview = null;
-        if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
-        return;
-      }
-      if ($("#liveTradeCard").classList.contains("is-fullscreen")) _toggleFullscreen();
-    }
-    if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
-    if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
-    // Replay: arrows step a candle, space plays/pauses. Only while replay is on,
-    // so these keys stay free for the page otherwise.
-    if (replay.on) {
-      const tag = (e.target && e.target.tagName) || "";
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-      if (e.key === "ArrowRight") { e.preventDefault(); replayStep(1); }
-      if (e.key === "ArrowLeft") { e.preventDefault(); replayStep(-1); }
-      if (e.key === " ") { e.preventDefault(); replayPlayPause(); }
-    }
-  });
-  window.addEventListener("keyup", (e) => {
-    if (e.key === "Alt") { altHeld = false; }
-  });
+  window.addEventListener("keydown", _onKeyDown);
+  window.addEventListener("keyup", (e) => { if (e.key === "Alt") altHeld = false; });
   window.addEventListener("blur", () => { altHeld = false; });
   _setTool("none");
 }
-
