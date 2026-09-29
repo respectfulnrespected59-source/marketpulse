@@ -11,6 +11,13 @@ Curriculum: [CLASSES_CURRICULUM.md](CLASSES_CURRICULUM.md).
   Call on the live chart.
 - **Web app only in v1**: lesson content never ships in the downloadable zip.
 
+## Where lesson content lives (security review, 2026-09-29)
+This repo is **public** and Render deploys from it, so lesson sources, compiled lessons and audio can
+never be committed here (`classes/` is git-ignored; a test fails if anything under it is tracked).
+Owner decision: a **private GitHub repo** holds the content; the Render build pulls it into
+`classes/build/` with a read-only token kept in Render's environment. No token ⇒ the site still
+deploys, with an empty catalogue (fail closed, never fail the deploy).
+
 ## Architecture
 - Lessons compile to `classes/build/` (outside `static/`, which is public) and are served only by
   `/api/classes`, `/api/classes/lesson?id=`, `/api/classes/audio?id=&step=` after the license gate
@@ -40,3 +47,10 @@ Curriculum: [CLASSES_CURRICULUM.md](CLASSES_CURRICULUM.md).
    (confirm Gumroad offers license keys on memberships before launch).
 2. Add its product id to `MP_GUMROAD_PLANS` on the host: `{"<id>": {"tier": "classes", "billing": "monthly"}}`.
 3. Set `MP_CLASSES_URL` to the product page. Confirm `MP_LICENSE_SECRET` is set.
+4. Create a read-only GitHub token for the private lessons repo and paste it into Render's
+   environment (the owner types secrets; never committed).
+
+## Known limitation (pre-existing, app-wide)
+`grader.client_key` trusts forwarding headers, so the per-CLIENT limiter can be dodged or pointed at
+someone else. Paid content is protected by the license and the per-KEY limiter, which can't be spoofed.
+Fixing client identity behind Render's proxy is a separate change for every limiter at once.
