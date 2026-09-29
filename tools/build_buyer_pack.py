@@ -36,6 +36,7 @@ BASE = [
     "indicators.py",
     "config.py",
     "licensing.py",
+    "class_catalog.py",       # the catalogue reader only; lesson CONTENT never ships (see _safe)
     "daily_plays.py",
     # app.py imports these at module load — omitting one makes the unzipped
     # app die on startup. strategy.py is here rather than with the agent
@@ -158,6 +159,10 @@ FORBIDDEN_SUBSTRINGS = (".env", "/data/", "__pycache__", "HALT", ".pyc", ".licen
 def _safe(rel: str) -> bool:
     if rel == "agent/.env.example":      # the only .env-ish file that's allowed
         return True
+    # Paid lesson content (classes/src, classes/build, audio) is served by the
+    # hosted app behind the license gate and is never packed into a download.
+    if rel.replace("\\", "/").startswith("classes/"):
+        return False
     return not any(bad in rel for bad in FORBIDDEN_SUBSTRINGS)
 
 
