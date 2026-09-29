@@ -362,3 +362,44 @@ def test_a_spotlight_names_a_real_app_tool():
 def test_a_spotlight_must_be_a_known_tool_with_an_honest_label(bad):
     with pytest.raises(lc.LessonError):
         lc.compile_lesson(lesson([step(do=[bad])]), FLAT)
+
+
+# ------------------------------------------------------------------ the app's own DCA engine
+def test_wizard_numbers_are_the_dca_wizards_own():
+    # A lesson must quote what the DCA Wizard would show the student, costs included.
+    sys.path.insert(0, str(ROOT))
+    import dca
+    t = tape([100.0, 80.0, 60.0, 90.0, 120.0, 110.0] * 12)
+    w = lc.compute_vars({"w": {"fn": "wizard", "monthly": 100, "cadence": "weekly"}}, t)["w"]
+    dates = [str(x) for x in t["ts"]]
+    closes = [row[3] for row in t["ohlc"]]
+    per = dca.per_period_amount(100, "weekly")
+    plain = dca.simulate_dca(dates, closes, "crypto", per, "weekly", "plain")
+    tilt = dca.simulate_dca(dates, closes, "crypto", per, "weekly", "tilt")
+    lump = dca.simulate_lump(dates, closes, "crypto", plain["invested"])
+    assert w.plain_avg == pytest.approx(plain["avg_cost"]) and w.plain_ret == pytest.approx(plain["return_pct"])
+    assert w.tilt_ret == pytest.approx(tilt["return_pct"]) and w.lump_ret == pytest.approx(lump["return_pct"])
+    assert w.periods == plain["periods"] and w.tilt_helped == (tilt["return_pct"] > plain["return_pct"])
+
+
+def test_dca_at_is_the_running_average_at_that_bar():
+    t = tape([100.0, 50.0, 100.0, 50.0, 100.0])
+    at = lc.compute_vars({"a": {"fn": "dca_at", "every": 1, "start": 0, "bar": 1}}, t)["a"]
+    assert at.n == 2 and at.avg == pytest.approx(2 / (1 / 100 + 1 / 50)) and at.price == 50.0
+    assert at.gap_pct == pytest.approx((50.0 / at.avg - 1) * 100)
+
+
+def test_the_dca_tab_can_be_spotlighted():
+    out = lc.compile_lesson(lesson([step(do=[{"op": "spot", "tool": "dca_tab", "label": "Run your own plan"}])]), FLAT)
+    assert out["steps"][0]["do"][0]["tool"] == "dca_tab"
+
+
+def test_dca_at_says_when_and_how_far_below():
+    t = tape([100.0, 50.0])
+    at = lc.compute_vars({"a": {"fn": "dca_at", "every": 1, "start": 0, "bar": 1}}, t)["a"]
+    assert at.gap_abs == pytest.approx(-at.gap_pct) and at.date == lc._date(t["ts"][1])
+
+
+def test_speech_says_letters_and_index_names_the_caption_keeps():
+    assert lc.speech("The DCA class on the S&P 500.") == "The D C A class on the S and P five hundred."
+    assert lc.speech("DCAs") == "DCAs"            # whole word only

@@ -25,6 +25,7 @@ const LESSON_TOOL_SELECTORS = new Map(Object.entries({
   mark: '.ltc-tool[data-tool="mark"]', trend: '.ltc-tool[data-tool="line"]', undo: "#ltcUndo",
   clear: "#ltcClear", fit: "#ltcFit", fullscreen: "#ltcFullBtn", replay: "#rpToggle", play: "#rpPlay",
   step: "#rpFwd", speed: "#rpSpeed", dial: "#rpScrub", live: "#rpLive", calls: "#rpCall",
+  dca_tab: '.tab[data-view="dca"]',
 }));
 const LESSON_REPLAY_TOOLS = new Set(["replay", "play", "step", "speed", "dial", "live", "calls"]);
 
@@ -90,6 +91,17 @@ function _lessonSpotOff() {
   if (tag) tag.hidden = true;
 }
 
+/* After a spotlight scrolled down to a control, bring the chart back: its top must
+ * clear the sticky top bar, or the start of the story hides under it on a phone. */
+function _lessonChartIntoView() {
+  const chart = $("#liveTradeChart");
+  if (!chart) return;
+  const bar = document.querySelector(".topbar");
+  const clear = bar ? bar.getBoundingClientRect().bottom : 0;
+  const top = chart.getBoundingClientRect().top;
+  if (top < clear || top > innerHeight * 0.5) window.scrollBy({ top: top - clear - 8, behavior: _lessonScroll() });
+}
+
 /* Ring the real control a step is teaching, and say what it is. */
 function _lessonSpot(step) {
   _lessonSpotOff();
@@ -97,7 +109,8 @@ function _lessonSpot(step) {
   const card = $("#liveTradeCard");
   // The replay bar is hidden during lessons; show it only while a step teaches one of its controls.
   if (card) card.classList.toggle("lesson-spot-replay", !!(spot && LESSON_REPLAY_TOOLS.has(spot.tool)));
-  const sel = spot && LESSON_TOOL_SELECTORS.get(spot.tool);
+  if (!spot) { _lessonChartIntoView(); return; }
+  const sel = LESSON_TOOL_SELECTORS.get(spot.tool);
   const el = sel && document.querySelector(sel);
   if (!el || !el.getClientRects().length) return;         // hidden on this layout: don't ring thin air
   el.classList.add("lesson-spot");
