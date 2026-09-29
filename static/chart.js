@@ -510,8 +510,21 @@ function renderLiveTradeChart(d, kind) {
   // track the growing tape on EVERY render, or it sits at 0..0 and can't be
   // dragged at all. Runs after liveLast so the clock can read the cursor bar.
   _syncReplayUI();
-  if (!liveLast.ok) { _renderEmptyChart(kind); return; }
+  if (!liveLast.ok) {
+    _renderEmptyChart(kind);
+    _renderOptStrip("");
+    if (typeof optChartEnsureMarking === "function") optChartEnsureMarking(false);
+    return;
+  }
 
+  // Options paper positions on this symbol ride along: lines on the chart, stats
+  // under the price. Priced against the LIVE last close even while rewound —
+  // the position is open now, not at the cursor. A fault in the options layer
+  // must never cost the trader the candles, so it degrades to "no overlay".
+  let opt = { lines: [], html: "" };
+  if (typeof optChartFor === "function") {
+    try { opt = optChartFor(sym, kind, fullOhlc[nAll - 1][3]); } catch (e) { /* candles first */ }
+  }
   const drawn = typeof pcRender === "function" && pcRender({
     d, revealed, tf: liveTf,
     identity: `${kind}|${sym}|${liveTf}`,
@@ -523,12 +536,14 @@ function renderLiveTradeChart(d, kind) {
     showSqueeze: !!chartInd.showSqueeze,
     showVolume: !!chartInd.showVolume,
     entry: _chartEntryFor(sym),
+    optLines: opt.lines,
   });
   if (!drawn) {
     $("#ltcFoot").textContent = "The chart engine didn't load. Refresh the page; if it keeps "
       + "happening, the app files are out of date.";
     return;
   }
+  _renderOptStrip(opt.html);
   _renderHeaderPrice(fullOhlc, fullTs, revealed, kind);
   _renderReplayStatus(fullTs);
 }
@@ -571,6 +586,29 @@ function _renderEmptyChart(kind) {
   $("#ltcFoot").textContent = kind === "crypto"
     ? "No candles for this coin at this timeframe — try BTC, ETH, SOL…"
     : "No candles for this symbol at this timeframe — check the ticker.";
+}
+
+/* Options paper stats under the price. The markup comes from chart-options.js,
+ * which escapes every string and coerces every number before it gets here. */
+function _renderOptStrip(html) {
+  const box = $("#ltcOpt");
+  if (!box) return;
+  // The strip is an aria-live region: rewriting identical markup every poll
+  // would have a screen reader re-announce it every few seconds.
+  if (box.dataset.html === (html || "")) return;
+  box.dataset.html = html || "";
+  box.innerHTML = html || "";
+  box.hidden = !html;
+}
+
+/* A fresh mark landed (options-paper.js optBookTick): redraw the strip now
+ * rather than waiting up to a 1D/1W poll interval for the next chart render. */
+function refreshOptStrip() {
+  if (!liveLast.ok || !liveLast.data || typeof optChartFor !== "function") return;
+  const d = liveLast.data;
+  const n = Math.min((d.ohlc || []).length, (d.ts || []).length);
+  if (!n) return;
+  try { _renderOptStrip(optChartFor(d.symbol, liveLast.kind, d.ohlc[n - 1][3]).html); } catch (e) { /* keep last strip */ }
 }
 
 /* The pinned Live Tracker entry, when it is for the symbol on screen. */

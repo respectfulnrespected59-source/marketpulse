@@ -88,6 +88,22 @@
 .live-chart-card.is-rewound .ltc-price > b { color: var(--text-dim); }
 .live-chart-card.is-rewound .ltc-chg { opacity: 0.55; }
 
+/* Options paper positions on this symbol (chart-options.js): one row each,
+   under the price, so the P&L is read in the same glance as the candles. */
+.ltc-opt { display: grid; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--line, #2c2140); }
+.ltc-opt[hidden] { display: none; }
+.oc-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font: 600 12px/1.4 var(--mono); font-variant-numeric: tabular-nums;
+  padding: 4px 8px; border-left: 3px solid #a877e6; border-radius: 4px; background: rgba(168, 119, 230, 0.08);
+}
+.oc-row.win { border-left-color: var(--buy, #4ade80); }
+.oc-row.loss { border-left-color: var(--sell, #f87171); }
+.oc-row .oc-name { color: var(--text, #f3efe6); font-weight: 700; }
+.oc-row .muted { color: var(--text-dim, #a99fc0); font-weight: 500; }
+.oc-row b.up { color: var(--buy); }
+.oc-row b.down { color: var(--sell); }
+
 /* Row 2 — one toolbar. */
 .ltc-toolbar {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;

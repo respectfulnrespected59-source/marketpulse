@@ -167,6 +167,9 @@ async function optBookOpen() {
     optBookTick();
     // Keep the journal's snapshot current without anyone having to remember.
     optBookExport();
+    // Watch it where the price moves: the live chart draws the breakeven and
+    // strikes and shows the P&L strip (chart-options.js).
+    if (typeof openLiveFor === "function") openLiveFor("stock", pos.symbol);
   } catch (err) {
     if (out) out.innerHTML = `<div class="paper-validation bad">Couldn't reach the server.</div>`;
   }
@@ -221,6 +224,8 @@ async function optBookTick() {
     b.lastMark = Date.now();
     saveOptBook(b);
     renderOptBook();
+    // The live chart's strip reads the same book; show the new mark there now.
+    if (typeof refreshOptStrip === "function") refreshOptStrip();
   } catch (err) {
     // A network blip must not stop the book.
   } finally {
@@ -382,6 +387,7 @@ function renderOptBook() {
             <span>mark ${m.mark != null ? fmtPrice(m.mark) : "—"}</span>
             ${pnl}${pct}${theta}${dte}
             <span class="muted">risk ${optBookMoney(p.max_loss_usd)} · BE ${fmtPrice(p.breakeven)}</span>
+            <button type="button" class="ltc-tool ghost" data-optchart="${esc(p.symbol)}">Chart</button>
             <button type="button" class="ltc-tool ghost" data-optclose="${esc(p.id)}">Close</button>
           </div>`;
       }).join("")
@@ -389,6 +395,11 @@ function renderOptBook() {
 
   for (const btn of host.querySelectorAll("[data-optclose]")) {
     btn.addEventListener("click", () => optBookClose(btn.dataset.optclose));
+  }
+  for (const btn of host.querySelectorAll("[data-optchart]")) {
+    btn.addEventListener("click", () => {
+      if (typeof openLiveFor === "function") openLiveFor("stock", btn.dataset.optchart);
+    });
   }
 
   const closedBox = $("#optBookClosed");

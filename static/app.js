@@ -432,7 +432,11 @@ function setView(v) {
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
-  if (!isLive) { stopLivePoll(); stopChartPoll(); }  // don't poll while off the Live tab
+  if (!isLive) {
+    stopLivePoll(); stopChartPoll();  // don't poll while off the Live tab
+    // …including the options marks the chart was keeping fresh (chart-options.js).
+    if (typeof optChartEnsureMarking === "function") optChartEnsureMarking(false);
+  }
   if (!isTrade && window.mpDeskHide) window.mpDeskHide();  // the desk polls only while open
   if (isHome) { renderHome(); return; }
   if (isTrade) { if (window.mpDeskShow) window.mpDeskShow(); return; }
