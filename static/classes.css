@@ -79,3 +79,22 @@
  * A step that teaches one of them brings the bar back (.lesson-spot-replay). */
 #liveTradeCard.in-lesson:not(.lesson-spot-replay) #ltcReplayBar,   /* holds the dial AND the call buttons */
 #liveTradeCard.in-lesson #ltcFoot { display: none; }
+
+/* The chart's toolbar, the candles and the lesson bar must fit one screen: otherwise
+ * ringing a toolbar control pushes the caption and ▶ below the fold.
+ * 450px ≈ the sticky top bar + the card's header + toolbar + the lesson bar. */
+#liveTradeCard.in-lesson:not(:fullscreen) .ltc-chart-wrap {
+  height: clamp(260px, calc(100vh - 450px), 560px);
+  height: clamp(260px, calc(100svh - 450px), 560px);
+}
+@media (max-width: 720px) {
+  /* 560px ≈ the sticky top bar + the card's header rows + toolbar + a 3-line lesson bar. */
+  #liveTradeCard.in-lesson:not(:fullscreen) .ltc-chart-wrap {
+    height: clamp(220px, calc(100vh - 560px), 560px);
+    height: clamp(220px, calc(100svh - 560px), 560px);
+  }
+}
+/* Short screens (a phone on its side): the candles give up height first. */
+@media (max-height: 560px) {
+  #liveTradeCard.in-lesson:not(:fullscreen) .ltc-chart-wrap { height: clamp(140px, calc(100svh - 300px), 560px); }
+}

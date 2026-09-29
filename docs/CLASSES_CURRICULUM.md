@@ -35,7 +35,11 @@ The class every other class leans on. Short lessons, each ending with the studen
 4. **Drawing.** Mark (M), trend line (L), snap to the wick vs Alt for free placement, undo, clear;
    Fit, zoom, and full screen for a comfortable view on a phone or a laptop.
 5. **Practice without risk.** Replay the dial, speed, step a candle; make a Call and read your
-   record; paper trades and alerts so you watch the plan instead of the screen.
+   record on the Coach tab; paper-trade your rules on real prices. (Price alerts left out: they
+   are a Pro feature, and this class is free.)
+
+*Built 2026-09-29: five free lessons on the SPY daily tape; every spotlight is checked on
+screen at phone and laptop size (walk: ring visible, ▶ visible).*
 
 ---
 

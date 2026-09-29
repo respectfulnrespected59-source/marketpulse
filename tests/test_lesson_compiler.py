@@ -403,3 +403,20 @@ def test_dca_at_says_when_and_how_far_below():
 def test_speech_says_letters_and_index_names_the_caption_keeps():
     assert lc.speech("The DCA class on the S&P 500.") == "The D C A class on the S and P five hundred."
     assert lc.speech("DCAs") == "DCAs"            # whole word only
+
+
+def test_speech_spells_the_chart_acronyms():
+    assert lc.speech("SPY with the EMA and the TTM squeeze.") == "S P Y with the E M A and the T T M squeeze."
+    assert lc.speech("SPYX EMAs TTMs") == "SPYX EMAs TTMs"   # whole word only
+
+
+def test_every_spotlight_tool_has_a_control_to_ring():
+    """A tool the compiler accepts but the player can't find rings thin air: the
+    step plays, the student hears "tap here", and nothing is highlighted."""
+    import re
+    player = (ROOT / "static" / "lesson-player.js").read_text(encoding="utf-8")
+    block = re.search(r"LESSON_TOOL_SELECTORS = new Map\(Object\.entries\(\{(.*?)\}\)\);", player, re.S)
+    assert block, "LESSON_TOOL_SELECTORS not found in lesson-player.js"
+    keys = set(re.findall(r"([a-z_]+):\s*['\"]", block.group(1)))
+    assert lc.TOOLS - keys == set(), f"tools with no selector: {sorted(lc.TOOLS - keys)}"
+    assert keys - lc.TOOLS == set(), f"selectors the compiler would refuse: {sorted(keys - lc.TOOLS)}"
