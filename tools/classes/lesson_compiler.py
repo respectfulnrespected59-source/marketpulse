@@ -49,7 +49,8 @@ MAX_TEXT = 120                        # titles and labels (class_catalog caps ti
 # App controls a lesson may spotlight. Names, not selectors: the player owns the
 # mapping to the page (static/lesson-player.js LESSON_TOOL_SELECTORS).
 TOOLS = frozenset({"search", "timeframes", "indicators", "prepost", "mark", "trend", "undo", "clear",
-                   "fit", "fullscreen", "replay", "play", "step", "speed", "dial", "live", "calls"})
+                   "fit", "fullscreen", "replay", "play", "step", "speed", "dial", "live", "calls",
+                   "dca_tab"})
 VOICE_VERSION = "kokoro-v1"           # default voice key; build.py passes the real one
 
 HONESTY = (
@@ -66,7 +67,9 @@ HONESTY = (
 )
 APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'"})
 # What the voice should SAY differently from what the caption shows.
-SPEECH_FIXES = ((re.compile(r"\bbreakeven\b", re.I), "break even"),)
+SPEECH_FIXES = ((re.compile(r"\bbreakeven\b", re.I), "break even"),
+                (re.compile(r"\bDCA\b"), "D C A"),
+                (re.compile(r"S&P 500"), "S and P five hundred"))
 
 Bake = Callable[[str, str], "tuple[bytes, int]"]   # (speech text, who) -> (mp3 bytes, duration ms)
 
@@ -123,7 +126,55 @@ def _breakeven(spec: dict, _tape: dict) -> SimpleNamespace:
     return SimpleNamespace(value=round(value, 4), strike=strike, premium=premium, right=right)
 
 
-VAR_FNS = {"dca": _dca, "breakeven": _breakeven}
+def _dca_at(spec: dict, tape: dict) -> SimpleNamespace:
+    """The plan as it stood on `bar`: buys so far, their average cost, and how far
+    price sat from it (negative = below your line)."""
+    bar = _bar(tape, spec.get("bar"), " in dca_at")
+    plan = _dca({"every": spec.get("every"), "start": spec.get("start", 0)}, tape)
+    buys = [b["price"] for b in plan.buys if b["bar"] <= bar]
+    if not buys:
+        raise LessonError(f"dca_at: no buys yet at bar {bar}")
+    avg = len(buys) / sum(1 / p for p in buys)
+    price = _close(tape, bar)
+    gap = (price / avg - 1) * 100
+    return SimpleNamespace(n=len(buys), avg=avg, price=price, gap_pct=gap, gap_abs=abs(gap),
+                           date=_date(tape["ts"][bar]))
+
+
+WIZARD_CADENCES = ("weekly", "biweekly", "monthly")
+
+
+def _wizard(spec: dict, tape: dict) -> SimpleNamespace:
+    """What the app's DCA Wizard would show for this tape: plain DCA, signal-tilt
+    DCA and lump sum, through dca.py itself (same cost model), so a lesson never
+    quotes a number the student can't reproduce in the app."""
+    import sys
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import dca
+    monthly, cadence = spec.get("monthly"), spec.get("cadence", "monthly")
+    if not isinstance(monthly, (int, float)) or isinstance(monthly, bool) or monthly <= 0:
+        raise LessonError("wizard needs a positive monthly amount")
+    if cadence not in WIZARD_CADENCES:
+        raise LessonError(f"wizard cadence must be one of {WIZARD_CADENCES}")
+    kind = "crypto" if tape.get("kind") == "crypto" else "stock"
+    dates = [str(t) for t in tape["ts"]]
+    closes = [float(row[3]) for row in tape["ohlc"]]
+    per = dca.per_period_amount(monthly, cadence)
+    plain = dca.simulate_dca(dates, closes, kind, per, cadence, "plain")
+    tilt = dca.simulate_dca(dates, closes, kind, per, cadence, "tilt")
+    lump = dca.simulate_lump(dates, closes, kind, plain["invested"])
+    return SimpleNamespace(
+        per_period=per, periods=plain["periods"], invested=plain["invested"],
+        plain_avg=plain["avg_cost"], plain_ret=plain["return_pct"], plain_value=plain["final_value"],
+        tilt_avg=tilt["avg_cost"], tilt_ret=tilt["return_pct"], tilt_value=tilt["final_value"],
+        tilt_invested=tilt["invested"], lump_price=lump["avg_cost"], lump_ret=lump["return_pct"],
+        lump_value=lump["final_value"], tilt_helped=tilt["return_pct"] > plain["return_pct"],
+        lump_won=lump["return_pct"] > plain["return_pct"])
+
+
+VAR_FNS = {"dca": _dca, "breakeven": _breakeven, "dca_at": _dca_at, "wizard": _wizard}
 
 
 def _date(ts: int) -> str:
