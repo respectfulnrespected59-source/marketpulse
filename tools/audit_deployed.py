@@ -207,6 +207,13 @@ def audit_classes_gate(host: str, get=None) -> list[str]:
         return ["/api/classes did not return a catalogue"]
     problems = [f"catalogue marks {lid} FREE but the plan says it is paid"
                 for lid, free in ids if free and _should_be_paid(lid)]
+    # Lessons have been published since 2026-09-29, so an empty catalogue means the
+    # deploy-time pull failed (expired MP_CLASSES_TOKEN, renamed repo) and the site
+    # is quietly selling a pass with nothing behind it.
+    print(f"  {'OK   ' if ids else 'DRIFT'}  live catalogue lists {len(ids)} lesson(s) (expected 1+)")
+    if not ids:
+        problems.append("the live catalogue has NO lessons: the private lesson pull failed "
+                        "(check MP_CLASSES_TOKEN on Render; it expires 2027-09-29)")
     raw, _ = get(f"{host}/classes/build/catalog.json", None)
     print(f"  {'OK   ' if raw == 404 else 'DRIFT'}  /classes/build/catalog.json -> {raw} (expected 404)")
     if raw != 404:

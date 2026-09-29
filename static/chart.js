@@ -577,8 +577,10 @@ function _renderChartLabels(sym, kind) {
   const grainMap = TF_GRAIN[kind === "crypto" ? "crypto" : "stock"];
   $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + (grainMap[liveTf] || "");
   renderTfButtons(kind);
-  _renderSqueezeChip(liveOverlay);
-  _renderEmaLegend(liveOverlay);
+  // A lesson's tape has no live indicators: the live symbol's squeeze/EMA chips would
+  // describe a different chart (e.g. "TTM 5m" over a daily lesson).
+  _renderSqueezeChip(lessonView ? null : liveOverlay);
+  _renderEmaLegend(lessonView ? null : liveOverlay);
   // Resolve any live forward calls the tape has now caught up with. Runs on
   // every refresh so a call made this morning settles itself without anyone
   // having to remember it — a record that depends on being remembered ends up
