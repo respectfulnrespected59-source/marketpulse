@@ -49,8 +49,9 @@ function pcEnsure() {
   const candles = chart.addSeries(LW.CandlestickSeries, {
     ...pcCandleOptions(LW, colors),
     // Replay pins the ladder to the whole session so it doesn't lurch per step.
+    // Live, the ladder stretches to keep a held option's breakeven in view.
     autoscaleInfoProvider: (base) => (pcFixed
-      ? { priceRange: { minValue: pcFixed.min, maxValue: pcFixed.max } } : base()),
+      ? { priceRange: { minValue: pcFixed.min, maxValue: pcFixed.max } } : _pcWithOptRange(base())),
   }, 0);
   const volume = pcAddVolume(chart, LW, {
     autoscaleInfoProvider: (base) => (pcFixed && pcFixed.volMax
@@ -174,6 +175,42 @@ function _pcSetEntry(entry) {
                  lineStyle: pc.LW.LineStyle.Dashed, axisLabelVisible: true, title: "ENTRY" };
   if (pc.entryLine) pc.entryLine.applyOptions(opts);
   else pc.entryLine = pc.candles.createPriceLine(opts);
+}
+
+const PC_OPT_NEAR = 0.10;
+
+function _pcWithOptRange(r) {
+  if (!r || !r.priceRange || !pc || !pc.optRange) return r;
+  return { ...r, priceRange: {
+    minValue: Math.min(r.priceRange.minValue, pc.optRange.min),
+    maxValue: Math.max(r.priceRange.maxValue, pc.optRange.max),
+  } };
+}
+
+/* Options paper positions on this symbol: breakeven (violet, dashed) and each
+ * strike (muted, dotted). Rebuilt only when the set of lines changes, so a poll
+ * that brings the same book does not flicker the axis labels. */
+function _pcSetOptLines(lines) {
+  const want = (lines || []).filter((l) => l && isFinite(l.price));
+  // Stretch the ladder only for lines near the price: a strike 30% away would
+  // squash the candles flat to show a line nobody is trading against today.
+  const last = pcTape.revealed ? pcTape.ohlc[pcTape.revealed - 1][3] : null;
+  const near = last ? want.filter((l) => Math.abs(l.price - last) / last <= PC_OPT_NEAR) : [];
+  pc.optRange = near.length
+    ? { min: Math.min(...near.map((l) => Number(l.price))), max: Math.max(...near.map((l) => Number(l.price))) }
+    : null;
+  const key = JSON.stringify(want.map((l) => [l.price, l.kind, l.title]));
+  if (key === pc.optKey) return;
+  for (const pl of pc.optLines || []) pc.candles.removePriceLine(pl);
+  pc.optLines = want.map((l) => pc.candles.createPriceLine({
+    price: Number(l.price),
+    color: l.kind === "be" ? "#a877e6" : "rgba(169, 159, 192, 0.7)",
+    lineWidth: l.kind === "be" ? 2 : 1,
+    lineStyle: l.kind === "be" ? pc.LW.LineStyle.Dashed : pc.LW.LineStyle.Dotted,
+    axisLabelVisible: true,
+    title: String(l.title || ""),
+  }));
+  pc.optKey = key;
 }
 
 /* ---- viewport ----------------------------------------------------------- */
@@ -309,6 +346,7 @@ function pcRender(m) {
   _pcSetBands(sq, m.showSqueeze, lastTs);
   _pcSetMomentum(sq, m.showSqueeze, lastTs);
   _pcSetEntry(m.entry);
+  _pcSetOptLines(m.optLines);
 
   _pcApplyView(prev, m.replay);
   pcRedrawDrawings();
@@ -324,6 +362,7 @@ function pcClear() {
   _pcSetBands(null, false, 0);
   _pcSetMomentum(null, false, 0);
   _pcSetEntry(null);
+  _pcSetOptLines([]);
   pcTape = { ...pcTape, key: null, n: 0, revealed: 0, times: [], ts: [], ohlc: [], vol: [] };
   pcRenderLegend();
 }

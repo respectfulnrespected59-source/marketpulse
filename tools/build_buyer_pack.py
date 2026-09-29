@@ -82,6 +82,7 @@ BASE = [
     # loads it unconditionally, so a Pro-only placement would 404 the free
     # build. The feature gate is server-side — /api/options/* returns 402.
     "static/options-paper.js",
+    "static/chart-options.js",
     "static/quickfill.js",
     "static/vendor/big.min.js",
     # TradingView Lightweight Charts (Apache-2.0). Redistributing it means the

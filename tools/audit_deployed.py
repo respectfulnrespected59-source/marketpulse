@@ -39,7 +39,7 @@ WATCHED = [
     "landing.html", "landing/landing.js", "landing/landing.css", "brand.css",
     "license.js", "desk.js",
     # The Lightweight Charts engine, the /chart page and quick search (09-27).
-    "chart.css", "chart-draw.js", "chart-engine.js", "chart-page.js", "palette.js",
+    "chart.css", "chart-draw.js", "chart-engine.js", "chart-options.js", "chart-page.js", "palette.js",
     "vendor/lightweight-charts.standalone.production.js",
     # The landing's live chart, the shared chart theme and the Market Map (09-27).
     "chart-theme.js", "landing/hero-chart.js", "market-map.js", "market-map.css",
