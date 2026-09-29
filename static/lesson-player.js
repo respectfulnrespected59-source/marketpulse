@@ -25,7 +25,7 @@ const LESSON_TOOL_SELECTORS = new Map(Object.entries({
   mark: '.ltc-tool[data-tool="mark"]', trend: '.ltc-tool[data-tool="line"]', undo: "#ltcUndo",
   clear: "#ltcClear", fit: "#ltcFit", fullscreen: "#ltcFullBtn", replay: "#rpToggle", play: "#rpPlay",
   step: "#rpFwd", speed: "#rpSpeed", dial: "#rpScrub", live: "#rpLive", calls: "#rpCall",
-  dca_tab: '.tab[data-view="dca"]',
+  dca_tab: '.tab[data-view="dca"]', coach_tab: '.tab[data-view="coach"]', paper_tab: '.tab[data-view="paper"]',
 }));
 const LESSON_REPLAY_TOOLS = new Set(["replay", "play", "step", "speed", "dial", "live", "calls"]);
 
@@ -85,21 +85,53 @@ function _lessonRenderAt(idx) {
   renderLiveTradeChart(d, d.kind);
 }
 
+let lessonSpotSeq = 0;           // bumps whenever a ring comes off, so a queued scroll knows it's stale
+
 function _lessonSpotOff() {
+  lessonSpotSeq++;
   document.querySelectorAll(".lesson-spot").forEach((el) => el.classList.remove("lesson-spot"));
   const tag = $("#lessonSpotTag");
   if (tag) tag.hidden = true;
 }
 
-/* After a spotlight scrolled down to a control, bring the chart back: its top must
- * clear the sticky top bar, or the start of the story hides under it on a phone. */
-function _lessonChartIntoView() {
-  const chart = $("#liveTradeChart");
-  if (!chart) return;
+/* Scroll so `el` clears the sticky top bar and, as far as that allows, everything that
+ * must show under it (el itself, and the lesson bar's caption and ▶) sits above the
+ * bottom edge. Scrolling down never lifts el's top back under the bar. */
+function _lessonFrame(el, pad) {
   const bar = document.querySelector(".topbar");
   const clear = bar ? bar.getBoundingClientRect().bottom : 0;
-  const top = chart.getBoundingClientRect().top;
-  if (top < clear || top > innerHeight * 0.5) window.scrollBy({ top: top - clear - 8, behavior: _lessonScroll() });
+  const box = el.getBoundingClientRect();
+  const lesson = $("#lessonBar");
+  const low = Math.max(box.bottom, lesson && !lesson.hidden ? lesson.getBoundingClientRect().bottom : 0);
+  const up = box.top - clear - pad;
+  const down = Math.min(low - innerHeight + pad, up);
+  if (up < 0) window.scrollBy({ top: up, behavior: _lessonScroll() });
+  else if (down > 0) window.scrollBy({ top: down, behavior: _lessonScroll() });
+}
+
+/* A step with no spotlight frames the chart: its top clear of the sticky top bar (or
+ * the start of the story hides under it on a phone), the caption and ▶ below it. */
+function _lessonChartIntoView() {
+  const chart = $("#liveTradeChart");
+  if (chart) _lessonFrame(chart, 8);
+}
+
+/* Bring a ringed control on screen. scrollIntoView alone parks a control at the
+ * very top of the viewport, under the sticky top bar, so the student hears "tap
+ * the symbol" with the ring hidden. Tabs live IN that bar: those only need the
+ * tab strip scrolled sideways. */
+function _lessonSpotIntoView(el) {
+  const bar = document.querySelector(".topbar");
+  if (bar && bar.contains(el)) {
+    el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: _lessonScroll() });
+    return;
+  }
+  // Measure a frame later: showing the replay bar and resizing the chart settle the
+  // layout after this step's DOM changes, and a stale measure scrolls short.
+  const seq = lessonSpotSeq;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (seq === lessonSpotSeq) _lessonFrame(el, 16);      // else the step already moved on
+  }));
 }
 
 /* Ring the real control a step is teaching, and say what it is. */
@@ -114,7 +146,7 @@ function _lessonSpot(step) {
   const el = sel && document.querySelector(sel);
   if (!el || !el.getClientRects().length) return;         // hidden on this layout: don't ring thin air
   el.classList.add("lesson-spot");
-  el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: _lessonScroll() });
+  _lessonSpotIntoView(el);
   const tag = $("#lessonSpotTag");
   if (tag && spot.label) { tag.textContent = spot.label; tag.hidden = false; }
 }
@@ -283,7 +315,14 @@ function _lessonBegin(id, lesson, urls) {
   if (typeof pcLessonSpacing === "function") pcLessonSpacing(true);   // the whole year fits a phone
   resetChartView();                                    // frame the lesson fresh, never a stale view
   const card = $("#liveTradeCard");
-  if (card) { card.classList.add("in-lesson"); card.scrollIntoView({ block: "start", behavior: _lessonScroll() }); }
+  if (card) {
+    card.classList.add("in-lesson");
+    // Put the whole card on screen, clear of the sticky top bar. Instant, not smooth:
+    // step 1 may scroll to its own spotlight next, and two smooth scrolls fight.
+    const bar = document.querySelector(".topbar");
+    const clear = bar ? bar.getBoundingClientRect().bottom : 0;
+    window.scrollBy({ top: card.getBoundingClientRect().top - clear - 8, behavior: "instant" });
+  }
   lessonGo(0, false);                                   // ready on step 1; the ▶ tap starts the voice
   const play = $("#lessonPlay");
   if (play) play.focus({ preventScroll: true });

@@ -50,7 +50,7 @@ MAX_TEXT = 120                        # titles and labels (class_catalog caps ti
 # mapping to the page (static/lesson-player.js LESSON_TOOL_SELECTORS).
 TOOLS = frozenset({"search", "timeframes", "indicators", "prepost", "mark", "trend", "undo", "clear",
                    "fit", "fullscreen", "replay", "play", "step", "speed", "dial", "live", "calls",
-                   "dca_tab"})
+                   "dca_tab", "coach_tab", "paper_tab"})
 VOICE_VERSION = "kokoro-v1"           # default voice key; build.py passes the real one
 
 HONESTY = (
@@ -69,7 +69,10 @@ APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'"})
 # What the voice should SAY differently from what the caption shows.
 SPEECH_FIXES = ((re.compile(r"\bbreakeven\b", re.I), "break even"),
                 (re.compile(r"\bDCA\b"), "D C A"),
-                (re.compile(r"S&P 500"), "S and P five hundred"))
+                (re.compile(r"S&P 500"), "S and P five hundred"),
+                (re.compile(r"\bSPY\b"), "S P Y"),
+                (re.compile(r"\bEMA\b"), "E M A"),
+                (re.compile(r"\bTTM\b"), "T T M"))
 
 Bake = Callable[[str, str], "tuple[bytes, int]"]   # (speech text, who) -> (mp3 bytes, duration ms)
 
