@@ -67,6 +67,7 @@ function pcEnsure() {
   });
   chart.subscribeDblClick(() => { pcWantReset = true; pcApplyDefaultView(); });
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => { pcPendingRange = null; });
+  if (pcLessonTight) pcLessonSpacing(true);   // a lesson can start before the first chart exists
   return pc;
 }
 
@@ -204,9 +205,11 @@ function _pcSetOptLines(lines) {
   for (const pl of pc.optLines || []) pc.candles.removePriceLine(pl);
   pc.optLines = want.map((l) => pc.candles.createPriceLine({
     price: Number(l.price),
-    color: l.kind === "be" ? "#a877e6" : "rgba(169, 159, 192, 0.7)",
-    lineWidth: l.kind === "be" ? 2 : 1,
-    lineStyle: l.kind === "be" ? pc.LW.LineStyle.Dashed : pc.LW.LineStyle.Dotted,
+    // be = options breakeven (violet dash); level = a lesson's gold rule; else strikes (dotted).
+    color: l.kind === "be" ? "#a877e6" : l.kind === "level" ? "#e8c25a" : "rgba(169, 159, 192, 0.7)",
+    lineWidth: l.kind === "be" || l.kind === "level" ? 2 : 1,
+    lineStyle: l.kind === "be" ? pc.LW.LineStyle.Dashed
+      : l.kind === "level" ? pc.LW.LineStyle.Solid : pc.LW.LineStyle.Dotted,
     axisLabelVisible: true,
     title: String(l.title || ""),
   }));
@@ -241,6 +244,18 @@ function pcApplyDefaultView() {
   const to = pcTape.revealed - 1 + PC_RIGHT_PAD;
   _pcSetRange({ from: to - PC_RIGHT_PAD - count + 0.5, to });
   pcWantReset = false;
+}
+
+/* A lesson frames a whole year even on a phone: 350 daily candles at the theme's
+ * 1px minimum (chart-theme.js timeScale.minBarSpacing) overflow a ~260px plot and
+ * cut off the months the narration is talking about. Lessons pack tighter while
+ * they run; null puts the everyday limit back. */
+const PC_LESSON_MIN_BAR = 0.5;
+const PC_DEFAULT_MIN_BAR = 1;
+let pcLessonTight = false;
+function pcLessonSpacing(on) {
+  pcLessonTight = !!on;
+  if (pc) pc.chart.timeScale().applyOptions({ minBarSpacing: on ? PC_LESSON_MIN_BAR : PC_DEFAULT_MIN_BAR });
 }
 
 function pcFitAll() {

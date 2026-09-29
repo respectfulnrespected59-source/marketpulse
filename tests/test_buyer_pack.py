@@ -99,3 +99,12 @@ class TestEditionSeparation:
     def test_risk_disclosure_ships_in_both_editions(self):
         # Shipping a trading tool without its disclosures is not an option.
         assert "DISCLAIMER.md" in build_buyer_pack.BASE
+
+    def test_paid_lesson_content_never_ships(self):
+        # Classes are sold as a pass and served behind the license gate; a lesson
+        # in the zip would be a free copy of the product.
+        assert not [rel for rel in ALL_SHIPPED if rel.replace("\\", "/").startswith("classes/")]
+        for rel in ("classes/build/dca-02.json", "classes/build/audio/abcdef012345.mp3",
+                    "classes/src/dca/02.json", "classes\\build\\catalog.json"):
+            assert build_buyer_pack._safe(rel) is False, rel
+        assert build_buyer_pack._safe("class_catalog.py") is True     # the reader ships; it holds no content

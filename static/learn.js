@@ -231,6 +231,9 @@ function learnSettle(data, idx, dir, horizon, kind) {
 /* Record a Call at the dial's current bar. Returns the settled record, or an
  * {error} the UI can show — never throws into the chart. */
 function learnRecordCall(dir, conf) {
+  if (typeof lessonView !== "undefined" && lessonView) {
+    return { error: "Finish or exit the lesson first: a call on a lesson's frozen chart isn't scored." };
+  }
   if (!["up", "down", "stand"].includes(dir)) return { error: "bad direction" };
   const d = liveLast && liveLast.data;
   if (!d || !d.ohlc || !d.ohlc.length) return { error: "no chart loaded" };
@@ -297,6 +300,9 @@ function learnPendingList() {
 
 /* Record a call on the CURRENT live bar. No outcome yet — that is the point. */
 function learnRecordLiveCall(dir, conf) {
+  if (typeof lessonView !== "undefined" && lessonView) {
+    return { error: "Finish or exit the lesson first: a call on a lesson's frozen chart isn't scored." };
+  }
   if (!["up", "down", "stand"].includes(dir)) return { error: "bad direction" };
   const d = liveLast && liveLast.data;
   if (!d || !d.ohlc || !d.ohlc.length) return { error: "no chart loaded" };

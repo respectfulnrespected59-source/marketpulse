@@ -37,6 +37,8 @@ function _toolSym() {
 /* What the drawing layer (chart-draw.js) paints, with any drag in progress
  * applied — the stored point only changes when the drag is released. */
 function pcDrawSource() {
+  // During a lesson the chart shows the lesson's drawings; the user's are hidden, never touched.
+  if (lessonView) return { marks: lessonView.marks, lines: lessonView.lines, anchor: null, preview: null, snap: null };
   const sym = liveLast.data && liveLast.data.symbol;
   if (!sym) return null;
   if (_drawCache.sym !== sym) _drawCache = { sym, marks: getUserMarks(sym), lines: getUserLines(sym) };
@@ -79,6 +81,7 @@ function _pointFor(x, y) {
 /* An existing mark or trend-line end under the pointer — grabbable from ANY
  * tool, so a point can be retouched without switching modes. */
 function _hitTest(x, y) {
+  if (lessonView) return null;             // nothing to grab (or Alt-delete) in a lesson
   const sym = liveLast.data && liveLast.data.symbol;
   if (!sym) return null;
   const at = (p) => { const i = pcIdxOfTs(p && p.ts); return i < 0 ? null : pcXY(i, p.price); };
@@ -164,6 +167,7 @@ function _claim(evt) {
 }
 
 function _onPointerDown(evt) {
+  if (lessonView) return;                  // lessons are read-only; the chart still pans
   if (evt.button > 0 || !liveLast.ok) return;
   const { x, y } = _localXY(evt);
   if (!_inPane(x, y)) return;
@@ -418,7 +422,7 @@ function _onKeyDown(e) {
   }
   // Single-letter shortcuts must never fire while someone is typing a ticker —
   // "AMLX" used to arm the mark tool and then the line tool on its way in.
-  if (_isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || !_chartOnScreen()) return;
+  if (_isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || !_chartOnScreen() || lessonView) return;
   if (e.key === "m" || e.key === "M") _setTool(ltcTool === "mark" ? "none" : "mark");
   if (e.key === "l" || e.key === "L") _setTool(ltcTool === "line" ? "none" : "line");
   // Replay: arrows step a candle, space plays/pauses. Only while replay is on,
@@ -450,11 +454,13 @@ function initLiveChartInteractions() {
     b.addEventListener("click", () => _setTool(b.dataset.tool)));
   const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
   on("#ltcUndo", () => {
+    if (lessonView) return;
     const what = popUserLast(_toolSym());
     _drawChanged();
     if (typeof toast === "function") toast(what ? "buy" : "", what ? `Undid ${what}` : "Nothing to undo");
   });
   on("#ltcClear", () => {
+    if (lessonView) return;
     const sym = _toolSym();
     if (!confirm(`Clear all marks & trend lines for ${sym}?`)) return;
     clearUserAll(sym);

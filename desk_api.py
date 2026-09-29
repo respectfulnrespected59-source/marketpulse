@@ -40,6 +40,7 @@ import agent_config as config
 import broker
 import credentials
 import desk
+import licensing
 import pilot
 import store
 
@@ -153,7 +154,8 @@ def live_permission(headers, license_check, now: float | None = None) -> tuple[b
             ent = license_check(headers)
         except Exception as exc:  # noqa: BLE001 — a licensing hiccup means "not proven", never "allowed"
             print(f"[desk] license check failed: {type(exc).__name__}", file=sys.stderr)
-    if ent is not None and getattr(ent, "active", False) and getattr(ent, "tier", "") in ("pro", "proplus"):
+    # By name, never "any active license": a Classes pass must not unlock live trading.
+    if ent is not None and licensing.grants_pro(ent):
         _GRANT["until"] = now + GRANT_S
         return True, "MarketPulse Pro"
     return False, LIVE_NEEDS

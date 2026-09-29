@@ -36,6 +36,7 @@ BASE = [
     "indicators.py",
     "config.py",
     "licensing.py",
+    "class_catalog.py",       # the catalogue reader only; lesson CONTENT never ships (see _safe)
     "daily_plays.py",
     # app.py imports these at module load — omitting one makes the unzipped
     # app die on startup. strategy.py is here rather than with the agent
@@ -83,6 +84,11 @@ BASE = [
     # build. The feature gate is server-side — /api/options/* returns 402.
     "static/options-paper.js",
     "static/chart-options.js",
+    # Classes UI and player (no lesson content: that streams from the web app).
+    "static/lesson-engine.js",
+    "static/lesson-player.js",
+    "static/classes-ui.js",
+    "static/classes.css",
     "static/quickfill.js",
     "static/vendor/big.min.js",
     # TradingView Lightweight Charts (Apache-2.0). Redistributing it means the
@@ -158,6 +164,10 @@ FORBIDDEN_SUBSTRINGS = (".env", "/data/", "__pycache__", "HALT", ".pyc", ".licen
 def _safe(rel: str) -> bool:
     if rel == "agent/.env.example":      # the only .env-ish file that's allowed
         return True
+    # Paid lesson content (classes/src, classes/build, audio) is served by the
+    # hosted app behind the license gate and is never packed into a download.
+    if rel.replace("\\", "/").startswith("classes/"):
+        return False
     return not any(bad in rel for bad in FORBIDDEN_SUBSTRINGS)
 
 

@@ -419,7 +419,9 @@ function setView(v) {
   const isPaper = v === "paper";
   const isCoach = v === "coach";
   const isTrade = v === "trade";
-  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper || isCoach || isTrade;
+  const isClasses = v === "classes";
+  const isPanel = isHome || isProof || isOpt || isPot || isDca || isLive || isPaper || isCoach || isTrade
+    || isClasses;
   $("#homePanel").hidden = !isHome;
   $("#proofPanel").hidden = !isProof;
   $("#optionsPanel").hidden = !isOpt;
@@ -429,6 +431,7 @@ function setView(v) {
   $("#paperPanel").hidden = !isPaper;
   $("#coachPanel").hidden = !isCoach;
   $("#tradePanel").hidden = !isTrade;
+  $("#classesPanel").hidden = !isClasses;
   $("#grid").hidden = isPanel;
   document.querySelector(".controls").hidden = isPanel;
   document.querySelector(".breadth").hidden = isPanel;
@@ -436,6 +439,8 @@ function setView(v) {
     stopLivePoll(); stopChartPoll();  // don't poll while off the Live tab
     // …including the options marks the chart was keeping fresh (chart-options.js).
     if (typeof optChartEnsureMarking === "function") optChartEnsureMarking(false);
+    // A lesson lives on the Live chart; leaving the tab ends it and hands the chart back.
+    if (typeof lessonStop === "function") lessonStop();
   }
   if (!isTrade && window.mpDeskHide) window.mpDeskHide();  // the desk polls only while open
   if (isHome) { renderHome(); return; }
@@ -443,6 +448,7 @@ function setView(v) {
   // Recomputed on every visit rather than cached: the record changes whenever
   // a call is made on the Live tab, and a stale grade is worse than none.
   if (isCoach) { renderCoach(); return; }
+  if (isClasses) { renderClasses(); return; }
   // The paper run keeps polling when you leave the tab — a strategy that only
   // trades while you're watching it isn't testing anything.
   if (isPaper) {
@@ -455,6 +461,7 @@ function setView(v) {
   if (isLive) {
     ensureLiveQf();
     initLiveChartInteractions();
+    if (typeof initLessonPlayer === "function") initLessonPlayer();
     renderLive();
     loadLiveTradeChart();
     startChartPoll();
@@ -575,7 +582,7 @@ async function init() {
 
   // Deep-link support for PWA home-screen shortcuts (e.g. /?view=dca).
   // Every public tab. "trade" stays out: the desk shows itself only when it answers.
-  const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "coach", "dca", "live", "paper", "proof"];
+  const VIEWS = ["home", "crypto", "stocks", "options", "watchlist", "pot", "coach", "classes", "dca", "live", "paper", "proof"];
   const wanted = new URLSearchParams(location.search).get("view");
   const initial = (wanted && VIEWS.includes(wanted)) ? wanted : state.view;
   // Activate the initial view. Home is a panel, so it needs setView to hide the

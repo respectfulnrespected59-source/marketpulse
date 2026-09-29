@@ -91,3 +91,12 @@ marketing/ads_quantus_tess/*.mp3
 
 # Local license-token signing secret (generated on first run; never commit)
 data/.license_secret
+
+# Paid lesson content (MarketPulse Classes). This repo is PUBLIC: lesson
+# sources, compiled lessons and narration audio must never be committed here,
+# or anyone could read them without a license. See docs/CLASSES_PLAN.md.
+/classes/
+
+# Class-short and chart-promo renders (hundreds of MB of video, regenerable).
+marketing/class_shorts/
+marketing/promo_chart/

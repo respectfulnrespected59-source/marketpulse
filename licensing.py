@@ -48,8 +48,16 @@ VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify"
 DECREMENT_URL = "https://api.gumroad.com/v2/licenses/decrement_uses_count"
 _METHOD = {VERIFY_URL: "POST", DECREMENT_URL: "PUT"}
 
-TIER_LIMITS = {"pro": {"devices": 2, "accounts": 1}, "proplus": {"devices": 5, "accounts": 3}}
+TIER_LIMITS = {"pro": {"devices": 2, "accounts": 1}, "proplus": {"devices": 5, "accounts": 3},
+               "classes": {"devices": 2, "accounts": 1}}
 BILLINGS = ("monthly", "lifetime")
+# Who may open a paid lesson: the Classes pass, and Pro+ which includes it.
+# Plain Pro does not; a Classes key unlocks lessons only, never Pro features
+# (desk_api.live_permission checks for pro/proplus by name).
+CLASS_TIERS = frozenset({"classes", "proplus"})
+# Who gets Pro features (live execution, the desk). Named explicitly so no gate
+# ever falls back to "any active license", which would let a Classes key in.
+PRO_TIERS = frozenset({"pro", "proplus"})
 
 TOKEN_TTL_S = 30 * 24 * 3600      # a device re-activates at most monthly
 FRESH_S = 3600                    # re-ask Gumroad about an ACTIVE key at most hourly
@@ -88,7 +96,7 @@ class Entitlement:
 
 # ------------------------------------------------------------------ config
 def parse_plans(raw: str | None) -> dict[str, Plan]:
-    """MP_GUMROAD_PLANS = {"<product_id>": {"tier": "pro"|"proplus", "billing": "monthly"|"lifetime"}}.
+    """MP_GUMROAD_PLANS = {"<product_id>": {"tier": "pro"|"proplus"|"classes", "billing": "monthly"|"lifetime"}}.
     Anything unrecognised is dropped; an empty result means licensing is off."""
     try:
         data = json.loads(raw or "")
@@ -162,6 +170,16 @@ def parse_time(value: str | None) -> float | None:
         return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def grants_classes(e: Entitlement) -> bool:
+    """True only for an ACTIVE entitlement on a tier that includes classes."""
+    return bool(e.active) and e.tier in CLASS_TIERS
+
+
+def grants_pro(e: Entitlement) -> bool:
+    """True only for an ACTIVE Pro or Pro+ entitlement."""
+    return bool(e.active) and e.tier in PRO_TIERS
 
 
 def entitlement_from(resp: dict, plan: Plan, now: float) -> Entitlement:

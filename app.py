@@ -12,6 +12,7 @@ Run:  python app.py   ->  open http://127.0.0.1:8000/app  (the landing page is a
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 import threading
@@ -24,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import datetime
 
+import class_catalog
 import config
 import grader
 import licensing
@@ -224,6 +226,32 @@ _LICENSE_KEY_LIMITER = grader.GradeLimiter(per_client=LICENSE_PER_KEY_PER_HOUR, 
                                            daily_cap=_UNCAPPED)
 _LICENSE_SECRET: list = []
 _LICENSE_SECRET_LOCK = threading.Lock()
+
+
+# ---- Classes. Compiled lessons live OUTSIDE static/ (everything there is
+# public) and are only ever read through /api/classes/*, after the gate below.
+# The gate is the license alone, never the process tier: the public host runs
+# the free edition and still sells classes.
+CLASSES_BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classes", "build")
+_CLASSES = class_catalog.load_manifest(CLASSES_BUILD)
+CLASSES_PER_CLIENT_PER_HOUR = 600     # a lesson load is ~13 requests; room for a classroom sharing one IP
+# (paid content is still bounded per KEY below, which a forwarded header can't spoof)
+CLASSES_PER_KEY_PER_HOUR = 400
+_CLASSES_LIMITER = grader.GradeLimiter(per_client=CLASSES_PER_CLIENT_PER_HOUR, window_s=3600,
+                                       daily_cap=_UNCAPPED)
+_CLASSES_KEY_LIMITER = grader.GradeLimiter(per_client=CLASSES_PER_KEY_PER_HOUR, window_s=3600,
+                                           daily_cap=_UNCAPPED)
+CLASSES_LOCKED_MESSAGE = "This lesson is part of the MarketPulse Classes pass."
+TOO_MANY_MESSAGE = "Too many requests. Try again shortly."
+_STEP_RE = re.compile(r"[0-9]{1,4}")     # ASCII only: "²".isdigit() is True and int("²") raises
+
+
+class _ClassesRateLimited(Exception):
+    """A classes request over its per-client or per-key budget (answered 429)."""
+
+
+def _parse_step(raw: str) -> int | None:
+    return int(raw) if _STEP_RE.fullmatch(raw) else None
 
 
 def _license_secret() -> str | None:
@@ -1467,6 +1495,59 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200):
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
+    def _classes_entitlement(self) -> "licensing.Entitlement":
+        """This request's license. No key is simply not entitled (and costs no
+        Gumroad call); a key over its hourly budget raises _ClassesRateLimited."""
+        key = self.headers.get("X-MP-License-Key") or ""
+        if not key:
+            return licensing.Entitlement(False, "no key")
+        if not _CLASSES_KEY_LIMITER.allow(licensing.key_fingerprint(key))[0]:
+            raise _ClassesRateLimited
+        return license_entitlement(self.headers)
+
+    def _classes(self, path: str, params: dict):
+        """Public catalogue, gated lessons + step audio. Every failure is closed:
+        unknown id 404, not entitled 402, over budget 429."""
+        try:
+            if not _CLASSES_LIMITER.allow(grader.client_key(self.headers, self.client_address[0]))[0]:
+                raise _ClassesRateLimited
+            if path == "/api/classes":
+                return self._classes_catalog()
+            return self._classes_asset(path, params)
+        except _ClassesRateLimited:
+            return self._json({"error": TOO_MANY_MESSAGE}, code=429)
+
+    def _classes_catalog(self):
+        ent = self._classes_entitlement()
+        entitled = licensing.grants_classes(ent)
+        return self._json({"classes": class_catalog.public_catalog(_CLASSES),
+                           "access": {"entitled": entitled, "tier": ent.tier if entitled else None},
+                           "upgrade": config.CLASSES_URL})
+
+    def _classes_asset(self, path: str, params: dict):
+        lesson_id = params.get("id", [""])[0]
+        lesson = class_catalog.find(_CLASSES, lesson_id)
+        if path not in ("/api/classes/lesson", "/api/classes/audio") or lesson is None:
+            return self._send(404, b"Not found", "text/plain")
+        if not lesson.free and not licensing.grants_classes(self._classes_entitlement()):
+            return self._json({"locked": True, "upgrade": config.CLASSES_URL,
+                               "error": CLASSES_LOCKED_MESSAGE}, code=402)
+        if path == "/api/classes/lesson":
+            body = class_catalog.lesson_body(_CLASSES, lesson_id)
+            if body is None:
+                return self._send(404, b"Not found", "text/plain")
+            return self._json(body)
+        audio = class_catalog.audio_path(_CLASSES, lesson_id, _parse_step(params.get("step", [""])[0]))
+        # Served whole, not ranged: the player downloads each step once and plays
+        # it from a blob URL, so no browser streams (or seeks) this response.
+        try:
+            data = audio.read_bytes() if audio is not None else None
+        except OSError:
+            data = None
+        if data is None:
+            return self._send(404, b"Not found", "text/plain")
+        return self._send(200, data, "audio/mpeg")
+
     @staticmethod
     def _upstream_failed(route: str, exc: Exception) -> str:
         """Log the real cause, hand the client a fixed sentence.
@@ -1843,6 +1924,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"query": q, "results": search_symbols(q[:64])})
             except Exception as exc:  # noqa: BLE001
                 return self._json({"error": self._upstream_failed(path, exc)}, code=502)
+
+        if path == "/api/classes" or path.startswith("/api/classes/"):
+            return self._classes(path, params)
 
         if path == "/api/license":
             return self._json({"enabled": bool(_LICENSE_PLANS) and bool(_license_secret()),

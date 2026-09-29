@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="chart.css" />
+  <link rel="stylesheet" href="classes.css" />
   <link rel="stylesheet" href="market-map.css" />
   <!-- /chart is this same app with only the chart showing (chart-page.js).
        Flag it before first paint so the full app layout never flashes. -->
@@ -65,6 +66,7 @@
       <button class="tab" data-view="watchlist"><i class="mi mi-star" aria-hidden="true"></i>Watchlist <span class="pill" id="watchCount">0</span></button>
       <button class="tab" data-view="pot"><i class="mi mi-wallet" aria-hidden="true"></i>Pot</button>
       <button class="tab" data-view="coach"><i class="mi mi-compass" aria-hidden="true"></i>Coach</button>
+      <button class="tab" data-view="classes"><i class="mi mi-book" aria-hidden="true"></i>Classes</button>
       <button class="tab" data-view="dca"><i class="mi mi-sprout" aria-hidden="true"></i>DCA</button>
       <button class="tab" data-view="live"><i class="mi-live" aria-hidden="true"></i>Live</button>
       <button class="tab" data-view="paper"><i class="mi mi-doc" aria-hidden="true"></i>Paper</button>
@@ -298,6 +300,20 @@
     <div id="coachBody"></div>
   </section>
 
+  <!-- Classes: lessons taught on the live chart (classes-ui.js). The catalogue is
+       public; lesson 1 of each class is free, the rest need the Classes pass. -->
+  <section class="coach" id="classesPanel" hidden>
+    <div class="coach-head">
+      <div>
+        <h2><i class="mi mi-book" aria-hidden="true"></i>Classes</h2>
+        <p>Every lesson is taught on the chart itself: Tess explains, Quantus asks what you're
+          thinking, and each lesson shows you the MarketPulse tools that do the job. Then it's your turn.
+          Educational, not financial advice.</p>
+      </div>
+    </div>
+    <div class="cls-grid" id="classesBody"></div>
+  </section>
+
   <!-- Live Tracker: pin a real timestamped entry, watch real prices prove it -->
   <section class="live" id="livePanel" hidden>
     <div class="live-head">
@@ -398,6 +414,27 @@
           </div>
         </div>
         <div class="ltc-hint" id="ltcHint" hidden></div>
+      </div>
+      <!-- Classes: the lesson player borrows this card (lesson-player.js). Hidden
+           unless a lesson is running; the chart above shows the lesson's tape. -->
+      <div class="lesson-bar" id="lessonBar" hidden>
+        <div class="lesson-top">
+          <b class="lesson-title" id="lessonTitle"></b>
+          <span class="lesson-progress" id="lessonProgress"></span>
+          <button type="button" class="ltc-tool ghost" id="lessonExit" aria-label="Exit the lesson">✕ Exit</button>
+        </div>
+        <p class="lesson-line" aria-live="polite"><span class="lesson-who" id="lessonWho"></span><span id="lessonSay"></span></p>
+        <div class="lesson-controls">
+          <button type="button" class="ltc-tool ghost" id="lessonPrev" aria-label="Previous step">⏮</button>
+          <button type="button" class="ltc-tool lesson-play" id="lessonPlay" aria-label="Play">▶</button>
+          <button type="button" class="ltc-tool ghost" id="lessonNextBtn" aria-label="Next step">⏭</button>
+          <button type="button" class="ltc-tool ghost" id="lessonAgain" aria-label="Play this step again">↻</button>
+          <span class="lesson-spot-tag" id="lessonSpotTag" hidden></span>
+        </div>
+        <div class="lesson-done" id="lessonDone" hidden>
+          <button type="button" class="add-btn" id="lessonPracticeBtn">Practice on the live chart</button>
+        </div>
+        <p class="lesson-legal">Educational, not financial advice.</p>
       </div>
       <!-- Replay. Walk the session one candle at a time, the way you'd study it
            after the close — except the dial stays unlocked while the market is
@@ -632,6 +669,10 @@
   <!-- Learning Mode. Loads after chart.js so `replay`, `liveLast`, `liveTf`
        and `chartInd` already exist when a Call is recorded. -->
   <script src="learn.js"></script>
+  <!-- Classes: after chart.js + learn.js (the player drives replay and the chart). -->
+  <script src="lesson-engine.js"></script>
+  <script src="lesson-player.js"></script>
+  <script src="classes-ui.js"></script>
   <script src="panels.js"></script>
   <script src="home.js"></script>
   <script src="license.js"></script>

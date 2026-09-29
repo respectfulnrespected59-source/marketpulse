@@ -7,7 +7,9 @@ services:
     runtime: python
     plan: free
     branch: main
-    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py grader.py"
+    # The last step pulls the PRIVATE lessons repo into classes/ (this repo is
+    # public). It never fails the build: no token = empty class catalogue.
+    buildCommand: "python -m compileall app.py indicators.py options.py options_paper.py backtest.py dca.py config.py grader.py class_catalog.py && python tools/classes/fetch_content.py"
     startCommand: "python app.py"
     healthCheckPath: /api/universe
     # Off deliberately. Once people are buying against what this demo shows,
@@ -36,4 +38,11 @@ services:
       # Grade My Reason (grader.py): paid Nemotron Lightning via OpenRouter, capped key.
       # Dashboard-only secret; unset, the Coach card simply stays hidden.
       - key: OPENROUTER_API_KEY
+        sync: false
+      # MarketPulse Classes. Dashboard-only: a read-only GitHub token for the
+      # private lessons repo (tools/classes/fetch_content.py), and the Gumroad
+      # product page for the $19/mo Classes pass (unset = no buy link shown).
+      - key: MP_CLASSES_TOKEN
+        sync: false
+      - key: MP_CLASSES_URL
         sync: false
