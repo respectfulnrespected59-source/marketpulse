@@ -146,8 +146,12 @@
     let info;
     try { info = await (await fetch("/api/license")).json(); } catch (e) { return; }
     if (!info || !info.enabled) return;          // licensing not switched on: stay hidden
-    card.hidden = false;
+    // The Pro card only when Pro can actually be bought (or this device already holds a
+    // Pro key). A Classes-only setup activates its pass on the Classes tab instead.
     const l = read(LS_LICENSE);
+    const sellsPro = (info.plans || []).some((p) => p.tier === "pro" || p.tier === "proplus");
+    if (!sellsPro && !l) return;
+    card.hidden = false;
     if (!l) return renderForm(card);
     try {
       const s = await post("/api/license/status", { key: l.key, token: l.token, device: deviceId() });

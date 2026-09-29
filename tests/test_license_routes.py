@@ -159,6 +159,15 @@ def test_server_text_is_never_inserted_as_html():
     assert "innerHTML" not in _static("license.js")
 
 
+def test_the_pro_card_shows_only_when_pro_is_for_sale():
+    # Licensing switched on for the Classes pass alone must not show a "MarketPulse Pro" key box
+    # that no one can buy a key for.
+    js = _static("license.js")
+    init = js.split("async function init()", 1)[1]
+    assert 'p.tier === "pro" || p.tier === "proplus"' in init
+    assert init.index("if (!sellsPro && !l) return;") < init.index("card.hidden = false;")
+
+
 
 def test_status_tells_the_app_when_gumroad_was_unreachable(server, gumroad):
     out = json.loads(call(server, "/api/license/activate", {"key": KEY, "device": "dev-1"})[1])
