@@ -228,3 +228,7 @@ def test_lesson_content_is_never_committed_to_this_public_repo():
                               "classes/build/catalog.json", "classes/src/dca/01.json"],
                              capture_output=True, text=True)
     assert ignored.returncode == 0 and ignored.stdout.count("classes/") == 2
+    # ...but the rule must be anchored: the lesson BUILDER lives in tools/classes/ and must ship.
+    builder = subprocess.run(["git", "-C", str(root), "check-ignore", "--no-index", "tools/classes/build.py"],
+                             capture_output=True, text=True)
+    assert builder.returncode == 1, "tools/classes/ is being ignored by the lessons rule"
