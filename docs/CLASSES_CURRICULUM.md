@@ -1,6 +1,6 @@
 # MarketPulse Classes — curriculum (draft for owner review)
 
-Four classes, five lessons each. Every lesson is taught **on the chart**: the
+Four classes, five lessons each, plus a free setup class. Every lesson is taught **on the chart**: the
 chart loads, rewinds to a real moment, and draws while Tess teaches and Quantus
 asks what the viewer is thinking. Each lesson ends with a **practice Call** on
 the replay (Learning Mode), so the student does the thing, not just watches it.
@@ -17,6 +17,25 @@ Ground rules for every script:
 - Close: "Educational, not financial advice."
 
 Lesson 1 of each class matches its free 30-second short, expanded.
+
+**Every lesson teaches the app too** (owner, 2026-09-29: "make sure these lessons include how to use
+all the app's tools and settings to get the most accurate and comfortable outcome"). Each lesson
+spotlights the real controls it uses — a `spot` step rings the actual button while Tess explains it —
+so a student finishes a class knowing both the idea and exactly how to do it in MarketPulse.
+
+---
+
+## Set up MarketPulse — "Get comfortable first"  (free)
+The class every other class leans on. Short lessons, each ending with the student doing it.
+1. **Find anything.** Search / Ctrl+K, stocks vs crypto, the Market Map.
+2. **Timeframes that fit how you trade.** 1m to weekly; swing on daily, never judge a daily
+   trend from a 1-minute chart; pre/post-market on or off for stocks.
+3. **Indicators without clutter.** EMAs and the TTM squeeze on or off, and their settings; volume;
+   why fewer lines read more accurately.
+4. **Drawing.** Mark (M), trend line (L), snap to the wick vs Alt for free placement, undo, clear;
+   Fit, zoom, and full screen for a comfortable view on a phone or a laptop.
+5. **Practice without risk.** Replay the dial, speed, step a candle; make a Call and read your
+   record; paper trades and alerts so you watch the plan instead of the screen.
 
 ---
 

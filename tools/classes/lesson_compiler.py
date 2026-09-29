@@ -22,6 +22,8 @@ Authored ops (in a step's "do" list):
   level {price|var, title}   horizontal line
   buys  {var}                every buy of a DCA plan revealed so far and not yet drawn
   clear                      remove the lesson's drawings
+  spot  {tool, label}        spotlight a real app control while this step plays
+                             (teaches the app itself; tool must be in TOOLS)
 
 Ordering contract (the player must match it): within a step, seeks and plays
 set the cursor first; drawings are validated against — and shown at — the
@@ -44,6 +46,10 @@ WHO = ("T", "Q")                      # Tess teaches, Quantus asks
 PRICE_AT = {"open": 0, "high": 1, "low": 2, "close": 3}
 LEVEL_MARGIN = 0.10                   # a drawing may sit this far outside the framed bars' range
 MAX_TEXT = 120                        # titles and labels (class_catalog caps titles the same)
+# App controls a lesson may spotlight. Names, not selectors: the player owns the
+# mapping to the page (static/lesson-player.js LESSON_TOOL_SELECTORS).
+TOOLS = frozenset({"search", "timeframes", "indicators", "prepost", "mark", "trend", "undo", "clear",
+                   "fit", "fullscreen", "replay", "play", "step", "speed", "dial", "live", "calls"})
 VOICE_VERSION = "kokoro-v1"           # default voice key; build.py passes the real one
 
 HONESTY = (
@@ -289,6 +295,10 @@ def _op(op: dict, ctx: _Ctx) -> list:
     if kind == "clear":
         ctx.drawn_buys.clear()
         return [{"op": "clear"}]
+    if kind == "spot":
+        if op.get("tool") not in TOOLS:
+            raise LessonError(f"spot: unknown tool {op.get('tool')!r} (one of {sorted(TOOLS)})")
+        return [{"op": "spot", "tool": op["tool"], "label": _label(op.get("label", ""), "a spotlight label")}]
     return _op_drawing(op, ctx)
 
 

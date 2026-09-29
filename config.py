@@ -48,7 +48,9 @@ UPGRADE_URL = "https://quantummelaninmedia.gumroad.com/l/yvsyyg"
 # The Classes pass ($19/mo) product page. Set on the host once the Gumroad
 # product exists; until then the classes UI shows no buy link rather than
 # sending people to the wrong product.
-CLASSES_URL = os.environ.get("MP_CLASSES_URL", "").strip() or None
+_classes_url = os.environ.get("MP_CLASSES_URL", "").strip()
+# https only: this lands in a clickable href, so a javascript: value must never get through.
+CLASSES_URL = _classes_url if _classes_url.startswith("https://") else None
 
 PRO = {"proof": True, "alerts": True, "unlimited_symbols": True,
        "dca": True, "options": True}

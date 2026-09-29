@@ -232,3 +232,65 @@ def test_lesson_content_is_never_committed_to_this_public_repo():
     builder = subprocess.run(["git", "-C", str(root), "check-ignore", "--no-index", "tools/classes/build.py"],
                              capture_output=True, text=True)
     assert builder.returncode == 1, "tools/classes/ is being ignored by the lessons rule"
+
+
+# ------------------------------------------------------------------ the deploy audit
+def _audit():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(app.__file__).resolve().parent / "tools"))
+    import audit_deployed
+    return audit_deployed
+
+
+CATALOG = json.dumps({"classes": [{"id": "dca", "lessons": [{"id": "dca-01", "free": True},
+                                                            {"id": "dca-02", "free": False}]}]})
+PAID = ["/api/classes/lesson?id=dca-02", "/api/classes/audio?id=dca-02&step=0"]
+
+
+def fake_host(over=None):
+    """A host that refuses every paid probe; `over` makes one answer leak."""
+    over = over or {}
+
+    def get(url, headers=None):
+        path = url[1:]
+        key = "keyed" if headers else "bare"
+        if (path, key) in over:
+            return over[(path, key)]
+        if path == "/api/classes":
+            return over.get(path, (200, CATALOG))
+        if path == "/classes/build/catalog.json":
+            return over.get(path, (404, ""))
+        return (402, "")
+    return get
+
+
+def test_the_audit_passes_a_host_that_refuses_paid_lessons():
+    assert _audit().audit_classes_gate("h", get=fake_host()) == []
+
+
+@pytest.mark.parametrize("leak", [(PAID[0], "bare"), (PAID[1], "bare"), (PAID[0], "keyed"), (PAID[1], "keyed")])
+def test_the_audit_goes_red_when_any_paid_route_answers(leak):
+    # Lesson AND audio, with no key AND a garbage key: every one must be able to fail.
+    assert _audit().audit_classes_gate("h", get=fake_host({leak: (200, "{}")})) != []
+
+
+def test_the_audit_goes_red_when_raw_files_are_reachable():
+    assert _audit().audit_classes_gate("h", get=fake_host({"/classes/build/catalog.json": (200, "{}")})) != []
+
+
+def test_the_audit_does_not_trust_the_servers_own_free_flag():
+    lying = json.dumps({"classes": [{"id": "dca", "lessons": [{"id": "dca-01", "free": True},
+                                                               {"id": "dca-02", "free": True}]}]})
+    assert _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, lying)})) != []
+
+
+def test_the_buy_link_must_be_https(monkeypatch):
+    import importlib
+    import config
+    for value, want in (("javascript:alert(1)", None), ("http://x.test", None),
+                        ("https://quantummelaninmedia.gumroad.com/l/classes", "https://quantummelaninmedia.gumroad.com/l/classes")):
+        monkeypatch.setenv("MP_CLASSES_URL", value)
+        assert importlib.reload(config).CLASSES_URL == want
+    monkeypatch.delenv("MP_CLASSES_URL")
+    importlib.reload(config)

@@ -79,6 +79,12 @@ const EMA_COLORS = PC_EMA_COLORS;          // chart-theme.js, shared with the la
 // In-memory snapshot of the last loaded intraday payload. Learning Mode reads
 // the tape from here, and the drawing tools read which symbol is on screen.
 let liveLast = { data: null, kind: "stock", ok: false };
+// A running lesson (lesson-player.js) owns the chart: its frozen tape, drawings and
+// levels replace the live ones until it stops. null = the live chart as usual.
+let lessonView = null;
+// Every chart load takes a ticket; only the newest may paint. A slow reply for the
+// symbol you just left must never land on top of the one you switched to.
+let liveLoadSeq = 0;
 
 let lastRenderSym = null, lastRenderTf = null;
 // Sensible default "compact" viewport per timeframe — chosen so a new tape
@@ -199,6 +205,7 @@ function _syncCursorRange(d) {
 
 /* Jump to the open and walk forward — the "study the session" entry point. */
 function enterReplay() {
+  if (lessonView) return;                  // the lesson drives the dial
   const d = liveLast.data;
   if (!d || !d.ts || d.ts.length < 2) return;
   _replayStop();
@@ -215,6 +222,7 @@ function enterReplay() {
 /* Snap back to the live edge. The poll was never stopped, so "live" is one
  * render away — no refetch needed to be current. */
 function goLive() {
+  if (lessonView) return;                  // GO LIVE belongs to the live chart; Exit ends a lesson
   _replayStop();
   replay.on = false;
   replay.cursorTs = null;
@@ -228,6 +236,7 @@ function goLive() {
 function exitReplay() { goLive(); }
 
 function replaySeek(idx) {
+  if (lessonView) return;
   const d = liveLast.data;
   if (!d || !d.ts || d.ts.length < 2) return;
   const want = Math.round(idx);
@@ -244,6 +253,7 @@ function replaySeek(idx) {
 function replayStep(n) { replaySeek(replay.upto + n); }
 
 function replayPlayPause() {
+  if (lessonView) return;
   if (replay.playing) { _replayStop(); _syncReplayUI(); return; }
   // Hitting play while live rewinds to the open rather than doing nothing —
   // "play" on a chart that is already at the edge can only mean "run it again".
@@ -336,7 +346,10 @@ function renderTfButtons(kind) {
   ).join("");
   box.querySelectorAll("button").forEach((b) =>
     b.addEventListener("click", () => {
-      if (liveTf === b.dataset.tf) return;
+      // Mid-lesson, the tap means "show me this timeframe live": end the lesson first,
+      // or its hand-back would restore the old timeframe over the one just picked.
+      if (lessonView && typeof lessonStop === "function") lessonStop({ reload: false });
+      if (liveTf === b.dataset.tf && liveLast.ok) return;
       liveTf = b.dataset.tf;
       loadLiveTradeChart();
       startChartPoll();                       // reset cadence for new tf
@@ -348,26 +361,33 @@ function stopChartPoll() {
 }
 function startChartPoll() {
   stopChartPoll();
-  liveChartTimer = setInterval(loadLiveTradeChart, TF_POLL_MS[liveTf] || 20000);
+  // The poll never paints over a lesson; the lesson hands the chart back when it stops.
+  liveChartTimer = setInterval(() => { if (!lessonView) loadLiveTradeChart(); }, TF_POLL_MS[liveTf] || 20000);
 }
 
 async function loadLiveTradeChart() {
+  // A search or a drill means the user wants the live chart back. This load IS the
+  // hand-back, so the lesson must not start a second one, and the poll resumes.
+  if (lessonView && typeof lessonStop === "function") { lessonStop({ reload: false }); startChartPoll(); }
   const raw = $("#liveSymbol").value.trim();
   const kind = $("#liveKind").value;
-  if (!raw) return;
+  if (!raw) return false;
   const sym = kind === "crypto" ? raw.toLowerCase() : raw.toUpperCase();
+  const ticket = ++liveLoadSeq;
   try {
     const res = await fetch(`/api/intraday?symbol=${encodeURIComponent(sym)}&kind=${kind}&tf=${liveTf}`
       + `&prepost=${chartInd.showPrePost ? 1 : 0}`);
     if (!res.ok) throw new Error(`server said ${res.status}`);
     const d = await res.json();
+    if (lessonView || ticket !== liveLoadSeq) return false;   // a lesson started, or a newer load, while this was in flight
     // Fire-and-forget overlay refresh so the chart shows immediately; the
     // next full render (either this call's chain or the next poll) picks up
     // the daily EMAs + squeeze once they land.
     loadChartOverlay(kind, sym).then((ov) => {
-      if (ov) renderLiveTradeChart(d, kind);
+      if (ov && !lessonView && ticket === liveLoadSeq) renderLiveTradeChart(d, kind);
     }).catch(() => {});
     renderLiveTradeChart(d, kind);
+    return liveLast.ok;                     // true = this tape is what the chart now shows
   } catch (e) {
     // A blip must not wipe a tape that's already drawn — but staying silent
     // when there is NOTHING drawn is how this shows up as "the chart just
@@ -375,6 +395,7 @@ async function loadLiveTradeChart() {
     // page looks perfectly healthy while /api/* (network-only, by design) is
     // unreachable. Say that out loud instead of showing an empty box.
     if (!liveLast.ok) _showChartUnreachable(sym);
+    return false;
   }
 }
 
@@ -522,7 +543,9 @@ function renderLiveTradeChart(d, kind) {
   // the position is open now, not at the cursor. A fault in the options layer
   // must never cost the trader the candles, so it degrades to "no overlay".
   let opt = { lines: [], html: "" };
-  if (typeof optChartFor === "function") {
+  if (lessonView) {
+    opt = { lines: lessonView.optLines || [], html: "" };   // the lesson's levels, no live positions
+  } else if (typeof optChartFor === "function") {
     try { opt = optChartFor(sym, kind, fullOhlc[nAll - 1][3]); } catch (e) { /* candles first */ }
   }
   const drawn = typeof pcRender === "function" && pcRender({
@@ -531,11 +554,11 @@ function renderLiveTradeChart(d, kind) {
     // The dial may run past the day it started in; the frame stretches to follow.
     replay: replay.on ? { from: replay.from, fromTs: fullTs[replay.from],
                           end: Math.max(_sessionEndIdx(fullTs, replay.from), replay.upto) } : null,
-    overlay: liveOverlay,
+    overlay: lessonView ? null : liveOverlay,   // live EMAs belong to the live symbol, not a lesson tape
     showEma: !!chartInd.showEma,
     showSqueeze: !!chartInd.showSqueeze,
     showVolume: !!chartInd.showVolume,
-    entry: _chartEntryFor(sym),
+    entry: lessonView ? null : _chartEntryFor(sym),
     optLines: opt.lines,
   });
   if (!drawn) {
@@ -560,7 +583,7 @@ function _renderChartLabels(sym, kind) {
   // every refresh so a call made this morning settles itself without anyone
   // having to remember it — a record that depends on being remembered ends up
   // a record of the memorable trades only.
-  if (typeof learnSettlePending === "function") {
+  if (!lessonView && typeof learnSettlePending === "function") {
     try { learnSettlePending(); } catch (e) { /* never let scoring break the chart */ }
   }
 }
@@ -568,6 +591,9 @@ function _renderChartLabels(sym, kind) {
 /* A new symbol or timeframe starts on the default window, not a stale one. */
 function _onNewTape(sym, kind) {
   resetChartView();
+  lastRenderSym = sym;
+  lastRenderTf = liveTf;
+  if (lessonView) return;                  // the lesson sets its own cursor on its own tape
   // A cursor is a position within ONE tape. Changing symbol or timeframe
   // makes it meaningless, so drop it rather than carry a stale index across.
   replay.on = false;

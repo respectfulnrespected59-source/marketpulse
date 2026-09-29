@@ -234,7 +234,8 @@ _LICENSE_SECRET_LOCK = threading.Lock()
 # the free edition and still sells classes.
 CLASSES_BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classes", "build")
 _CLASSES = class_catalog.load_manifest(CLASSES_BUILD)
-CLASSES_PER_CLIENT_PER_HOUR = 240     # a lesson is ~10 audio steps; this is ~24 lessons an hour
+CLASSES_PER_CLIENT_PER_HOUR = 600     # a lesson load is ~13 requests; room for a classroom sharing one IP
+# (paid content is still bounded per KEY below, which a forwarded header can't spoof)
 CLASSES_PER_KEY_PER_HOUR = 400
 _CLASSES_LIMITER = grader.GradeLimiter(per_client=CLASSES_PER_CLIENT_PER_HOUR, window_s=3600,
                                        daily_cap=_UNCAPPED)

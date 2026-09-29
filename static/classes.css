@@ -1,0 +1,81 @@
+/* MarketPulse Classes: the Classes tab and the lesson bar on the live chart card.
+ * Uses the app's tokens (styles.css :root); the panel reuses .coach / .coach-card. */
+
+/* ---- Classes tab --------------------------------------------------------- */
+.cls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.cls-card h3 { margin: 0; }
+.cls-tag { margin: 2px 0 12px; color: var(--text-dim); font-size: 0.9rem; }
+.cls-soon { color: var(--text-dim); }
+.cls-lesson {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 44px; padding: 8px 10px; margin-top: 6px;
+  background: var(--surface-2); color: var(--text); text-align: left;
+  border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit;
+  transition: border-color 0.2s var(--ease);
+}
+.cls-lesson:hover, .cls-lesson:focus-visible { border-color: var(--gold); outline: none; }
+.cls-num { color: var(--text-faint); font-family: var(--mono); min-width: 1.4em; }
+.cls-name { flex: 1; }
+.cls-badge {
+  font: 700 0.72rem/1 var(--mono); letter-spacing: 0.08em; padding: 5px 8px; border-radius: 999px;
+}
+.cls-badge.is-free { background: var(--buy-soft); color: var(--buy); }
+.cls-badge.is-locked { background: rgba(232, 194, 90, 0.14); color: var(--gold); }
+.cls-badge.is-open { background: var(--surface); color: var(--gold); }
+.cls-unlock { grid-column: 1 / -1; border-color: rgba(232, 194, 90, 0.35); }
+.cls-unlock h3 { margin: 0 0 6px; }
+.cls-buy { display: inline-block; margin: 6px 0 10px; text-decoration: none; }
+
+/* ---- Lesson bar (inside #liveTradeCard, above the replay dial) ------------ */
+.lesson-bar {
+  margin: 10px 0 6px; padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(232, 194, 90, 0.08), var(--surface));
+  border: 1px solid rgba(232, 194, 90, 0.35); border-radius: var(--radius);
+}
+.lesson-top { display: flex; align-items: center; gap: 10px; }
+.lesson-title { flex: 1; color: var(--gold); }
+.lesson-progress { color: var(--text-faint); font-family: var(--mono); font-size: 0.85rem; }
+.lesson-line { margin: 8px 0; font-size: 1.02rem; line-height: 1.45; min-height: 2.9em; }
+.lesson-who {
+  display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  font: 700 0.72rem/1.6 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 1px;
+}
+.lesson-who[data-who="T"] { background: rgba(232, 194, 90, 0.16); color: var(--gold); }
+.lesson-who[data-who="Q"] { background: rgba(169, 159, 192, 0.18); color: var(--text); }
+.lesson-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lesson-controls .ltc-tool { min-width: 44px; min-height: 40px; }
+.lesson-play { font-weight: 800; }
+.lesson-spot-tag { flex: 1 1 100%; color: var(--gold); font-size: 0.88rem; }
+.lesson-done { margin-top: 10px; }
+.lesson-legal { margin: 8px 0 0; color: var(--text-faint); font-size: 0.75rem; }
+
+/* The spotlight: a gold ring on the real control a lesson is teaching. */
+.lesson-spot {
+  position: relative; z-index: 3;
+  box-shadow: 0 0 0 2px var(--gold), 0 0 18px rgba(232, 194, 90, 0.55) !important;
+  border-radius: 8px;
+  animation: lesson-pulse 1.4s var(--ease) infinite;
+}
+@keyframes lesson-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--gold), 0 0 10px rgba(232, 194, 90, 0.35); }
+  50% { box-shadow: 0 0 0 3px var(--gold), 0 0 22px rgba(232, 194, 90, 0.7); }
+}
+@media (prefers-reduced-motion: reduce) { .lesson-spot { animation: none; } }
+
+@media (max-width: 480px) {
+  .lesson-bar { padding: 10px; }
+  .lesson-line { font-size: 0.98rem; }
+  .lesson-controls .ltc-tool { flex: 1 1 0; }
+  .cls-grid { grid-template-columns: 1fr; }
+}
+
+/* During a lesson the live-only controls step aside: the dial, the call buttons and the
+ * "rewound / hit GO LIVE" note describe the LIVE chart, not a lesson's frozen tape.
+ * A step that teaches one of them brings the bar back (.lesson-spot-replay). */
+#liveTradeCard.in-lesson:not(.lesson-spot-replay) #ltcReplayBar,   /* holds the dial AND the call buttons */
+#liveTradeCard.in-lesson #ltcFoot { display: none; }

@@ -348,3 +348,17 @@ def test_a_new_voice_key_rebakes_everything(tmp_path):
     lc.build_all([lesson([step(say="One.")])], {"t": FLAT}, META, tmp_path, bake=fake_bake(log), voice_key="a")
     lc.build_all([lesson([step(say="One.")])], {"t": FLAT}, META, tmp_path, bake=fake_bake(log), voice_key="b")
     assert log == ["One.", "One."]
+
+
+# ------------------------------------------------------------------ teaching the app itself
+def test_a_spotlight_names_a_real_app_tool():
+    out = lc.compile_lesson(lesson([step(do=[{"op": "spot", "tool": "fit", "label": "Fit shows the whole year"}])]), FLAT)
+    assert out["steps"][0]["do"] == [{"op": "spot", "tool": "fit", "label": "Fit shows the whole year"}]
+    assert lc.state_at(out, 0)["marks"] == []           # a spotlight is not a drawing: it never folds forward
+
+
+@pytest.mark.parametrize("bad", [{"op": "spot", "tool": "#ltcFit"}, {"op": "spot", "tool": "hack"},
+                                 {"op": "spot", "tool": "fit", "label": "Guaranteed winner"}])
+def test_a_spotlight_must_be_a_known_tool_with_an_honest_label(bad):
+    with pytest.raises(lc.LessonError):
+        lc.compile_lesson(lesson([step(do=[bad])]), FLAT)

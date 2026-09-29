@@ -12,7 +12,10 @@
 (function () {
   const LS_LICENSE = "mp_license";
   const LS_DEVICE = "mp_device";
-  const TIER_NAME = { pro: "Pro", proplus: "Pro+" };
+  // The Classes pass is its own key: a Pro buyer adds it without replacing Pro.
+  // Like mp_license it stays out of backups (restoring it would clone a seat).
+  const LS_CLASSES = "mp_license_classes";
+  const TIER_NAME = { pro: "Pro", proplus: "Pro+", classes: "Classes pass" };
 
   function read(k) {
     try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; }
@@ -40,12 +43,30 @@
     return Object.assign({ status: r.status }, j);
   }
 
-  /* Headers for any future Pro-only request. Empty when unlicensed. */
-  window.mpLicenseHeaders = function () {
-    const l = read(LS_LICENSE);
+  /* Headers for a license-gated request. scope "classes" prefers the Classes pass and
+   * falls back to the main key (Pro+ includes classes). Empty when unlicensed. */
+  window.mpLicenseHeaders = function (scope) {
+    const l = (scope === "classes" && read(LS_CLASSES)) || read(LS_LICENSE);
     return l ? { "X-MP-License-Key": l.key, "X-MP-License-Token": l.token, "X-MP-Device": deviceId() } : {};
   };
 
+  /* Activate a key on this device and file it by tier. Returns the server's answer. */
+  async function activate(key) {
+    const r = await post("/api/license/activate", { key, device: deviceId() });
+    if (r.ok) write(r.tier === "classes" ? LS_CLASSES : LS_LICENSE,
+                    { key, token: r.token, tier: r.tier, billing: r.billing });
+    return r;
+  }
+  window.mpLicenseActivate = activate;
+  window.mpClassesPass = function () { return read(LS_CLASSES); };
+  /* Release the Classes pass seat on this device. */
+  window.mpClassesRelease = async function () {
+    const l = read(LS_CLASSES);
+    if (!l) return { ok: true };                    // nothing stored on this device
+    const r = await post("/api/license/deactivate", { key: l.key, token: l.token, device: deviceId() });
+    if (r.ok) write(LS_CLASSES, null);
+    return r;
+  };
   function el(tag, cls, text) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -75,11 +96,14 @@
       btn.disabled = true;
       msg.textContent = "Checking with Gumroad…";
       try {
-        const r = await post("/api/license/activate", { key, device: deviceId() });
-        if (r.ok) {
-          write(LS_LICENSE, { key, token: r.token, tier: r.tier, billing: r.billing });
-          return renderActive(card, { tier: r.tier, billing: r.billing });
+        const r = await activate(key);
+        if (r.ok && r.tier === "classes") {
+          const note = "Classes pass activated on this device. Find your lessons on the Classes tab.";
+          const main = read(LS_LICENSE);         // a Pro license here keeps its own card and controls
+          if (main) { renderActive(card, main); card.append(el("p", "lic-msg", note)); return; }
+          return renderForm(card, note);
         }
+        if (r.ok) return renderActive(card, { tier: r.tier, billing: r.billing });
         msg.textContent = r.message || "That key could not be activated.";
       } catch (e) {
         msg.textContent = "Could not reach MarketPulse. Check your connection and try again.";

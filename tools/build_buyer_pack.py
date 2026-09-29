@@ -84,6 +84,11 @@ BASE = [
     # build. The feature gate is server-side — /api/options/* returns 402.
     "static/options-paper.js",
     "static/chart-options.js",
+    # Classes UI and player (no lesson content: that streams from the web app).
+    "static/lesson-engine.js",
+    "static/lesson-player.js",
+    "static/classes-ui.js",
+    "static/classes.css",
     "static/quickfill.js",
     "static/vendor/big.min.js",
     # TradingView Lightweight Charts (Apache-2.0). Redistributing it means the

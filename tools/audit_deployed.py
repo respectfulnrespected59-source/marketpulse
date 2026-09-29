@@ -22,6 +22,7 @@ is LF, so an identical file still shows about one byte of gap per line.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 import urllib.error
@@ -43,6 +44,8 @@ WATCHED = [
     "vendor/lightweight-charts.standalone.production.js",
     # The landing's live chart, the shared chart theme and the Market Map (09-27).
     "chart-theme.js", "landing/hero-chart.js", "market-map.js", "market-map.css",
+    # MarketPulse Classes (09-29).
+    "lesson-engine.js", "lesson-player.js", "classes-ui.js", "classes.css",
 ]
 
 # A line-count match is strong but not proof. These are strings whose presence
@@ -70,6 +73,9 @@ MARKERS = {
     'id="heroChart"': ("landing.html", True),                # the landing actually hosts it
     "window.MarketMap": ("market-map.js", True),
     'id="homeMap"': ("index.html", True),
+    'data-view="classes"': ("index.html", True),              # the Classes tab ships
+    "function lessonStateAt": ("lesson-engine.js", True),
+    "if (lessonView) return { marks: lessonView.marks": ("chart-tools.js", True),  # lessons never touch user drawings
 }
 
 TIMEOUT_S = 60
@@ -150,6 +156,68 @@ def audit_no_desk(host: str) -> list[str]:
     return [] if ok else [f"/api/desk/ping answered {status} on the HOSTED site: the desk must be local-only"]
 
 
+def _get(url: str, headers: dict | None = None) -> tuple[int, str]:
+    """(status, body) for a URL; HTTP errors are answers, not failures."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=TIMEOUT_S) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, ""
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"  ! could not reach {url}: {exc}")
+        return 0, ""
+
+
+# The owner's rule (docs/CLASSES_PLAN.md): lesson 1 of every class is free, the rest
+# need the pass; the setup class is free throughout. The audit holds the server to
+# THIS, not to the server's own "free" flags, so a flag flipped by a bug goes red.
+FREE_CLASSES = frozenset({"setup"})
+
+
+def _should_be_paid(lesson_id: str) -> bool:
+    cls, _, num = lesson_id.partition("-")
+    return cls not in FREE_CLASSES and num != "01"
+
+
+def _probe_paid(host: str, lesson_id: str, get) -> list[str]:
+    problems = []
+    for route in (f"/api/classes/lesson?id={lesson_id}", f"/api/classes/audio?id={lesson_id}&step=0"):
+        for label, headers in (("no key", None), ("a garbage key", {"X-MP-License-Key": "not-a-real-key-0000"})):
+            code, _ = get(f"{host}{route}", headers)
+            ok = code == 402
+            print(f"  {'OK   ' if ok else 'DRIFT'}  {route} with {label} -> {code} (expected 402)")
+            if not ok:
+                problems.append(f"PAID {route} answered {code} with {label}")
+    return problems
+
+
+def audit_classes_gate(host: str, get=None) -> list[str]:
+    """Paid lessons AND their audio must be refused without a valid license, the
+    catalogue must not call a paid lesson free, and the compiled files must not be
+    reachable as plain files. Asks the running host."""
+    get = get or _get
+    print("\n--- Classes: paid lessons stay behind the license ---")
+    code, body = get(f"{host}/api/classes", None)
+    if code != 200:
+        return [f"/api/classes answered {code}"]
+    try:
+        lessons = [l for c in json.loads(body).get("classes", []) for l in c.get("lessons", [])]
+        ids = [(l["id"], bool(l.get("free"))) for l in lessons]
+    except (ValueError, AttributeError, KeyError, TypeError):
+        return ["/api/classes did not return a catalogue"]
+    problems = [f"catalogue marks {lid} FREE but the plan says it is paid"
+                for lid, free in ids if free and _should_be_paid(lid)]
+    raw, _ = get(f"{host}/classes/build/catalog.json", None)
+    print(f"  {'OK   ' if raw == 404 else 'DRIFT'}  /classes/build/catalog.json -> {raw} (expected 404)")
+    if raw != 404:
+        problems.append(f"compiled lesson files are reachable as plain files ({raw})")
+    paid = [lid for lid, _ in ids if _should_be_paid(lid)]
+    if not paid:
+        print("  (no paid lessons published yet: nothing behind the gate to ask for)")
+        return problems
+    return problems + _probe_paid(host, paid[0], get)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit what the live host actually serves.")
     parser.add_argument("--host", default=DEFAULT_HOST)
@@ -159,7 +227,7 @@ def main() -> int:
     print(f"System 3* audit -> {host}")
     print("(bypasses git; asks the running host what it serves)\n")
 
-    drift = audit_assets(host) + audit_markers(host) + audit_no_desk(host)
+    drift = audit_assets(host) + audit_markers(host) + audit_no_desk(host) + audit_classes_gate(host)
 
     print()
     if drift:
