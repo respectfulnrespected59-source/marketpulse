@@ -23,7 +23,8 @@ deploys, with an empty catalogue (fail closed, never fail the deploy).
   `/api/classes`, `/api/classes/lesson?id=`, `/api/classes/audio?id=&step=` after the license gate
   (`licensing.grants_classes`: active `classes` or `proplus`). Failures are closed: 404 unknown, 402
   locked, 429 limited. Licensing unconfigured ⇒ every paid lesson locked.
-- Each lesson plays against a **frozen OHLC tape** captured once and committed, so narration and chart
+- Each lesson plays against a **frozen OHLC tape** captured once and kept with the lesson in the private
+  content repo, so narration and chart
   can never disagree; narration numbers are resolved from the tape at build time. Practice hands off
   to the live chart.
 - Step state is derived (`lessonStateAt(lesson, i)`), so skip / back / replay-step are exact.
