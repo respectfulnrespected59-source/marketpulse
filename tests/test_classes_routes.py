@@ -294,3 +294,10 @@ def test_the_buy_link_must_be_https(monkeypatch):
         assert importlib.reload(config).CLASSES_URL == want
     monkeypatch.delenv("MP_CLASSES_URL")
     importlib.reload(config)
+
+
+def test_the_audit_goes_red_when_the_live_catalogue_is_empty():
+    # An expired pull token deploys fine and silently empties the Classes tab.
+    empty = json.dumps({"classes": [{"id": "dca", "lessons": []}]})
+    problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, empty)}))
+    assert any("NO lessons" in p for p in problems)
