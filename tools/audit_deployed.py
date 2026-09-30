@@ -178,10 +178,11 @@ def _get(url: str, headers: dict | None = None) -> tuple[int, str]:
 # A class the owner later decides to charge for is named here; lesson 1 of it
 # stays free and the rest must be refused without a key.
 PAID_CLASSES: frozenset = frozenset()
-# Classes already rebuilt at full length (8-10 minutes a lesson, the owner's
-# standard). Free is not a licence to be short. Listed, not inferred from the
-# server: an audit that silently changes its own scope is not an audit.
-FULL_LENGTH_CLASSES = frozenset({"dca"})
+# Classes built to a length the owner set, and the seconds each lesson must run.
+# Free is not a licence to be short. Listed, not inferred from the server: an
+# audit that silently changes its own scope is not an audit. (The 8-10 minute DCA
+# class was pulled 09-30: it taught buying on a schedule. Para-Sail: ~5 minutes.)
+FULL_LENGTH_CLASSES = {"parasail": 300}
 
 
 def _should_be_paid(lesson_id: str) -> bool:
@@ -210,20 +211,21 @@ def _audit_lengths(classes: list) -> list[str]:
     problems = []
     for c in classes:
         lessons = c.get("lessons", [])
-        if c.get("id") not in FULL_LENGTH_CLASSES and all(l.get("free") for l in lessons):
-            continue                          # not rebuilt yet, and nobody is charged for it
+        sold = not all(l.get("free") for l in lessons)
+        floor = max(FULL_LENGTH_CLASSES.get(c.get("id"), 0), MIN_PAID_CLASS_LESSON_S if sold else 0)
+        if not floor:
+            continue                          # no length set for it, and nobody is charged for it
+        need = f"{floor // 60}:{floor % 60:02d}"
         for l in lessons:
             secs = l.get("seconds")
             known = isinstance(secs, int) and not isinstance(secs, bool) and secs > 0
-            ok = known and secs >= MIN_PAID_CLASS_LESSON_S
+            ok = known and secs >= floor
             clock = f"{secs // 60}:{secs % 60:02d}" if known else "unknown"
-            print(f"  {'OK   ' if ok else 'DRIFT'}  {l['id']} runs {clock} "
-                  f"(a full-length class needs {MIN_PAID_CLASS_LESSON_S // 60}:00+)")
+            print(f"  {'OK   ' if ok else 'DRIFT'}  {l['id']} runs {clock} (its class needs {need}+)")
             if not known:
                 problems.append(f"{l['id']} is in a full-length class but the catalogue does not say how long it runs")
             elif not ok:
-                problems.append(f"{l['id']} runs {clock}: every lesson of a full-length class must run "
-                                f"{MIN_PAID_CLASS_LESSON_S // 60}:00 or more")
+                problems.append(f"{l['id']} runs {clock}: every lesson of its class must run {need} or more")
     return problems
 
 
