@@ -21,6 +21,7 @@
 .cls-lesson:hover, .cls-lesson:focus-visible { border-color: var(--gold); outline: none; }
 .cls-num { color: var(--text-faint); font-family: var(--mono); min-width: 1.4em; }
 .cls-name { flex: 1; }
+.cls-len { color: var(--text-faint); font: 0.78rem/1 var(--mono); white-space: nowrap; }
 .cls-badge {
   font: 700 0.72rem/1 var(--mono); letter-spacing: 0.08em; padding: 5px 8px; border-radius: 999px;
 }

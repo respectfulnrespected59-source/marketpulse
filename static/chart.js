@@ -112,9 +112,10 @@ function resetChartView() { pcWantReset = true; }
  * open. `on` means "the cursor is parked behind the live edge": bars after
  * `upto` are hidden so a bar is read with no lookahead, while the poll keeps
  * running and `end` keeps growing behind the curtain. `cursorTs` is what holds
- * the cursor still on a rolling tape — see _syncCursorRange.
+ * the cursor still on a rolling tape — see _syncCursorRange. `toTs` is set only
+ * by a lesson: the last bar of the frame it is showing (see _replayWindow).
  */
-let replay = { on: false, from: 0, upto: 0, end: 0, cursorTs: null, fromTs: null,
+let replay = { on: false, from: 0, upto: 0, end: 0, cursorTs: null, fromTs: null, toTs: null,
                playing: false, timer: null, speedMs: 400 };
 
 /* First bar of the last calendar day present in the tape.
@@ -191,6 +192,7 @@ function _syncCursorRange(d) {
     replay.upto = replay.end;
     replay.cursorTs = null;
     replay.fromTs = null;
+    replay.toTs = null;
     return;
   }
   if (replay.cursorTs) {
@@ -201,6 +203,19 @@ function _syncCursorRange(d) {
   }
   replay.upto = Math.max(replay.from, Math.min(replay.upto, replay.end));
   replay.cursorTs = ts[replay.upto] || null;
+}
+
+/* The bars a parked dial frames: from the window's first bar to the end of that
+ * session. The dial may run past the day it started in; the frame stretches to
+ * follow. A lesson names the frame's last bar itself (replay.toTs), because it
+ * zooms in on part of a multi-year tape. `key` changes whenever the frame does,
+ * which is what tells the chart engine to re-frame. */
+function _replayWindow(fullTs) {
+  const toTs = lessonView ? replay.toTs : null;         // only a lesson names its frame's end
+  const last = toTs ? _indexOfTs(fullTs, toTs) : -1;
+  const end = Math.max(last >= 0 ? last : _sessionEndIdx(fullTs, replay.from), replay.upto);
+  const fromTs = fullTs[replay.from];
+  return { from: replay.from, fromTs, end, key: `${fromTs}|${toTs || ""}` };
 }
 
 /* Jump to the open and walk forward — the "study the session" entry point. */
@@ -227,6 +242,7 @@ function goLive() {
   replay.on = false;
   replay.cursorTs = null;
   replay.fromTs = null;   // leaving a drill drops its session window too
+  replay.toTs = null;
   resetChartView();
   _syncReplayUI();
   if (liveLast.data) renderLiveTradeChart(liveLast.data, liveLast.kind);
@@ -551,9 +567,7 @@ function renderLiveTradeChart(d, kind) {
   const drawn = typeof pcRender === "function" && pcRender({
     d, revealed, tf: liveTf,
     identity: `${kind}|${sym}|${liveTf}`,
-    // The dial may run past the day it started in; the frame stretches to follow.
-    replay: replay.on ? { from: replay.from, fromTs: fullTs[replay.from],
-                          end: Math.max(_sessionEndIdx(fullTs, replay.from), replay.upto) } : null,
+    replay: replay.on ? _replayWindow(fullTs) : null,
     overlay: lessonView ? null : liveOverlay,   // live EMAs belong to the live symbol, not a lesson tape
     showEma: !!chartInd.showEma,
     showSqueeze: !!chartInd.showSqueeze,
@@ -571,11 +585,20 @@ function renderLiveTradeChart(d, kind) {
   _renderReplayStatus(fullTs);
 }
 
+/* "5Y", "10M", "12D": how much history a tape really covers, first bar to last. */
+function _tapeSpan(ts) {
+  const days = ts && ts.length > 1 ? (ts[ts.length - 1] - ts[0]) / 86400 : 0;
+  if (days >= 360) return `${Math.round(days / 365)}Y`;
+  return days >= 45 ? `${Math.round(days / 30)}M` : `${Math.max(1, Math.round(days))}D`;
+}
+
 /* Header labels and chips, plus settling any live calls the tape has reached. */
 function _renderChartLabels(sym, kind) {
   $("#ltcSym").textContent = sym || "—";
   const grainMap = TF_GRAIN[kind === "crypto" ? "crypto" : "stock"];
-  $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + (grainMap[liveTf] || "");
+  // A lesson's tape can hold years more than the live window: say what is really on screen.
+  const grain = lessonView ? `${liveTf} · ${_tapeSpan(lessonView.lesson.tape.ts)}` : (grainMap[liveTf] || "");
+  $("#ltcKind").textContent = (kind === "crypto" ? "Crypto · " : "Stock · ") + grain;
   renderTfButtons(kind);
   // A lesson's tape has no live indicators: the live symbol's squeeze/EMA chips would
   // describe a different chart (e.g. "TTM 5m" over a daily lesson).
@@ -601,6 +624,7 @@ function _onNewTape(sym, kind) {
   replay.on = false;
   replay.cursorTs = null;
   replay.fromTs = null;
+  replay.toTs = null;
   _replayStop();
   lastRenderSym = sym;
   lastRenderTf = liveTf;
@@ -694,9 +718,16 @@ function _renderReplayStatus(ts) {
 // The date still gets said once per session change, by the session dividers in chart-draw.js.
 const TIME_AXIS_TFS = PC_INTRADAY_TFS;    // chart-theme.js
 
+// A daily or weekly candle is a calendar day, not a moment: it keeps the
+// exchange's own date for every viewer, the same date the axis shows (pcTimes)
+// and a lesson's narration says. In Pacific time a candle dated the 5th used to
+// read "4". The exchange's offset comes with the tape (none for crypto: UTC).
 function _fmtAxisTime(dt, tf) {
   if (TIME_AXIS_TFS.has(tf)) {
     return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   }
-  return dt.toLocaleDateString([], { month: "short", day: "numeric" });
+  const tape = lessonView ? lessonView.lesson.tape : liveLast.data;
+  const exchange = (Number(tape && tape.gmtoffset) || 0) * 1000;
+  return new Date(dt.getTime() + exchange)
+    .toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" });
 }

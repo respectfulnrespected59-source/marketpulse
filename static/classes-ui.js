@@ -24,14 +24,24 @@ function _classesLocked(lesson) {
   return !lesson.free && !(classesData && classesData.access && classesData.access.entitled);
 }
 
+/* "10 min": how long the lesson runs, from the catalogue. Unknown (0) shows nothing
+ * rather than a guess: a buyer should see the real length before paying. */
+function _lessonLength(lesson) {
+  const secs = Number(lesson.seconds) || 0;
+  return secs > 0 ? `${Math.max(1, Math.round(secs / 60))} min` : "";
+}
+
 function _lessonRow(lesson, n) {
   const row = _cEl("button", "cls-lesson");
   row.type = "button";
   row.append(_cEl("span", "cls-num", String(n)), _cEl("span", "cls-name", lesson.title));
+  const length = _lessonLength(lesson);
+  if (length) row.append(_cEl("span", "cls-len", length));
   const locked = _classesLocked(lesson);
   row.append(_cEl("span", "cls-badge " + (lesson.free ? "is-free" : locked ? "is-locked" : "is-open"),
                   lesson.free ? "FREE" : locked ? "PASS" : "▶"));
-  row.setAttribute("aria-label", `${lesson.title}${lesson.free ? ", free" : locked ? ", needs the Classes pass" : ""}`);
+  row.setAttribute("aria-label", `${lesson.title}${length ? `, ${length}` : ""}`
+    + `${lesson.free ? ", free" : locked ? ", needs the Classes pass" : ""}`);
   row.addEventListener("click", () => {
     if (_classesLocked(lesson)) return classesShowLocked(lesson.id);
     setView("live");
@@ -160,7 +170,12 @@ async function renderClasses(message) {
                                                + "New lessons are on the way."));
     return;
   }
-  body.replaceChildren(_unlockBox(message), ...classes.map(_classCard));
+  // The classes are free (2026-09-30), so there is normally no pass to offer: the unlock
+  // box only appears when the catalogue really has a lesson that needs one (or a locked
+  // lesson was just tapped and its message has to be shown somewhere).
+  const needsPass = classes.some((c) => c.lessons.some((l) => !l.free));
+  const cards = classes.map(_classCard);
+  body.replaceChildren(...(needsPass || message ? [_unlockBox(message), ...cards] : cards));
 }
 
 /* The server said 402 (or a locked row was tapped): show why and how to unlock. */
