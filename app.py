@@ -234,9 +234,14 @@ _LICENSE_SECRET_LOCK = threading.Lock()
 # the free edition and still sells classes.
 CLASSES_BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classes", "build")
 _CLASSES = class_catalog.load_manifest(CLASSES_BUILD)
-CLASSES_PER_CLIENT_PER_HOUR = 600     # a lesson load is ~13 requests; room for a classroom sharing one IP
+# A full-length lesson is about 64 steps, and the player fetches the lesson plus
+# one narration clip per step before it starts: ~65 requests a load. The budgets
+# were set when a load was ~13, and at that size a paying student would be shut
+# out on their seventh lesson of the hour. These allow ~45 loads per address (a
+# classroom sharing one IP) and ~30 per key: a whole class, rewatched, with room.
+CLASSES_PER_CLIENT_PER_HOUR = 3000
 # (paid content is still bounded per KEY below, which a forwarded header can't spoof)
-CLASSES_PER_KEY_PER_HOUR = 400
+CLASSES_PER_KEY_PER_HOUR = 2000
 _CLASSES_LIMITER = grader.GradeLimiter(per_client=CLASSES_PER_CLIENT_PER_HOUR, window_s=3600,
                                        daily_cap=_UNCAPPED)
 _CLASSES_KEY_LIMITER = grader.GradeLimiter(per_client=CLASSES_PER_KEY_PER_HOUR, window_s=3600,

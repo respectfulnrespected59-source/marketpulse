@@ -111,3 +111,43 @@ def test_index_of_ts_is_exact_or_minus_one():
     got = run_js([("lessonIndexOfTs", [ts, ts[4]]), ("lessonIndexOfTs", [ts, ts[4] + 1]),
                   ("lessonIndexOfTs", [[], 5])])
     assert got == [4, -1, -1]
+
+
+# ------------------------------------------------------------------ the frame (what is on screen)
+def test_a_frame_names_both_its_first_and_its_last_bar():
+    # The player used to honour only where a frame STARTS, so a lesson that zoomed in on two
+    # years of a five-year tape showed all five with the story squeezed into the left edge.
+    src = {"id": "dca-01", "class": "dca", "title": "T", "free": True, "tape": "t", "vars": {},
+           "steps": [{"who": "T", "say": "All of it.", "do": []},
+                     {"who": "T", "say": "Zoom in.", "do": [{"op": "frame", "from": 3, "to": 8}, {"op": "seek", "bar": 5}]}]}
+    lesson = lc.compile_lesson(src, tape())
+    ts = lesson["tape"]["ts"]
+    whole, zoomed = run_js([("(l, i) => lessonFrame(l, lessonStateAt(l, i))", [lesson, i]) for i in (0, 1)])
+    assert whole == {"fromTs": ts[0], "toTs": ts[-1]}
+    assert zoomed == {"fromTs": ts[3], "toTs": ts[8]}
+
+
+THEME_HARNESS = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const ctx = { console, Math, Number, String, JSON, Array, Object, Set, Date, isFinite, Infinity };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(path.join(process.argv[1], "chart-theme.js"), "utf8"), ctx, { filename: "chart-theme.js" });
+const cases = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(cases.map(([fn, args]) => vm.runInContext(fn, ctx)(...args))));
+"""
+
+
+def test_daily_candles_keep_their_own_calendar_date_in_every_time_zone():
+    # A lesson says "February 5" (the candle's UTC day). Shifted into Pacific time the same daily
+    # candle read "Feb 4" on the chart. A day is a label, not a moment: daily and weekly bars are
+    # not shifted; intraday bars still show the viewer's own clock.
+    if not NODE:
+        pytest.skip("node is not installed")
+    ts = [1_770_249_600 + i * DAY for i in range(4)]                # 00:00 UTC, four days running
+    cases = [("(ts, tf) => pcTimes(ts, ts.length, tf)", [ts, tf]) for tf in ("1D", "1W", "5m")]
+    cases.append(("(ts) => ts.map((t) => t - new Date(t * 1000).getTimezoneOffset() * 60)", [ts]))
+    proc = subprocess.run([NODE, "-e", THEME_HARNESS, STATIC], input=json.dumps(cases), capture_output=True,
+                          text=True, timeout=30, check=True, env={**os.environ, "TZ": "America/Los_Angeles"})
+    daily, weekly, intraday, local = json.loads(proc.stdout)
+    assert daily == ts and weekly == ts
+    assert intraday == local and local != ts                         # the zone really was not UTC

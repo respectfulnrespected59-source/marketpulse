@@ -45,6 +45,15 @@ function lessonStateAt(lesson, i) {
   return st;
 }
 
+/* The bars on screen for a folded state: from the frame's first bar to its LAST.
+ * A lesson on a five-year tape zooms in on the two years it is talking about, so
+ * the end matters as much as the start. No frame yet = the whole tape. */
+function lessonFrame(lesson, st) {
+  const ts = lesson.tape.ts;
+  return st.frame ? { fromTs: st.frame.from_ts, toTs: st.frame.to_ts }
+                  : { fromTs: ts[0], toTs: ts[ts.length - 1] };
+}
+
 /* Where step i's cursor starts and ends, and whether it walks (play) or jumps (seek). */
 function lessonPlayPlan(lesson, i) {
   const ts = lesson.tape.ts;

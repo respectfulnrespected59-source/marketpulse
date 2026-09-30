@@ -29,6 +29,9 @@ import urllib.error
 import urllib.request
 
 DEFAULT_HOST = "https://marketpulse-22bi.onrender.com"
+# The build refuses a shorter lesson in a class with paid lessons
+# (tools/classes/lesson_compiler.py; a test pins the two numbers together).
+MIN_PAID_CLASS_LESSON_S = 480
 STATIC_DIR = pathlib.Path(__file__).resolve().parent.parent / "static"
 
 # Served from the site root, not /static/. Listed explicitly rather than
@@ -191,6 +194,31 @@ def _probe_paid(host: str, lesson_id: str, get) -> list[str]:
     return problems
 
 
+def _audit_lengths(classes: list) -> list[str]:
+    """A class we charge for must be full-length lessons, and the catalogue must
+    SAY how long each runs. On 2026-09-30 ten lessons of about 90 seconds were
+    live behind a $19/mo pass and every other check on this page was green:
+    nothing anywhere measured a lesson's length."""
+    problems = []
+    for c in classes:
+        lessons = c.get("lessons", [])
+        if all(l.get("free") for l in lessons):
+            continue                          # a class given away may be as short as it likes
+        for l in lessons:
+            secs = l.get("seconds")
+            known = isinstance(secs, int) and not isinstance(secs, bool) and secs > 0
+            ok = known and secs >= MIN_PAID_CLASS_LESSON_S
+            clock = f"{secs // 60}:{secs % 60:02d}" if known else "unknown"
+            print(f"  {'OK   ' if ok else 'DRIFT'}  {l['id']} runs {clock} "
+                  f"(a class for sale needs {MIN_PAID_CLASS_LESSON_S // 60}:00+)")
+            if not known:
+                problems.append(f"{l['id']} is in a class for sale but the catalogue does not say how long it runs")
+            elif not ok:
+                problems.append(f"{l['id']} runs {clock}: every lesson of a class for sale must run "
+                                f"{MIN_PAID_CLASS_LESSON_S // 60}:00 or more")
+    return problems
+
+
 def audit_classes_gate(host: str, get=None) -> list[str]:
     """Paid lessons AND their audio must be refused without a valid license, the
     catalogue must not call a paid lesson free, and the compiled files must not be
@@ -201,12 +229,14 @@ def audit_classes_gate(host: str, get=None) -> list[str]:
     if code != 200:
         return [f"/api/classes answered {code}"]
     try:
-        lessons = [l for c in json.loads(body).get("classes", []) for l in c.get("lessons", [])]
+        classes = json.loads(body).get("classes", [])
+        lessons = [l for c in classes for l in c.get("lessons", [])]
         ids = [(l["id"], bool(l.get("free"))) for l in lessons]
     except (ValueError, AttributeError, KeyError, TypeError):
         return ["/api/classes did not return a catalogue"]
     problems = [f"catalogue marks {lid} FREE but the plan says it is paid"
                 for lid, free in ids if free and _should_be_paid(lid)]
+    problems += _audit_lengths(classes)
     # Lessons have been published since 2026-09-29, so an empty catalogue means the
     # deploy-time pull failed (expired MP_CLASSES_TOKEN, renamed repo) and the site
     # is quietly selling a pass with nothing behind it.

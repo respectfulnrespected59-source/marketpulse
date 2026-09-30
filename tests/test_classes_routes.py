@@ -243,8 +243,8 @@ def _audit():
     return audit_deployed
 
 
-CATALOG = json.dumps({"classes": [{"id": "dca", "lessons": [{"id": "dca-01", "free": True},
-                                                            {"id": "dca-02", "free": False}]}]})
+CATALOG = json.dumps({"classes": [{"id": "dca", "lessons": [{"id": "dca-01", "free": True, "seconds": 540},
+                                                            {"id": "dca-02", "free": False, "seconds": 560}]}]})
 PAID = ["/api/classes/lesson?id=dca-02", "/api/classes/audio?id=dca-02&step=0"]
 
 
@@ -301,3 +301,48 @@ def test_the_audit_goes_red_when_the_live_catalogue_is_empty():
     empty = json.dumps({"classes": [{"id": "dca", "lessons": []}]})
     problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, empty)}))
     assert any("NO lessons" in p for p in problems)
+
+
+# ------------------------------------------------------------------ a class for sale is a full class
+def _catalog(*lessons, cls="dca"):
+    return json.dumps({"classes": [{"id": cls, "lessons": [
+        {"id": lid, "free": free, **({} if secs is None else {"seconds": secs})} for lid, free, secs in lessons]}]})
+
+
+def test_the_audit_goes_red_when_a_class_for_sale_has_a_short_lesson():
+    # The real miss (09-30): lessons of ~90 s were live behind a $19/mo pass and every check was green.
+    short = _catalog(("dca-01", True, 88), ("dca-02", False, 560))
+    problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, short)}))
+    assert any("dca-01" in p and "1:28" in p for p in problems)
+
+
+@pytest.mark.parametrize("secs", [None, 0, "540", True])
+def test_the_audit_goes_red_when_a_paid_class_does_not_say_how_long_a_lesson_runs(secs):
+    unknown = _catalog(("dca-01", True, 540), ("dca-02", False, secs))
+    problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, unknown)}))
+    assert any("dca-02" in p for p in problems)
+
+
+def test_the_audit_lets_an_all_free_class_be_short():
+    free = json.dumps({"classes": [
+        {"id": "setup", "lessons": [{"id": "setup-01", "free": True, "seconds": 80}]},
+        {"id": "dca", "lessons": [{"id": "dca-01", "free": True, "seconds": 540},
+                                  {"id": "dca-02", "free": False, "seconds": 560}]}]})
+    assert _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, free)})) == []
+
+
+def test_the_audit_and_the_build_agree_on_the_minimum_length():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(app.__file__).resolve().parent / "tools" / "classes"))
+    import lesson_compiler
+    assert _audit().MIN_PAID_CLASS_LESSON_S == lesson_compiler.MIN_PAID_CLASS_LESSON_S
+
+
+def test_the_hourly_budgets_fit_full_length_lessons():
+    # A lesson load is the lesson plus one clip per step. Sized for ~13-request loads, the old
+    # budgets shut a paying student out on the seventh 64-step lesson of the hour.
+    load = 70 + 1
+    assert app.CLASSES_PER_KEY_PER_HOUR // load >= 20          # a whole class, rewatched, per key
+    assert app.CLASSES_PER_CLIENT_PER_HOUR // load >= 40       # a classroom behind one address
+    assert app.CLASSES_PER_KEY_PER_HOUR <= app.CLASSES_PER_CLIENT_PER_HOUR

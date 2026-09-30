@@ -24,14 +24,24 @@ function _classesLocked(lesson) {
   return !lesson.free && !(classesData && classesData.access && classesData.access.entitled);
 }
 
+/* "10 min": how long the lesson runs, from the catalogue. Unknown (0) shows nothing
+ * rather than a guess: a buyer should see the real length before paying. */
+function _lessonLength(lesson) {
+  const secs = Number(lesson.seconds) || 0;
+  return secs > 0 ? `${Math.max(1, Math.round(secs / 60))} min` : "";
+}
+
 function _lessonRow(lesson, n) {
   const row = _cEl("button", "cls-lesson");
   row.type = "button";
   row.append(_cEl("span", "cls-num", String(n)), _cEl("span", "cls-name", lesson.title));
+  const length = _lessonLength(lesson);
+  if (length) row.append(_cEl("span", "cls-len", length));
   const locked = _classesLocked(lesson);
   row.append(_cEl("span", "cls-badge " + (lesson.free ? "is-free" : locked ? "is-locked" : "is-open"),
                   lesson.free ? "FREE" : locked ? "PASS" : "▶"));
-  row.setAttribute("aria-label", `${lesson.title}${lesson.free ? ", free" : locked ? ", needs the Classes pass" : ""}`);
+  row.setAttribute("aria-label", `${lesson.title}${length ? `, ${length}` : ""}`
+    + `${lesson.free ? ", free" : locked ? ", needs the Classes pass" : ""}`);
   row.addEventListener("click", () => {
     if (_classesLocked(lesson)) return classesShowLocked(lesson.id);
     setView("live");

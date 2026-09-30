@@ -27,6 +27,7 @@ LESSON_FILE_RE = re.compile(r"[a-z]{2,8}-\d{2}\.json")
 AUDIO_FILE_RE = re.compile(r"[0-9a-f]{12,64}\.mp3")
 MAX_TITLE = 120
 MAX_AUDIO_BYTES = 5 * 1024 * 1024   # one narration step is ~100 KB; anything huge is a build mistake
+MAX_LESSON_SECONDS = 4 * 3600       # a running time past this is a build mistake, shown as unknown
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class Lesson:
     free: bool
     file: str
     audio: tuple[str, ...]
+    seconds: int = 0                # running time; 0 = unknown (a build from before it was recorded)
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,11 @@ def _audio_ok(root: Path, name: object) -> bool:
         return False
 
 
+def _seconds(value: object) -> int:
+    ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_LESSON_SECONDS
+    return value if ok else 0
+
+
 def _lesson(raw: dict, class_id: str, root: Path) -> Lesson | None:
     """A manifest entry, or None if anything about it is off."""
     lid, file, audio = raw.get("id"), raw.get("file"), raw.get("audio")
@@ -77,7 +84,8 @@ def _lesson(raw: dict, class_id: str, root: Path) -> Lesson | None:
         return None
     if not (isinstance(audio, list) and audio and all(_audio_ok(root, a) for a in audio)):
         return None
-    return Lesson(lid, class_id, _text(raw.get("title")), raw.get("free") is True, file, tuple(audio))
+    return Lesson(lid, class_id, _text(raw.get("title")), raw.get("free") is True, file, tuple(audio),
+                  _seconds(raw.get("seconds")))
 
 
 def load_manifest(root: str | Path) -> Manifest:
@@ -105,11 +113,12 @@ def load_manifest(root: str | Path) -> Manifest:
 
 
 def public_catalog(m: Manifest) -> list[dict]:
-    """What anyone may see: titles, which lessons are free, how many steps.
-    No narration, no audio names, no chart data."""
+    """What anyone may see: titles, which lessons are free, how many steps and
+    how long each runs. No narration, no audio names, no chart data."""
     return [{"id": c.id, "title": c.title, "tagline": c.tagline,
              "lessons": [{"id": lid, "title": m.lessons[lid].title, "free": m.lessons[lid].free,
-                          "steps": len(m.lessons[lid].audio)} for lid in c.lessons]}
+                          "steps": len(m.lessons[lid].audio), "seconds": m.lessons[lid].seconds}
+                         for lid in c.lessons]}
             for c in m.classes]
 
 

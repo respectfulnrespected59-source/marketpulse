@@ -246,11 +246,12 @@ function pcApplyDefaultView() {
   pcWantReset = false;
 }
 
-/* A lesson frames a whole year even on a phone: 350 daily candles at the theme's
- * 1px minimum (chart-theme.js timeScale.minBarSpacing) overflow a ~260px plot and
- * cut off the months the narration is talking about. Lessons pack tighter while
- * they run; null puts the everyday limit back. */
-const PC_LESSON_MIN_BAR = 0.5;
+/* A lesson frames its whole tape even on a phone: at the theme's 1px minimum
+ * (chart-theme.js timeScale.minBarSpacing) a ~260px plot holds 260 candles, and a
+ * full-length lesson zooms out to five years of daily bars (1,825). At 0.5 that
+ * zoom-out showed only the last 15 months while the narration pointed at 2022.
+ * Lessons pack tighter while they run; false puts the everyday limit back. */
+const PC_LESSON_MIN_BAR = 0.1;
 const PC_DEFAULT_MIN_BAR = 1;
 let pcLessonTight = false;
 function pcLessonSpacing(on) {
@@ -270,9 +271,10 @@ function _pcApplyView(prev, replayWin) {
     // freely, and stepping the dial must not move the view: the candles march
     // forward across a still frame. So a replay view is only ever held in
     // place, never "followed" like the live edge.
-    if (pcReplayFramedFor !== replayWin.fromTs || pcWantReset) {
+    const key = replayWin.key || replayWin.fromTs;      // a lesson's frame can change its END too
+    if (pcReplayFramedFor !== key || pcWantReset) {
       _pcSetRange({ from: replayWin.from - 1, to: replayWin.end + PC_RIGHT_PAD });
-      pcReplayFramedFor = replayWin.fromTs;
+      pcReplayFramedFor = key;
       pcWantReset = false;
     } else if (prev) {
       _pcRestore(prev, false);
@@ -332,7 +334,7 @@ function _pcSetCandles(showVolume) {
 /* Draw one frame of the tape.
  *   m.d        /api/intraday payload
  *   m.revealed bars shown (replay hides the rest as whitespace)
- *   m.replay   {from, end, fromTs} while the dial is parked, else null
+ *   m.replay   {from, end, fromTs, key} while the dial is parked, else null
  *   m.identity symbol|timeframe; a change re-frames the view
  */
 function pcRender(m) {
@@ -341,7 +343,7 @@ function pcRender(m) {
   const n = Math.min((d.ohlc || []).length, (d.ts || []).length);
   const prev = (pcTape.key === m.identity) ? _pcCaptureView() : null;
   if (pcTape.key !== m.identity) pcReplayFramedFor = null;
-  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: pcTimes(d.ts, n),
+  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: pcTimes(d.ts, n, m.tf),
              ts: d.ts, ohlc: d.ohlc, vol: d.volume || [], tf: m.tf };
   const { ohlc, revealed } = pcTape;
 

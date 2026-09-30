@@ -23,12 +23,17 @@ const PC_RIGHT_PAD = 6;        // empty slots right of the newest bar: where the
  * axis reads the viewer's own clock. The shift can run a bar backwards across a
  * DST fall-back, and the library rejects unsorted data, so each time is forced
  * strictly past the one before it. Nothing converts a chart time back into a
- * real one: every lookup goes through the bar index. */
-function pcTimes(ts, n) {
+ * real one: every lookup goes through the bar index.
+ *
+ * Daily and weekly candles are NOT shifted. A day is a label, not a moment: the
+ * candle dated the 5th is the 5th for every viewer (and in every lesson's
+ * narration). Shifted into Pacific time, a crypto daily candle read the 4th. */
+function pcTimes(ts, n, tf) {
+  const local = tf == null || PC_INTRADAY_TFS.has(tf);
   const out = new Array(n);
   let prev = -Infinity;
   for (let i = 0; i < n; i++) {
-    const t = ts[i] - new Date(ts[i] * 1000).getTimezoneOffset() * 60;
+    const t = local ? ts[i] - new Date(ts[i] * 1000).getTimezoneOffset() * 60 : ts[i];
     prev = t > prev ? t : prev + 1;
     out[i] = prev;
   }

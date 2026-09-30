@@ -15,6 +15,14 @@ Ground rules for every script:
 - Costs quoted match the app's cost model (backtest.py): stocks 0 bps commission
   + 5 bps slippage per side; crypto 25 + 20 bps per side.
 - Close: "Educational, not financial advice."
+- **Length: 8-10 minutes per lesson** (owner, 2026-09-30: "we can not SELL classes that short" —
+  the first build shipped ten lessons of about 90 seconds). That is 1,350-1,450 words and about
+  60 steps. The build stops if any lesson of a class with paid lessons runs under 8:00
+  (`lesson_compiler.MIN_PAID_CLASS_LESSON_S`), and `tools/audit_deployed.py` goes red if the live
+  catalogue lists one. Fill the time with substance, not padding: several real cases on one
+  multi-year tape (a top, a bottom, every window counted), the arithmetic worked slowly, the
+  counter-case, the limits, how to do it in the app, a recap and homework.
+- Quantus asks yes/no, echo or tag questions, never what/how/why: a wh-question falls flat in TTS.
 
 Lesson 1 of each class matches its free 30-second short, expanded.
 
@@ -54,10 +62,15 @@ screen at phone and laptop size (walk: ring visible, ▶ visible).*
    way; what "underwater" means, and why the plan doesn't change because of it.
 4. **Cadence and costs.** Weekly vs monthly; every buy pays fees and slippage,
    so tiny frequent crypto buys leak more. The math on the chart.
-5. **Signal-tilt DCA.** MarketPulse's tilt buys a little more when the engine
-   reads cheap, a little less when rich — still always buying. The backtest shows
-   when it helped and when it didn't.
+5. **Signal-tilt DCA.** MarketPulse's tilt makes each buy bigger when the engine's
+   score is positive and smaller when it is negative — still always buying. The
+   score is mostly trend, so on the lesson tapes it trimmed buys near the lows and
+   boosted them at higher prices, and finished behind plain DCA in every one-year
+   window (0 of 49 on BTC, 0 of 48 on SPY). The lesson says so.
    *Practice:* set a plan in the Wizard and replay a year against it.
+
+*Rebuilt 2026-09-30 at full length on five-year tapes (BTC and SPY daily): lessons run
+9-10 minutes each.*
 
 ## Stocks — "Read the chart"
 1. **Candles.** Open, high, low, close; body vs wick; the crosshair reads them.

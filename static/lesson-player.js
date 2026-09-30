@@ -80,6 +80,7 @@ function _lessonRenderAt(idx) {
   const d = v.lesson.tape;
   replay.on = true;
   replay.fromTs = v.frameFromTs;
+  replay.toTs = v.frameToTs;
   replay.cursorTs = d.ts[idx];
   replay.upto = idx;
   renderLiveTradeChart(d, d.kind);
@@ -198,8 +199,9 @@ function lessonGo(i, play) {
   const st = lessonStateAt(prev.lesson, at);
   const plan = lessonPlayPlan(prev.lesson, at);
   // A fresh view object per step: a stale audio callback can tell it isn't current.
+  const frame = lessonFrame(prev.lesson, st);
   const cur = { ...prev, i: at, playing: !!play, done: false, marks: st.marks, lines: st.lines,
-                optLines: lessonOptLines(st), frameFromTs: st.frame ? st.frame.from_ts : prev.lesson.tape.ts[0] };
+                optLines: lessonOptLines(st), frameFromTs: frame.fromTs, frameToTs: frame.toTs };
   lessonView = cur;
   _lessonRenderAt(play && plan.animate ? plan.fromIdx : plan.toIdx);
   _lessonRenderBar(step);
@@ -310,9 +312,10 @@ function _lessonBegin(id, lesson, urls) {
   if (typeof _replayStop === "function") _replayStop();   // a live replay mustn't tick under a lesson
   stopChartPoll();
   lessonView = { id, lesson, urls, i: 0, playing: false, done: false, marks: [], lines: [], optLines: [],
-                 frameFromTs: lesson.tape.ts[0], prevTf: liveTf };
+                 frameFromTs: lesson.tape.ts[0], frameToTs: lesson.tape.ts[lesson.tape.ts.length - 1],
+                 prevTf: liveTf };
   liveTf = lesson.tape.tf;
-  if (typeof pcLessonSpacing === "function") pcLessonSpacing(true);   // the whole year fits a phone
+  if (typeof pcLessonSpacing === "function") pcLessonSpacing(true);   // the whole tape fits a phone
   resetChartView();                                    // frame the lesson fresh, never a stale view
   const card = $("#liveTradeCard");
   if (card) {
@@ -348,6 +351,7 @@ function lessonStop(opts) {
   replay.on = false;
   replay.cursorTs = null;
   replay.fromTs = null;
+  replay.toTs = null;
   // Nobody reads the lesson tape as if it were the live symbol, and the next live
   // render starts fresh (identity, view, cursor) even on the same symbol and tf.
   liveLast = { data: null, kind: liveLast.kind, ok: false };

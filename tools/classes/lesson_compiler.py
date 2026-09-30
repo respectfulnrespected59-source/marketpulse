@@ -14,9 +14,11 @@ Pure: no Kokoro, no network. build_all() takes the voice as a function so it
 is testable; tools/classes/build.py passes the real one.
 
 Authored ops (in a step's "do" list):
-  frame {from, to}           show bars from..to
+  frame {from, to}           show bars from..to: what is on screen. The cursor and
+                             every mark or line drawn must sit inside it.
   seek  {bar}                replay cursor to a bar
   play  {to}                 reveal bars up to `to` while the step plays
+                             (any bar may be a computed one by name: "u.worst_bar")
   mark  {bar, at|price|var, dir}
   line  {a: {bar, at|price|var}, b: {...}}
   level {price|var, title}   horizontal line
@@ -34,6 +36,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import string
@@ -52,6 +55,10 @@ TOOLS = frozenset({"search", "timeframes", "indicators", "prepost", "mark", "tre
                    "fit", "fullscreen", "replay", "play", "step", "speed", "dial", "live", "calls",
                    "dca_tab", "coach_tab", "paper_tab"})
 VOICE_VERSION = "kokoro-v1"           # default voice key; build.py passes the real one
+STEP_GAP_MS = 450                     # the player's breath between steps (lesson-player.js LESSON_GAP_MS)
+# A class we charge for is a full class: every lesson in it, the free one that
+# sells it included, runs at least this long or the build stops.
+MIN_PAID_CLASS_LESSON_S = 480
 
 HONESTY = (
     (re.compile(r"\bguarantee", re.I), "a guarantee"),
@@ -108,16 +115,47 @@ def _close(tape: dict, i: int) -> float:
 
 
 # ------------------------------------------------------------------ computed values
+SIDE_EPS = 1e-9        # percent: closer to the line than this is ON the line
+
+
+def _window(spec: dict, tape: dict, what: str) -> tuple[int, int]:
+    """The bars a plan covers, start..end inclusive (default: the whole tape), so
+    one long tape can hold several stories."""
+    start = _bar(tape, spec.get("start", 0), f" in {what}")
+    end = _bar(tape, spec.get("end", -1), f" in {what}")
+    if end < start:
+        raise LessonError(f"{what}: end (bar {end}) is before start (bar {start})")
+    return start, end
+
+
+def _side(gap_pct: float) -> str:
+    """Where price sits against an average-cost line. The narration says
+    {plan.side}, never a typed "above", so the word can't contradict the chart.
+    A buy day sits ON the line: 1/(1/p) is not always exactly p, so float dust
+    must not read as "below" (the same tolerance _underwater uses)."""
+    return "below" if gap_pct < -SIDE_EPS else "above"
+
+
 def _dca(spec: dict, tape: dict) -> SimpleNamespace:
-    every, start = spec.get("every"), _bar(tape, spec.get("start", 0), " in a dca plan")
+    every = spec.get("every")
     if not isinstance(every, int) or isinstance(every, bool) or every < 1:
         raise LessonError("a dca plan needs every >= 1")
+    start, end = _window(spec, tape, "a dca plan")
     buys = [{"bar": i, "ts": tape["ts"][i], "price": _close(tape, i)}
-            for i in range(start, len(tape["ts"]), every)]
+            for i in range(start, end + 1, every)]
     prices = [b["price"] for b in buys]
     # Same dollars each time: average cost = total dollars / total coins (harmonic mean).
-    return SimpleNamespace(buys=buys, n=len(buys), avg=len(prices) / sum(1 / p for p in prices),
-                           mean=sum(prices) / len(prices))
+    avg, last = len(prices) / sum(1 / p for p in prices), _close(tape, end)
+    gap = (last / avg - 1) * 100
+    cheap, dear = min(buys, key=lambda b: b["price"]), max(buys, key=lambda b: b["price"])
+    return SimpleNamespace(buys=buys, n=len(buys), avg=avg, mean=sum(prices) / len(prices),
+                           first_price=_close(tape, start), last_price=last,
+                           first_date=_date(tape["ts"][start]), last_date=_date(tape["ts"][end]),
+                           gap_pct=gap, gap_abs=abs(gap), side=_side(gap),
+                           cheapest_bar=cheap["bar"], cheapest_price=cheap["price"],
+                           cheapest_date=_date(cheap["ts"]), priciest_bar=dear["bar"],
+                           priciest_price=dear["price"], priciest_date=_date(dear["ts"]),
+                           coin_ratio=dear["price"] / cheap["price"])
 
 
 def _breakeven(spec: dict, _tape: dict) -> SimpleNamespace:
@@ -131,7 +169,9 @@ def _breakeven(spec: dict, _tape: dict) -> SimpleNamespace:
 
 def _dca_at(spec: dict, tape: dict) -> SimpleNamespace:
     """The plan as it stood on `bar`: buys so far, their average cost, and how far
-    price sat from it (negative = below your line)."""
+    price sat from it. gap_pct is SIGNED (negative = below your line); gap_abs and
+    side say the same thing in words. (underwater.worst_gap is a positive depth.)
+    need_pct / lump_need_pct exist only while that buyer is below their price."""
     bar = _bar(tape, spec.get("bar"), " in dca_at")
     plan = _dca({"every": spec.get("every"), "start": spec.get("start", 0)}, tape)
     buys = [b["price"] for b in plan.buys if b["bar"] <= bar]
@@ -140,11 +180,44 @@ def _dca_at(spec: dict, tape: dict) -> SimpleNamespace:
     avg = len(buys) / sum(1 / p for p in buys)
     price = _close(tape, bar)
     gap = (price / avg - 1) * 100
+    entry = plan.first_price                  # what the all-at-once buyer paid on the plan's first day
+    lump_gap = (price / entry - 1) * 100
+    # How far price must climb from here to get each buyer back to even: only
+    # while they are below it (a climb of "0 percent" is not a fact worth narrating).
+    need = {name: (cost / price - 1) * 100
+            for name, cost, g in (("need_pct", avg, gap), ("lump_need_pct", entry, lump_gap)) if g < -SIDE_EPS}
     return SimpleNamespace(n=len(buys), avg=avg, price=price, gap_pct=gap, gap_abs=abs(gap),
-                           date=_date(tape["ts"][bar]))
+                           side=_side(gap), date=_date(tape["ts"][bar]), lump_price=entry,
+                           lump_gap_abs=abs(lump_gap), lump_side=_side(lump_gap), **need)
 
 
 WIZARD_CADENCES = ("weekly", "biweekly", "monthly")
+
+
+def _tilt_lean(buys: list, tape: dict) -> dict:
+    """Which scheduled buys the tilt boosted and which it trimmed, and at what
+    prices: the mechanism behind its result, not just the result.
+
+    tilt_min_* is the most-trimmed buy and tilt_max_* the most-boosted. The tilt
+    is capped, so several buys can share the extreme size: *_count says how many,
+    and of those the example is the LOWEST-priced trimmed buy and the
+    HIGHEST-priced boosted one (say so when narrating it). With nothing trimmed
+    (or boosted) there is no such buy, and no tilt_min_* (tilt_max_*)."""
+    at = {str(t): i for i, t in enumerate(tape["ts"])}
+    more, less = [b for b in buys if b["tilt"] > 1], [b for b in buys if b["tilt"] < 1]
+    out = {"tilt_more": len(more), "tilt_less": len(less), "tilt_even": len(buys) - len(more) - len(less)}
+    for name, group in (("more", more), ("less", less)):
+        if group:
+            out[f"tilt_{name}_price"] = sum(b["price"] for b in group) / len(group)
+    for name, group, pick in (("min", less, min), ("max", more, max)):
+        if not group:
+            continue
+        b = pick(group, key=lambda b: (b["tilt"], b["price"]))
+        out.update({f"tilt_{name}_mult": b["tilt"], f"tilt_{name}_price": b["price"],
+                    f"tilt_{name}_amount": b["amount"], f"tilt_{name}_bar": at[b["date"]],
+                    f"tilt_{name}_date": _date(int(b["date"])),
+                    f"tilt_{name}_count": sum(x["tilt"] == b["tilt"] for x in group)})
+    return out
 
 
 def _wizard(spec: dict, tape: dict) -> SimpleNamespace:
@@ -155,29 +228,155 @@ def _wizard(spec: dict, tape: dict) -> SimpleNamespace:
     root = str(Path(__file__).resolve().parents[2])
     if root not in sys.path:
         sys.path.insert(0, root)
+    import backtest
     import dca
     monthly, cadence = spec.get("monthly"), spec.get("cadence", "monthly")
-    if not isinstance(monthly, (int, float)) or isinstance(monthly, bool) or monthly <= 0:
+    if (not isinstance(monthly, (int, float)) or isinstance(monthly, bool)
+            or not math.isfinite(monthly) or monthly <= 0):
         raise LessonError("wizard needs a positive monthly amount")
     if cadence not in WIZARD_CADENCES:
         raise LessonError(f"wizard cadence must be one of {WIZARD_CADENCES}")
+    start, end = _window(spec, tape, "a wizard plan")
     kind = "crypto" if tape.get("kind") == "crypto" else "stock"
-    dates = [str(t) for t in tape["ts"]]
-    closes = [float(row[3]) for row in tape["ohlc"]]
+    dates = [str(t) for t in tape["ts"][start:end + 1]]
+    closes = [float(row[3]) for row in tape["ohlc"][start:end + 1]]
     per = dca.per_period_amount(monthly, cadence)
+    if per <= 0:
+        raise LessonError(f"wizard: {monthly} a month is less than a cent per {cadence} buy")
     plain = dca.simulate_dca(dates, closes, kind, per, cadence, "plain")
     tilt = dca.simulate_dca(dates, closes, kind, per, cadence, "tilt")
     lump = dca.simulate_lump(dates, closes, kind, plain["invested"])
+    rets = {"plain": plain["return_pct"], "tilt": tilt["return_pct"], "lump": lump["return_pct"]}
+    # A tie has no winner and no lead: the words are absent, so narrating them stops the build.
+    said = {}
+    if rets["lump"] != rets["plain"]:
+        said.update(winner="all at once" if rets["lump"] > rets["plain"] else "the schedule",
+                    lead=abs(rets["lump"] - rets["plain"]))
+    if rets["tilt"] != rets["plain"]:
+        said.update(tilt_lead=abs(rets["tilt"] - rets["plain"]),
+                    tilt_word="ahead of" if rets["tilt"] > rets["plain"] else "behind")
     return SimpleNamespace(
         per_period=per, periods=plain["periods"], invested=plain["invested"],
         plain_avg=plain["avg_cost"], plain_ret=plain["return_pct"], plain_value=plain["final_value"],
         tilt_avg=tilt["avg_cost"], tilt_ret=tilt["return_pct"], tilt_value=tilt["final_value"],
         tilt_invested=tilt["invested"], lump_price=lump["avg_cost"], lump_ret=lump["return_pct"],
-        lump_value=lump["final_value"], tilt_helped=tilt["return_pct"] > plain["return_pct"],
-        lump_won=lump["return_pct"] > plain["return_pct"])
+        lump_value=lump["final_value"], tilt_helped=rets["tilt"] > rets["plain"],
+        lump_won=rets["lump"] > rets["plain"], dca_won=rets["plain"] > rets["lump"],
+        # Spoken as "{w.lump_dir} {w.lump_abs:.1f} percent": the direction word comes from the number.
+        **{f"{k}_abs": abs(v) for k, v in rets.items()},
+        **{f"{k}_dir": "up" if v >= 0 else "down" for k, v in rets.items()},
+        cost_pct=sum(backtest.cost_model(kind)) * 100,      # commission + spread, per buy
+        **_tilt_lean(tilt["contributions"], tape), **said)
 
 
-VAR_FNS = {"dca": _dca, "breakeven": _breakeven, "dca_at": _dca_at, "wizard": _wizard}
+def _whole(value: object, least: int = 1) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= least
+
+
+def _bar_var(spec: dict, tape: dict) -> SimpleNamespace:
+    """One candle, and what a hundred dollars buys at its close."""
+    i = _bar(tape, spec.get("bar"), " in a bar var")
+    o, h, l, c = (float(v) for v in tape["ohlc"][i])
+    return SimpleNamespace(bar=i, open=o, high=h, low=l, close=c, date=_date(tape["ts"][i]), per_100=100 / c)
+
+
+def _underwater(spec: dict, tape: dict) -> SimpleNamespace:
+    """How a plan felt along the way: the days price closed below its running
+    average, the worst of them, and the day it came back for good, next to the
+    all-at-once buyer who paid the first bar's close. A plan that never dipped
+    has no worst_*; one still below at the end has no back_*: a day that never
+    happened has no value, so narrating it fails the build.
+
+    worst_gap and lump_worst are positive DEPTHS (percent below). Every *_days
+    counts from the plan's FIRST bar ("from your first buy to that day"), not
+    from the first dip: days_below is the time actually spent under the line."""
+    plan, (start, end) = _dca(spec, tape), _window(spec, tape, "an underwater study")
+    buys, entry = {b["bar"]: b["price"] for b in plan.buys}, _close(tape, start)
+    n, per_dollar, worst, below, lump_below = 0, 0.0, None, [], []
+    for i in range(start, end + 1):
+        if i in buys:
+            n, per_dollar = n + 1, per_dollar + 1 / buys[i]
+        avg, price = n / per_dollar, _close(tape, i)
+        gap = (1 - price / avg) * 100
+        if gap > 1e-9:                       # a buy day sits ON the line, give or take float dust
+            below.append(i)
+            if worst is None or gap > worst["worst_gap"]:
+                worst = {"worst_bar": i, "worst_gap": gap, "worst_avg": avg, "worst_price": price,
+                         "worst_n": n, "worst_date": _date(tape["ts"][i])}
+        if price < entry:
+            lump_below.append(i)
+    out = {"days": end - start + 1, "days_below": len(below), "lump_days_below": len(lump_below),
+           "lump_price": entry, **(worst or {})}
+    if lump_below:
+        out["lump_worst"] = (1 - min(_close(tape, i) for i in lump_below) / entry) * 100
+    for prefix, days in (("", below), ("lump_", lump_below)):
+        under = set(days)
+        first = next((i for i in range(days[0] + 1, end + 1) if i not in under), None) if days else None
+        # first_back: the first close back at the line (it may dip again); back: back to stay.
+        for name, bar in (("first_back", first), ("back", days[-1] + 1 if days and days[-1] < end else None)):
+            if bar is not None:
+                out.update({f"{prefix}{name}_bar": bar, f"{prefix}{name}_date": _date(tape["ts"][bar]),
+                            f"{prefix}{name}_days": bar - start})
+    runs: list[list[int]] = []               # unbroken stretches below the line, as [first bar, last bar]
+    for i in below:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
+    if runs:
+        a, b = max(runs, key=lambda r: r[1] - r[0])
+        out.update({"longest_days": b - a + 1, "longest_from_bar": a, "longest_to_bar": b,
+                    "longest_from_date": _date(tape["ts"][a]), "longest_to_date": _date(tape["ts"][b])})
+        if b < end:
+            out.update({"longest_after_bar": b + 1, "longest_after_date": _date(tape["ts"][b + 1])})
+    return SimpleNamespace(**out)
+
+
+def _rolling(spec: dict, tape: dict) -> SimpleNamespace:
+    """The Wizard run on every window of the WHOLE tape, `step` bars apart, each
+    running `span` bars past its first (span 365 on a daily tape = one year):
+    how often each plan came out ahead, so a lesson never generalises from one
+    lucky year. It always covers the whole tape, so a start or end is refused
+    rather than quietly ignored."""
+    span, step, n = spec.get("span"), spec.get("step"), len(tape["ts"])
+    if not (_whole(span) and _whole(step) and span < n):
+        raise LessonError("rolling needs a whole span and step of 1+, and a span shorter than the tape")
+    if "start" in spec or "end" in spec:
+        raise LessonError("rolling always covers the whole tape: it takes no start or end")
+    runs = [_wizard({**spec, "start": s, "end": s + span}, tape) for s in range(0, n - span, step)]
+    lump_won, dca_won = sum(w.lump_won for w in runs), sum(w.dca_won for w in runs)
+    ends = {"plain_worst": min(w.plain_ret for w in runs), "plain_best": max(w.plain_ret for w in runs),
+            "lump_worst": min(w.lump_ret for w in runs), "lump_best": max(w.lump_ret for w in runs)}
+    return SimpleNamespace(
+        windows=len(runs), lump_won=lump_won, dca_won=dca_won, ties=len(runs) - lump_won - dca_won,
+        tilt_helped=sum(w.tilt_helped for w in runs), lump_share=lump_won / len(runs) * 100, **ends,
+        **{f"{k}_say": _pct_say(v) for k, v in ends.items()})
+
+
+def _pct_say(value: float) -> str:
+    """A percentage spoken whole: a voice can drop a minus sign, it can't drop the
+    word "loss". Rounded FIRST, so the word always agrees with the number said."""
+    whole = round(value)
+    return "no change" if whole == 0 else f"a {'gain' if whole > 0 else 'loss'} of {abs(whole)} percent"
+
+
+def _shift(spec: dict, tape: dict) -> SimpleNamespace:
+    """The same plan started on each of `days` neighbouring bars: how much the
+    choice of buying day moves the average, next to how far price itself ranged."""
+    start, end = _window(spec, tape, "a shift study")
+    days = spec.get("days")
+    if not _whole(days) or start + days - 1 > end:
+        raise LessonError("shift needs days >= 1 that fit inside the window")
+    avgs = [_dca({**spec, "start": start + k, "end": end}, tape).avg for k in range(days)]
+    closes = [_close(tape, i) for i in range(start, end + 1)]
+    return SimpleNamespace(days=days, lo_avg=min(avgs), hi_avg=max(avgs),
+                           spread_pct=(max(avgs) / min(avgs) - 1) * 100,
+                           price_lo=min(closes), price_hi=max(closes),
+                           price_spread_pct=(max(closes) / min(closes) - 1) * 100)
+
+
+VAR_FNS = {"dca": _dca, "breakeven": _breakeven, "dca_at": _dca_at, "wizard": _wizard,
+           "bar": _bar_var, "underwater": _underwater, "rolling": _rolling, "shift": _shift}
 
 
 def _date(ts: int) -> str:
@@ -197,17 +396,34 @@ def compute_vars(specs: dict, tape: dict) -> dict:
     return out
 
 
-def _var(vars_: dict, ref: object) -> float:
+def _lookup(vars_: dict, ref: object) -> object:
     try:
         head, attr = str(ref).split(".", 1)
         if attr.startswith("_"):
             raise AttributeError(attr)
-        value = getattr(vars_[head], attr)
+        return getattr(vars_[head], attr)
     except (KeyError, ValueError, AttributeError):
         raise LessonError(f"unknown var {ref}") from None
+
+
+def _var(vars_: dict, ref: object) -> float:
+    value = _lookup(vars_, ref)
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise LessonError(f"var {ref} is not a number")
     return float(value)
+
+
+def _bar_ref(vars_: dict, bar: object) -> object:
+    """An op's bar: a number, or the name of a computed bar ("u.worst_bar") so a
+    drawing sits on exactly the candle the narration names. Only a var NAMED as a
+    bar will do: u.days is a whole number too, and a typo must not seek "bar 5"."""
+    if not isinstance(bar, str):
+        return bar
+    value = _lookup(vars_, bar)
+    named_bar = bar.rsplit(".", 1)[-1] == "bar" or bar.endswith("_bar")
+    if not named_bar or not isinstance(value, int) or isinstance(value, bool):
+        raise LessonError(f"var {bar} is not a bar number")
+    return value
 
 
 # ------------------------------------------------------------------ text
@@ -255,7 +471,7 @@ def speech(text: str) -> str:
 def _point(p: object, tape: dict, vars_: dict, where: str) -> dict:
     if not isinstance(p, dict) or "bar" not in p:
         raise LessonError(f"{where} needs a bar")
-    i = _bar(tape, p["bar"], f" ({where})")
+    i = _bar(tape, _bar_ref(vars_, p["bar"]), f" ({where})")
     if "price" in p:
         if not isinstance(p["price"], (int, float)) or isinstance(p["price"], bool):
             raise LessonError(f"{where}: price must be a number")
@@ -280,19 +496,32 @@ class _Ctx:
         self.drawn_buys: set = set()       # (var, bar) already marked since the last clear
 
     def step_cursor(self, ops: list) -> None:
-        """Move to where this step's seeks and plays leave the cursor."""
+        """Move to where this step's seeks and plays leave the cursor, and to the
+        frame it ends on. The frame is the bars on screen (the player shows from
+        its first bar to its last), so the cursor must end inside it."""
         for op in ops:
             if op.get("op") == "seek":
-                self.end = _bar(self.tape, op.get("bar"), " (seek)")
+                self.end = _bar(self.tape, _bar_ref(self.vars, op.get("bar")), " (seek)")
             elif op.get("op") == "play":
-                to = _bar(self.tape, op.get("to"), " (play)")
+                to = _bar(self.tape, _bar_ref(self.vars, op.get("to")), " (play)")
                 if to < self.end:
                     raise LessonError(f"play goes backwards (bar {to} < cursor {self.end}); use seek")
                 self.end = to
+            elif op.get("op") == "frame":
+                a, b = (_bar(self.tape, _bar_ref(self.vars, op.get(k)), " (frame)") for k in ("from", "to"))
+                if a >= b:
+                    raise LessonError("a frame must run forwards (from < to)")
+                self.frame = (a, b)
+        if not self.frame[0] <= self.end <= self.frame[1]:
+            raise LessonError(f"the cursor (bar {self.end}) is outside the frame "
+                              f"(bars {self.frame[0]}..{self.frame[1]}): it would play off screen")
 
     def visible(self, bar: int, what: str) -> None:
         if bar > self.end:
             raise LessonError(f"{what} on bar {bar} is not revealed yet (cursor ends at bar {self.end})")
+        if not self.frame[0] <= bar <= self.frame[1]:
+            raise LessonError(f"{what} on bar {bar} is outside the frame "
+                              f"(bars {self.frame[0]}..{self.frame[1]}): it would sit off screen")
 
     def on_chart(self, price: float, what: str) -> None:
         bars = range(self.frame[0], self.frame[1] + 1)
@@ -336,16 +565,16 @@ def _op_drawing(op: dict, ctx: _Ctx) -> list:
 
 def _op(op: dict, ctx: _Ctx) -> list:
     kind, tape = op.get("op"), ctx.tape
-    if kind == "frame":
-        a, b = _bar(tape, op.get("from"), " (frame)"), _bar(tape, op.get("to"), " (frame)")
-        if a >= b:
-            raise LessonError("a frame must run forwards (from < to)")
-        ctx.frame = (a, b)
-        return [{"op": "frame", "from_ts": tape["ts"][a], "to_ts": tape["ts"][b]}]
+
+    def bar(key: str) -> int:
+        return _bar(tape, _bar_ref(ctx.vars, op.get(key)), f" ({kind})")
+
+    if kind == "frame":                   # validated, and ctx.frame set, by step_cursor
+        return [{"op": "frame", "from_ts": tape["ts"][bar("from")], "to_ts": tape["ts"][bar("to")]}]
     if kind == "seek":
-        return [{"op": "seek", "ts": tape["ts"][_bar(tape, op.get("bar"), " (seek)")]}]
+        return [{"op": "seek", "ts": tape["ts"][bar("bar")]}]
     if kind == "play":
-        return [{"op": "play", "to_ts": tape["ts"][_bar(tape, op.get("to"), " (play)")]}]
+        return [{"op": "play", "to_ts": tape["ts"][bar("to")]}]
     if kind == "clear":
         ctx.drawn_buys.clear()
         return [{"op": "clear"}]
@@ -468,11 +697,30 @@ def _bake_all(built: list, out: Path, bake: Bake, voice_key: str) -> set:
     return keep
 
 
+def lesson_seconds(lesson: dict) -> float:
+    """How long a built lesson plays: its narration plus the player's breath between steps."""
+    steps = lesson["steps"]
+    return (sum(s["durMs"] for s in steps) + STEP_GAP_MS * (len(steps) - 1)) / 1000
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
+def _check_lengths(built: list, floor_s: float) -> None:
+    sold = {lsn["class"] for lsn in built if not lsn["free"]}
+    short = [lsn for lsn in built if lsn["class"] in sold and lesson_seconds(lsn) < floor_s]
+    if short:
+        raise LessonError(", ".join(f"{lsn['id']} runs {_clock(lesson_seconds(lsn))}" for lsn in short)
+                          + f": every lesson in a class with paid lessons must run at least {_clock(floor_s)}")
+
+
 def _catalog(built: list, class_meta: dict) -> dict:
     return {"classes": [
         {"id": cid, "title": meta.get("title", cid) if isinstance(meta, dict) else cid,
          "tagline": meta.get("tagline", "") if isinstance(meta, dict) else "",
          "lessons": [{"id": lsn["id"], "title": lsn["title"], "free": lsn["free"], "file": f"{lsn['id']}.json",
+                      "seconds": round(lesson_seconds(lsn)),
                       "audio": [s["audio"] for s in lsn["steps"]]} for lsn in built if lsn["class"] == cid]}
         for cid, meta in class_meta.items()]}
 
@@ -480,11 +728,13 @@ def _catalog(built: list, class_meta: dict) -> dict:
 def build_all(sources: list, tapes: dict, class_meta: dict, out, bake: Bake,
               voice_key: str = VOICE_VERSION) -> list:
     """Compile EVERY lesson (nothing is written if any fails), bake new narration,
-    then write lesson files, the catalogue LAST, and prune unused audio."""
+    refuse a class for sale whose lessons are too short, then write lesson files,
+    the catalogue LAST, and prune unused audio."""
     built = compile_all(sources, tapes, class_meta)
     out = Path(out)
     (out / "audio").mkdir(parents=True, exist_ok=True)
     keep = _bake_all(built, out, bake, voice_key)
+    _check_lengths(built, MIN_PAID_CLASS_LESSON_S)     # after the bake: only then is the length known
     for lesson in built:
         _write_atomic(out / f"{lesson['id']}.json", json.dumps(lesson))
     _write_atomic(out / "catalog.json", json.dumps(_catalog(built, class_meta), indent=1))
