@@ -22,7 +22,8 @@ Authored ops (in a step's "do" list):
   mark  {bar, at|price|var, dir}
   line  {a: {bar, at|price|var}, b: {...}}
   level {price|var, title}   horizontal line
-  buys  {var}                every buy of a DCA plan revealed so far and not yet drawn
+  buys  {var}                every buy of a DCA or Para-Sail plan revealed so far and not yet drawn
+  sails {var}                every para-sail sale of a Para-Sail plan revealed so far and not yet drawn
   clear                      remove the lesson's drawings
   spot  {tool, label}        spotlight a real app control while this step plays
                              (teaches the app itself; tool must be in TOOLS)
@@ -33,6 +34,7 @@ step's FINAL cursor. The chart starts on the tape's last bar.
 """
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import hashlib
 import json
@@ -379,8 +381,141 @@ def _shift(spec: dict, tape: dict) -> SimpleNamespace:
                            price_spread_pct=(max(closes) / min(closes) - 1) * 100)
 
 
+# ------------------------------------------------------------------ the Para-Sail strategy (owner 2026-09-30)
+# Shop the low, take the icing, cap every name. Rob's rules, in the order the class teaches them:
+#   BUY        one `fill` when the close sits within `zone` of the lowest close of the last `low_days`
+#              calendar days, at most once every `gap_days`
+#   PARA-SAIL  once the open position is worth `sail_at` more than it cost, sell `sell` of it — once per
+#              wave; the next buy re-arms it. `hold` = never sell (BTC is held, not para-sailed)
+#   CAP        never more than `cap` of your own money in (put in minus taken out)
+# Every trade pays the app's own cost model (backtest.cost_model), so a lesson's numbers match the app's.
+DAY_S = 86_400
+
+
+def _is_num(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _trade_cost(tape: dict) -> float:
+    """Commission + slippage per side, the app's own model for this kind of asset."""
+    import sys
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import backtest
+    return sum(backtest.cost_model("crypto" if tape.get("kind") == "crypto" else "stock"))
+
+
+def _zone_spec(spec: dict, what: str) -> tuple[int, float]:
+    low_days, zone = spec.get("low_days", 30), spec.get("zone", 0.08)
+    if not _whole(low_days):
+        raise LessonError(f"{what}: low_days must be a whole number of days, 1 or more")
+    if not (_is_num(zone) and 0 < zone < 1):
+        raise LessonError(f"{what}: zone must be a fraction between 0 and 1 (0.08 = 8 %)")
+    return low_days, float(zone)
+
+
+def _trailing_low(tape: dict, i: int, low_days: int) -> tuple[float, int]:
+    """The lowest close of the last `low_days` calendar days up to and including bar i, and its bar
+    (the latest one on a tie). Calendar days, not bars: a month is a month on crypto and on stocks."""
+    first = bisect.bisect_right(tape["ts"], tape["ts"][i] - low_days * DAY_S)
+    low_bar = min(range(first, i + 1), key=lambda k: (_close(tape, k), -k))
+    return _close(tape, low_bar), low_bar
+
+
+def _zone(spec: dict, tape: dict) -> SimpleNamespace:
+    """Where one bar sits against its trailing low: the low, the top of the buy zone, and "inside"
+    or "above" as a word, so the narration can never say inside while the chart shows above."""
+    i = _bar(tape, spec.get("bar"), " in a zone var")
+    low_days, zone = _zone_spec(spec, "a zone var")
+    low, low_bar = _trailing_low(tape, i, low_days)
+    top, close = low * (1 + zone), _close(tape, i)
+    out = {"bar": i, "date": _date(tape["ts"][i]), "close": close, "low": low, "low_bar": low_bar,
+           "low_date": _date(tape["ts"][low_bar]), "top": top, "zone_pct": zone * 100, "low_days": low_days}
+    if close <= top:
+        out.update(where="inside", over_low_pct=(close / low - 1) * 100)
+    else:
+        out.update(where="above", above_pct=(close / top - 1) * 100)
+    return SimpleNamespace(**out)
+
+
+def _parasail_spec(spec: dict) -> dict:
+    what = "a parasail plan"
+    low_days, zone = _zone_spec(spec, what)
+    gap_days, fill, cap = spec.get("gap_days", 7), spec.get("fill", 100), spec.get("cap", 2_000)
+    sail_at, sell, hold = spec.get("sail_at", 0.40), spec.get("sell", 0.5), spec.get("hold", False)
+    if not _whole(gap_days):
+        raise LessonError(f"{what}: gap_days must be a whole number of days, 1 or more")
+    if not (_is_num(fill) and fill > 0):
+        raise LessonError(f"{what}: fill must be a positive amount")
+    if not (_is_num(cap) and cap >= fill):
+        raise LessonError(f"{what}: cap must be at least one fill")
+    if not (_is_num(sail_at) and sail_at > 0):
+        raise LessonError(f"{what}: sail_at must be a positive fraction (0.40 = up 40 %)")
+    if not (_is_num(sell) and 0 < sell <= 1):
+        raise LessonError(f"{what}: sell must be a fraction above 0, at most 1 (0.5 = half)")
+    if not isinstance(hold, bool):
+        raise LessonError(f"{what}: hold must be true or false")
+    return {"low_days": low_days, "zone": zone, "gap_days": gap_days, "fill": float(fill), "cap": float(cap),
+            "sail_at": float(sail_at), "sell": float(sell), "hold": hold}
+
+
+def _parasail(spec: dict, tape: dict) -> SimpleNamespace:
+    """Rob's Para-Sail strategy run bar by bar over the window, and the same buys held without ever
+    selling, so every lesson can show both sides. Money is scored against `peak`, the most of your own
+    money that was ever in at once: sold cash goes back into the next buys, so money-in overstates it."""
+    rules = _parasail_spec(spec)
+    start, end = _window(spec, tape, "a parasail plan")
+    side = _trade_cost(tape)
+    buys, sails = [], []
+    units = cost = net = peak = proceeds = invested = 0.0
+    armed, last_fill, cap_bar = True, None, None
+    for i in range(start, end + 1):
+        price, t = _close(tape, i), tape["ts"][i]
+        if units > 0 and armed and not rules["hold"] and units * price >= cost * (1 + rules["sail_at"]):
+            out_units = units * rules["sell"]
+            cash = out_units * price * (1 - side)
+            units, cost, net, proceeds, armed = units - out_units, cost * (1 - rules["sell"]), net - cash, proceeds + cash, False
+            sails.append({"bar": i, "ts": t, "price": price, "proceeds": cash})
+            continue
+        low, _ = _trailing_low(tape, i, rules["low_days"])
+        if price > low * (1 + rules["zone"]) or (last_fill is not None and t - last_fill < rules["gap_days"] * DAY_S):
+            continue
+        if net + rules["fill"] > rules["cap"] + 1e-9:
+            cap_bar = i if cap_bar is None else cap_bar
+            continue
+        units += rules["fill"] * (1 - side) / price
+        cost, net, invested = cost + rules["fill"], net + rules["fill"], invested + rules["fill"]
+        peak, last_fill, armed = max(peak, net), t, True
+        buys.append({"bar": i, "ts": t, "price": price})
+    if not buys:
+        raise LessonError("a parasail plan made no buys in its window: nothing to teach")
+    last = _close(tape, end)
+    value = units * last
+    profit = value - net
+    roi = profit / peak * 100
+    hold_value = sum(rules["fill"] * (1 - side) / b["price"] for b in buys) * last
+    hold_roi = (hold_value - invested) / invested * 100
+    out = {"buys": buys, "sails": sails, "n": len(buys), "n_sails": len(sails), "invested": invested, "peak": peak,
+           "proceeds": proceeds, "units": units, "value": value, "profit": profit, "profit_abs": abs(profit),
+           "profit_word": "profit" if profit >= 0 else "loss", "roi": roi, "roi_say": _pct_say(roi),
+           "last_price": last, "first_date": _date(tape["ts"][start]), "last_date": _date(tape["ts"][end]),
+           "hold_value": hold_value, "hold_profit": hold_value - invested, "hold_roi": hold_roi,
+           "hold_roi_say": _pct_say(hold_roi), "zone_pct": rules["zone"] * 100, "sail_pct": rules["sail_at"] * 100,
+           "low_days": rules["low_days"], "cap": rules["cap"], "fill": rules["fill"]}
+    if units > 0:
+        out["avg"] = cost / units
+    if sails:
+        first = sails[0]
+        out.update(first_sail_bar=first["bar"], first_sail_date=_date(first["ts"]), first_sail_price=first["price"])
+    if cap_bar is not None:
+        out.update(cap_bar=cap_bar, cap_date=_date(tape["ts"][cap_bar]))
+    return SimpleNamespace(**out)
+
+
 VAR_FNS = {"dca": _dca, "breakeven": _breakeven, "dca_at": _dca_at, "wizard": _wizard,
-           "bar": _bar_var, "underwater": _underwater, "rolling": _rolling, "shift": _shift}
+           "bar": _bar_var, "underwater": _underwater, "rolling": _rolling, "shift": _shift,
+           "parasail": _parasail, "zone": _zone}
 
 
 def _date(ts: int) -> str:
@@ -556,14 +691,15 @@ def _op_drawing(op: dict, ctx: _Ctx) -> list:
             raise LessonError("a level needs a price or var")
         ctx.on_chart(float(price), "a level")
         return [{"op": "level", "price": round(float(price), 4), "title": _label(op.get("title"), "a level title")}]
-    if kind == "buys":
-        name = op.get("var")
+    if kind in ("buys", "sails"):             # a plan's buys (dca or parasail), or a parasail plan's sales
+        name, field, dir_ = op.get("var"), kind, "buy" if kind == "buys" else "sell"
         plan = ctx.vars.get(name)
-        if not isinstance(plan, SimpleNamespace) or not hasattr(plan, "buys"):
-            raise LessonError(f"buys needs a dca var, got {name!r}")
-        fresh = [b for b in plan.buys if b["bar"] <= ctx.end and (name, b["bar"]) not in ctx.drawn_buys]
-        ctx.drawn_buys.update((name, b["bar"]) for b in fresh)
-        return [{"op": "mark", "ts": b["ts"], "price": b["price"], "dir": "buy"} for b in fresh]
+        if not isinstance(plan, SimpleNamespace) or not hasattr(plan, field):
+            raise LessonError(f"buys needs a dca var, got {name!r}" if kind == "buys"
+                              else f"sails needs a parasail var, got {name!r}")
+        fresh = [b for b in getattr(plan, field) if b["bar"] <= ctx.end and (name, dir_, b["bar"]) not in ctx.drawn_buys]
+        ctx.drawn_buys.update((name, dir_, b["bar"]) for b in fresh)
+        return [{"op": "mark", "ts": b["ts"], "price": b["price"], "dir": dir_} for b in fresh]
     raise LessonError(f"unknown op {kind!r}")
 
 

@@ -42,7 +42,7 @@ class PcDrawings {
 
 function _pdColorForDir(dir) {
   const c = (pc && pc.colors) || { buy: "#2fd180", sell: "#ff5d6c" };
-  if (dir === "put" || dir === "short") return c.sell;
+  if (dir === "put" || dir === "short" || dir === "sell") return c.sell;   // sell = a lesson's para-sail sale
   if (dir === "call" || dir === "long" || dir === "buy") return c.buy;   // buy = a lesson's DCA buy
   return PD_GOLD;
 }
