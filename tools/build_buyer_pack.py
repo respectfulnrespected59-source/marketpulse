@@ -84,6 +84,7 @@ BASE = [
     # loads it unconditionally, so a Pro-only placement would 404 the free
     # build. The feature gate is server-side — /api/options/* returns 402.
     "static/options-paper.js",
+    "static/options-parasail.js",  # Para-Sail rules on the options book (on plan, icing, time parachute, scorecard)
     "static/chart-options.js",
     # Classes UI and player (no lesson content: that streams from the web app).
     "static/lesson-engine.js",

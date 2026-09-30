@@ -12,7 +12,7 @@
  *
  * Bump SHELL_VERSION on any shell asset change to invalidate old caches.
  */
-const SHELL_VERSION = "mp-shell-v29";
+const SHELL_VERSION = "mp-shell-v30";
 const SHELL_ASSETS = [
   "/",
   "/app",
@@ -44,6 +44,7 @@ const SHELL_ASSETS = [
   "/license.js",
   "/desk.js",
   "/parasail-ui.js",
+  "/options-parasail.js",
   "/wizards.js",
   "/paper.js",
   "/options-paper.js",
