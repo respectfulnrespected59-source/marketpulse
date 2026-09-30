@@ -46,6 +46,12 @@ try:
     import dca
 except ModuleNotFoundError:
     dca = None
+# The Para-Sail strategy (owner 2026-09-30) — the same engine the Classes lessons run. It prices
+# every trade with backtest.cost_model, so it ships and unlocks alongside the DCA wizard.
+try:
+    import parasail
+except ModuleNotFoundError:
+    parasail = None
 try:
     import options
 except ModuleNotFoundError:
@@ -77,6 +83,42 @@ _INSTALLED = {
 def _enabled(feature: str) -> bool:
     """True only if the tier grants the feature AND its module shipped."""
     return bool(config.features().get(feature)) and _INSTALLED.get(feature, True)
+
+
+PARASAIL_MIN_BARS = 31   # a month's low needs a month of closes, and one more day to act on it
+BTC_IDS = frozenset({"bitcoin", "btc"})
+
+
+def _held_as_money(symbol: str, kind: str) -> bool:
+    """The owner's rule: BTC is held, never para-sailed — it's the coin we treat as money."""
+    return kind == "crypto" and symbol.lower() in BTC_IDS
+
+
+def _parasail_report(symbol: str, kind: str, dates: list, closes: list, hold: bool) -> dict:
+    """The Para-Sail strategy (parasail.py) on a symbol's daily history with the owner's rules: where
+    price sits against its monthly low right now, every buy and sale, and the same buys held."""
+    ts = [int(datetime.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp())
+          for d in dates]
+    rules = parasail.Rules(hold=hold)
+    r = parasail.simulate(ts, closes, kind, rules)
+    last = len(closes) - 1
+    low, low_bar = parasail.trailing_low(ts, closes, last, rules.low_days)
+    top, close = low * (1 + rules.zone), float(closes[last])
+    out = {
+        "symbol": symbol.upper(), "kind": kind, "hold": hold, "since": dates[0], "until": dates[-1],
+        "rules": {"low_days": rules.low_days, "zone_pct": rules.zone * 100, "gap_days": rules.gap_days,
+                  "fill": rules.fill, "cap": rules.cap, "sail_pct": rules.sail_at * 100, "sell_pct": rules.sell * 100},
+        # gap_pct: how far the close sits from the TOP of the buy zone (negative = inside it)
+        "zone": {"low": low, "low_date": dates[low_bar], "top": top, "close": close,
+                 "where": "inside" if close <= top else "above", "gap_pct": (close / top - 1) * 100},
+        "buys": [{"date": dates[b["bar"]], "price": b["price"]} for b in r["buys"]],
+        "sails": [{"date": dates[s["bar"]], "price": s["price"], "proceeds": s["proceeds"]} for s in r["sails"]],
+        **{k: r[k] for k in ("n", "n_sails", "invested", "peak", "proceeds", "value", "profit", "roi",
+                             "hold_profit", "hold_roi")},
+    }
+    if "cap_bar" in r:
+        out["cap_date"] = dates[r["cap_bar"]]
+    return out
 
 
 def _options_paper_enabled() -> bool:
@@ -1812,6 +1854,27 @@ class Handler(BaseHTTPRequestHandler):
                                        "error": "not enough history"})
                 report = dca.dca_report(dates, closes, kind, symbol, monthly, cadence, years)
                 return self._json(_store(key, report))
+            except InvalidSymbol as exc:
+                return self._json({"error": str(exc)}, code=400)
+            except Exception as exc:  # noqa: BLE001
+                return self._json({"error": self._upstream_failed(path, exc)}, code=502)
+
+        if path == "/api/parasail":
+            if not _enabled("dca") or parasail is None:
+                return self._json({"locked": True, "upgrade": config.UPGRADE_URL,
+                                   "error": "The Para-Sail strategy is a Pro feature."}, code=402)
+            try:
+                symbol, kind = self._symbol_and_kind(params)
+                hold_raw = params.get("hold", [""])[0]
+                hold = hold_raw == "1" if hold_raw in ("0", "1") else _held_as_money(symbol, kind)
+                key = f"parasail:{kind}:{symbol.lower()}:{hold}"
+                cached = _cached(key)
+                if cached is not None:
+                    return self._json(cached)
+                dates, closes = fetch_history(kind, symbol)
+                if len(closes) < PARASAIL_MIN_BARS:
+                    return self._json({"symbol": symbol.upper(), "kind": kind, "error": "not enough history"})
+                return self._json(_store(key, _parasail_report(symbol, kind, dates, closes, hold)))
             except InvalidSymbol as exc:
                 return self._json({"error": str(exc)}, code=400)
             except Exception as exc:  # noqa: BLE001

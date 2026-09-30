@@ -123,6 +123,7 @@ PRO_ONLY = [
     "options_paper.py",   # position model + live mark for the options paper book
     "backtest.py",
     "dca.py",
+    "parasail.py",        # the Para-Sail strategy engine (prices trades with backtest.cost_model)
     # tests that exercise the Pro modules (they would fail to import in FREE)
     "tests/test_options.py",
     "tests/test_options_paper.py",
