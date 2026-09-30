@@ -243,6 +243,14 @@ def _audit():
     return audit_deployed
 
 
+@pytest.fixture(autouse=True)
+def dca_is_a_paid_class(request, monkeypatch):
+    """The gate checks need a class the plan charges for. The real plan (2026-09-30) charges
+    for none, so these tests name one; tests with real_plan in their name get the plan as shipped."""
+    if "real_plan" not in request.node.name:
+        monkeypatch.setattr(_audit(), "PAID_CLASSES", frozenset({"dca"}))
+
+
 CATALOG = json.dumps({"classes": [{"id": "dca", "lessons": [{"id": "dca-01", "free": True, "seconds": 540},
                                                             {"id": "dca-02", "free": False, "seconds": 560}]}]})
 PAID = ["/api/classes/lesson?id=dca-02", "/api/classes/audio?id=dca-02&step=0"]
@@ -342,7 +350,41 @@ def test_the_audit_and_the_build_agree_on_the_minimum_length():
 def test_the_hourly_budgets_fit_full_length_lessons():
     # A lesson load is the lesson plus one clip per step. Sized for ~13-request loads, the old
     # budgets shut a paying student out on the seventh 64-step lesson of the hour.
-    load = 70 + 1
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(app.__file__).resolve().parent / "tools" / "classes"))
+    import lesson_compiler
+    load = lesson_compiler.MAX_LESSON_STEPS + 1              # the build refuses a longer lesson
     assert app.CLASSES_PER_KEY_PER_HOUR // load >= 20          # a whole class, rewatched, per key
     assert app.CLASSES_PER_CLIENT_PER_HOUR // load >= 40       # a classroom behind one address
     assert app.CLASSES_PER_KEY_PER_HOUR <= app.CLASSES_PER_CLIENT_PER_HOUR
+
+
+# ------------------------------------------------------------------ the classes are free (owner, 2026-09-30)
+ALL_FREE = json.dumps({"classes": [
+    {"id": "setup", "lessons": [{"id": "setup-01", "free": True, "seconds": 80}]},
+    {"id": "dca", "lessons": [{"id": "dca-01", "free": True, "seconds": 598},
+                              {"id": "dca-02", "free": True, "seconds": 590}]}]})
+
+
+def test_the_real_plan_charges_for_no_class():
+    assert _audit().PAID_CLASSES == frozenset()
+
+
+def test_the_real_plan_passes_a_host_where_every_lesson_is_free():
+    assert _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, ALL_FREE)})) == []
+
+
+def test_the_real_plan_goes_red_when_a_lesson_is_still_locked():
+    # A deploy that pulled the old lessons would show a PASS badge on a class we give away.
+    problems = _audit().audit_classes_gate("h", get=fake_host())       # CATALOG marks dca-02 paid
+    assert any("dca-02" in p and "free" in p for p in problems)
+
+
+def test_the_real_plan_still_wants_full_length_lessons_in_a_free_class():
+    # Free is not a licence to be short: the DCA class is held to 8:00 whether or not it is sold.
+    short = json.loads(ALL_FREE)
+    short["classes"][1]["lessons"][0]["seconds"] = 88
+    problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, json.dumps(short))}))
+    assert any("dca-01" in p and "1:28" in p for p in problems)
+    assert not any("setup-01" in p for p in problems)                  # not yet rebuilt: not yet held to it

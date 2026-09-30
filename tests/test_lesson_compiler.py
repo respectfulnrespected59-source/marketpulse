@@ -819,3 +819,39 @@ def test_a_drawing_is_checked_against_the_frame_its_own_step_ends_on():
     src = lesson([step(do=[{"op": "seek", "bar": 9}, {"op": "mark", "bar": 1}, {"op": "frame", "from": 4, "to": 9}])])
     with pytest.raises(lc.LessonError, match="frame"):
         lc.compile_lesson(src, FLAT)
+
+
+def test_a_lesson_cannot_outgrow_the_servers_request_budget():
+    # The player fetches one narration clip per step before it starts. The hourly budgets in
+    # app.py are sized for MAX_LESSON_STEPS, so a longer lesson must be a decision, not a drift.
+    lc.compile_lesson(lesson([step()] * lc.MAX_LESSON_STEPS), FLAT)
+    with pytest.raises(lc.LessonError, match="steps"):
+        lc.compile_lesson(lesson([step()] * (lc.MAX_LESSON_STEPS + 1)), FLAT)
+
+
+# ------------------------------------------------------------------ a full-length class, sold or free
+FULL = {"dca": {"title": "DCA", "min_minutes": 8}}
+
+
+def test_a_free_class_declared_full_length_is_held_to_it(tmp_path):
+    # The owner made the classes free (09-30). Free is not a licence to be short.
+    with pytest.raises(lc.LessonError, match=r"dca-01 runs 0:01.*8:00"):
+        lc.build_all([lesson([step()])], {"t": FLAT}, FULL, tmp_path, bake=fake_bake())
+    assert not (tmp_path / "catalog.json").exists()
+    # A new line, so the short take above is not reused: the same words would keep their length.
+    lc.build_all([lesson([step(say="A full lesson.")])], {"t": FLAT}, FULL, tmp_path, bake=long_bake(480_000))
+    assert (tmp_path / "catalog.json").is_file()
+
+
+def test_a_declared_length_cannot_undercut_the_floor_of_a_class_for_sale(tmp_path):
+    meta = {"dca": {"title": "DCA", "min_minutes": 1}}
+    free, paid = lesson([step(say="One.")]), lesson([step(say="Two.")], id="dca-02", free=False)
+    with pytest.raises(lc.LessonError, match="8:00"):
+        lc.build_all([free, paid], {"t": FLAT}, meta, tmp_path, bake=long_bake(100_000))
+
+
+@pytest.mark.parametrize("bad", [-1, "8", True, float("nan"), 600])
+def test_a_nonsense_declared_length_stops_the_build(tmp_path, bad):
+    with pytest.raises(lc.LessonError, match="min_minutes"):
+        lc.build_all([lesson([step()])], {"t": FLAT}, {"dca": {"title": "DCA", "min_minutes": bad}}, tmp_path,
+                     bake=fake_bake())

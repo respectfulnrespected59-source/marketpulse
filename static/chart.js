@@ -211,10 +211,11 @@ function _syncCursorRange(d) {
  * zooms in on part of a multi-year tape. `key` changes whenever the frame does,
  * which is what tells the chart engine to re-frame. */
 function _replayWindow(fullTs) {
-  const last = replay.toTs ? _indexOfTs(fullTs, replay.toTs) : -1;
+  const toTs = lessonView ? replay.toTs : null;         // only a lesson names its frame's end
+  const last = toTs ? _indexOfTs(fullTs, toTs) : -1;
   const end = Math.max(last >= 0 ? last : _sessionEndIdx(fullTs, replay.from), replay.upto);
   const fromTs = fullTs[replay.from];
-  return { from: replay.from, fromTs, end, key: `${fromTs}|${replay.toTs || ""}` };
+  return { from: replay.from, fromTs, end, key: `${fromTs}|${toTs || ""}` };
 }
 
 /* Jump to the open and walk forward — the "study the session" entry point. */
@@ -717,12 +718,16 @@ function _renderReplayStatus(ts) {
 // The date still gets said once per session change, by the session dividers in chart-draw.js.
 const TIME_AXIS_TFS = PC_INTRADAY_TFS;    // chart-theme.js
 
-// A daily or weekly candle is a calendar day, not a moment: it keeps its own
-// (UTC) date for every viewer, the same date the axis shows (pcTimes) and a
-// lesson's narration says. In Pacific time a candle dated the 5th used to read "4".
+// A daily or weekly candle is a calendar day, not a moment: it keeps the
+// exchange's own date for every viewer, the same date the axis shows (pcTimes)
+// and a lesson's narration says. In Pacific time a candle dated the 5th used to
+// read "4". The exchange's offset comes with the tape (none for crypto: UTC).
 function _fmtAxisTime(dt, tf) {
   if (TIME_AXIS_TFS.has(tf)) {
     return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   }
-  return dt.toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" });
+  const tape = lessonView ? lessonView.lesson.tape : liveLast.data;
+  const exchange = (Number(tape && tape.gmtoffset) || 0) * 1000;
+  return new Date(dt.getTime() + exchange)
+    .toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" });
 }

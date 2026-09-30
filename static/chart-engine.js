@@ -250,8 +250,10 @@ function pcApplyDefaultView() {
  * (chart-theme.js timeScale.minBarSpacing) a ~260px plot holds 260 candles, and a
  * full-length lesson zooms out to five years of daily bars (1,825). At 0.5 that
  * zoom-out showed only the last 15 months while the narration pointed at 2022.
- * Lessons pack tighter while they run; false puts the everyday limit back. */
-const PC_LESSON_MIN_BAR = 0.1;
+ * Lessons pack tighter while they run; false puts the everyday limit back. The
+ * floor leaves room for a ten-year tape (3,650 bars), the longest capture_tape
+ * allows; the frame picks the real spacing, this only stops it being refused. */
+const PC_LESSON_MIN_BAR = 0.02;
 const PC_DEFAULT_MIN_BAR = 1;
 let pcLessonTight = false;
 function pcLessonSpacing(on) {
@@ -343,7 +345,7 @@ function pcRender(m) {
   const n = Math.min((d.ohlc || []).length, (d.ts || []).length);
   const prev = (pcTape.key === m.identity) ? _pcCaptureView() : null;
   if (pcTape.key !== m.identity) pcReplayFramedFor = null;
-  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: pcTimes(d.ts, n, m.tf),
+  pcTape = { key: m.identity, n, revealed: Math.min(m.revealed, n), times: pcTimes(d.ts, n, m.tf, d.gmtoffset),
              ts: d.ts, ohlc: d.ohlc, vol: d.volume || [], tf: m.tf };
   const { ohlc, revealed } = pcTape;
 

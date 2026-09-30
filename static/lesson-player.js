@@ -61,7 +61,10 @@ async function _lessonGet(path, signal) {
 
 function _lessonShapeOk(lesson) {
   const ts = lesson && lesson.tape && lesson.tape.ts;
-  return Array.isArray(ts) && ts.length > 1 && Array.isArray(lesson.steps) && lesson.steps.length > 0
+  // The timeframe decides how the chart dates its candles: one it doesn't know would
+  // quietly fall back to the viewer's clock and put daily candles a day out.
+  return Array.isArray(ts) && ts.length > 1 && TF_ORDER.includes(lesson.tape.tf)
+    && Array.isArray(lesson.steps) && lesson.steps.length > 0
     && lesson.steps.every((s) => Array.isArray(s.do) && s.do.every((op) =>
       !("ts" in op || "to_ts" in op || "from_ts" in op)
       || lessonIndexOfTs(ts, op.ts != null ? op.ts : op.to_ts != null ? op.to_ts : op.from_ts) >= 0));

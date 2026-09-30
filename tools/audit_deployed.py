@@ -171,15 +171,22 @@ def _get(url: str, headers: dict | None = None) -> tuple[int, str]:
         return 0, ""
 
 
-# The owner's rule (docs/CLASSES_PLAN.md): lesson 1 of every class is free, the rest
-# need the pass; the setup class is free throughout. The audit holds the server to
-# THIS, not to the server's own "free" flags, so a flag flipped by a bug goes red.
-FREE_CLASSES = frozenset({"setup"})
+# The owner's rule (2026-09-30): the classes are FREE, every lesson of every class.
+# (The first build sold lessons 2+ of each class behind a $19/mo pass.) The audit
+# holds the server to THIS, not to the server's own "free" flags: a lesson that
+# comes back locked, or one that is free when the plan charges for it, goes red.
+# A class the owner later decides to charge for is named here; lesson 1 of it
+# stays free and the rest must be refused without a key.
+PAID_CLASSES: frozenset = frozenset()
+# Classes already rebuilt at full length (8-10 minutes a lesson, the owner's
+# standard). Free is not a licence to be short. Listed, not inferred from the
+# server: an audit that silently changes its own scope is not an audit.
+FULL_LENGTH_CLASSES = frozenset({"dca"})
 
 
 def _should_be_paid(lesson_id: str) -> bool:
     cls, _, num = lesson_id.partition("-")
-    return cls not in FREE_CLASSES and num != "01"
+    return cls in PAID_CLASSES and num != "01"
 
 
 def _probe_paid(host: str, lesson_id: str, get) -> list[str]:
@@ -195,36 +202,38 @@ def _probe_paid(host: str, lesson_id: str, get) -> list[str]:
 
 
 def _audit_lengths(classes: list) -> list[str]:
-    """A class we charge for must be full-length lessons, and the catalogue must
-    SAY how long each runs. On 2026-09-30 ten lessons of about 90 seconds were
-    live behind a $19/mo pass and every other check on this page was green:
-    nothing anywhere measured a lesson's length."""
+    """A full-length class (FULL_LENGTH_CLASSES, and any class with a paid lesson)
+    must be full-length lessons, and the catalogue must SAY how long each runs.
+    On 2026-09-30 ten lessons of about 90 seconds were live behind a $19/mo pass
+    and every other check on this page was green: nothing anywhere measured a
+    lesson's length."""
     problems = []
     for c in classes:
         lessons = c.get("lessons", [])
-        if all(l.get("free") for l in lessons):
-            continue                          # a class given away may be as short as it likes
+        if c.get("id") not in FULL_LENGTH_CLASSES and all(l.get("free") for l in lessons):
+            continue                          # not rebuilt yet, and nobody is charged for it
         for l in lessons:
             secs = l.get("seconds")
             known = isinstance(secs, int) and not isinstance(secs, bool) and secs > 0
             ok = known and secs >= MIN_PAID_CLASS_LESSON_S
             clock = f"{secs // 60}:{secs % 60:02d}" if known else "unknown"
             print(f"  {'OK   ' if ok else 'DRIFT'}  {l['id']} runs {clock} "
-                  f"(a class for sale needs {MIN_PAID_CLASS_LESSON_S // 60}:00+)")
+                  f"(a full-length class needs {MIN_PAID_CLASS_LESSON_S // 60}:00+)")
             if not known:
-                problems.append(f"{l['id']} is in a class for sale but the catalogue does not say how long it runs")
+                problems.append(f"{l['id']} is in a full-length class but the catalogue does not say how long it runs")
             elif not ok:
-                problems.append(f"{l['id']} runs {clock}: every lesson of a class for sale must run "
+                problems.append(f"{l['id']} runs {clock}: every lesson of a full-length class must run "
                                 f"{MIN_PAID_CLASS_LESSON_S // 60}:00 or more")
     return problems
 
 
 def audit_classes_gate(host: str, get=None) -> list[str]:
-    """Paid lessons AND their audio must be refused without a valid license, the
-    catalogue must not call a paid lesson free, and the compiled files must not be
-    reachable as plain files. Asks the running host."""
+    """The catalogue must match the plan (free lessons open, paid ones locked),
+    full-length classes must be full length, paid lessons AND their audio must be
+    refused without a valid license, and the compiled files must not be reachable
+    as plain files. Asks the running host."""
     get = get or _get
-    print("\n--- Classes: paid lessons stay behind the license ---")
+    print("\n--- Classes: the live catalogue matches the plan ---")
     code, body = get(f"{host}/api/classes", None)
     if code != 200:
         return [f"/api/classes answered {code}"]
@@ -236,6 +245,11 @@ def audit_classes_gate(host: str, get=None) -> list[str]:
         return ["/api/classes did not return a catalogue"]
     problems = [f"catalogue marks {lid} FREE but the plan says it is paid"
                 for lid, free in ids if free and _should_be_paid(lid)]
+    # The other way round is what a student sees: a PASS badge and a lock on a
+    # lesson we give away (a deploy that pulled the lessons as they were sold).
+    locked = [lid for lid, free in ids if not free and not _should_be_paid(lid)]
+    print(f"  {'OK   ' if not locked else 'DRIFT'}  {len(locked)} lesson(s) locked that the plan gives away (expected 0)")
+    problems += [f"catalogue LOCKS {lid} behind the pass but the plan says it is free" for lid in locked]
     problems += _audit_lengths(classes)
     # Lessons have been published since 2026-09-29, so an empty catalogue means the
     # deploy-time pull failed (expired MP_CLASSES_TOKEN, renamed repo) and the site

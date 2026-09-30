@@ -137,17 +137,61 @@ process.stdout.write(JSON.stringify(cases.map(([fn, args]) => vm.runInContext(fn
 """
 
 
-def test_daily_candles_keep_their_own_calendar_date_in_every_time_zone():
-    # A lesson says "February 5" (the candle's UTC day). Shifted into Pacific time the same daily
-    # candle read "Feb 4" on the chart. A day is a label, not a moment: daily and weekly bars are
-    # not shifted; intraday bars still show the viewer's own clock.
+def test_daily_candles_keep_the_exchanges_calendar_date_in_every_time_zone():
+    # A lesson says "February 5" (the candle's own day). Shifted into the VIEWER's zone the same
+    # daily candle read "Feb 4" in Pacific time. A day is a label, not a moment: daily and weekly
+    # bars are placed on the EXCHANGE's calendar (its gmtoffset; 0 for crypto), whoever is looking.
+    # Intraday bars still show the viewer's own clock.
     if not NODE:
         pytest.skip("node is not installed")
     ts = [1_770_249_600 + i * DAY for i in range(4)]                # 00:00 UTC, four days running
-    cases = [("(ts, tf) => pcTimes(ts, ts.length, tf)", [ts, tf]) for tf in ("1D", "1W", "5m")]
+    sydney = [t - 3600 for t in ts]                                 # 10:00 in Sydney = 23:00 UTC the day BEFORE
+    day = "(ts, tf, off) => pcTimes(ts, ts.length, tf, off).map((t) => new Date(t * 1000).toISOString().slice(0, 10))"
+    cases = [("(ts, tf) => pcTimes(ts, ts.length, tf, null)", [ts, tf]) for tf in ("1D", "1W", "5m")]
     cases.append(("(ts) => ts.map((t) => t - new Date(t * 1000).getTimezoneOffset() * 60)", [ts]))
+    cases += [(day, [sydney, "1D", 39600]), (day, [[t + 13 * 3600 + 1800 for t in ts], "1D", -14400]), (day, [ts, "1D", None])]
     proc = subprocess.run([NODE, "-e", THEME_HARNESS, STATIC], input=json.dumps(cases), capture_output=True,
                           text=True, timeout=30, check=True, env={**os.environ, "TZ": "America/Los_Angeles"})
-    daily, weekly, intraday, local = json.loads(proc.stdout)
+    daily, weekly, intraday, local, asx, nyse, crypto = json.loads(proc.stdout)
     assert daily == ts and weekly == ts
     assert intraday == local and local != ts                         # the zone really was not UTC
+    want = ["2026-02-05", "2026-02-06", "2026-02-07", "2026-02-08"]
+    assert asx == want                       # stamped 23:00 UTC on the 4th: it is the 5th in Sydney
+    assert nyse == want and crypto == want
+
+
+REPLAY_HARNESS = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const src = fs.readFileSync(path.join(process.argv[1], "chart.js"), "utf8");
+const grab = (name) => {                 // one top-level function's source, LF or CRLF checkout
+  const m = src.match(new RegExp("function " + name + "\\([\\s\\S]*?\\r?\\n}\\r?\\n"));
+  if (!m) throw new Error("no " + name);
+  return m[0];
+};
+const ctx = { Math, replay: null, lessonView: null, liveTf: "1D", TIME_AXIS_TFS: new Set(["5m"]) };
+vm.createContext(ctx);
+vm.runInContext(grab("_indexOfTs") + grab("_sessionEndIdx") + grab("_replayWindow"), ctx);
+const cases = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(cases.map(([replay, lesson, ts]) => {
+  ctx.replay = replay; ctx.lessonView = lesson ? {} : null; return vm.runInContext("_replayWindow", ctx)(ts); })));
+"""
+
+
+def test_a_lesson_frame_ends_where_the_lesson_says_and_only_in_a_lesson():
+    # The wiring behind the zoom: replay.toTs -> the window's end and its key (a new key re-frames).
+    if not NODE:
+        pytest.skip("node is not installed")
+    ts = [1000 + i * DAY for i in range(100)]
+    base = {"on": True, "from": 20, "upto": 30}
+    cases = [[{**base, "toTs": ts[60]}, True, ts],       # a lesson zoomed in on bars 20..60
+             [{**base, "toTs": ts[99]}, True, ts],       # the same lesson zooms back out
+             [{**base, "toTs": None}, False, ts],        # an ordinary replay: the old behaviour
+             [{**base, "toTs": ts[60]}, False, ts],      # a stale toTs outside a lesson is ignored
+             [{**base, "upto": 70, "toTs": ts[60]}, True, ts]]   # the cursor may never be hidden by the frame
+    proc = subprocess.run([NODE, "-e", REPLAY_HARNESS, STATIC], input=json.dumps(cases), capture_output=True,
+                          text=True, timeout=30, check=True)
+    zoomed, wide, plain, stale, past = json.loads(proc.stdout)
+    assert (zoomed["from"], zoomed["end"]) == (20, 60) and (wide["from"], wide["end"]) == (20, 99)
+    assert zoomed["key"] != wide["key"]                  # the end changed, so the chart re-frames
+    assert plain["end"] == 99 and stale == plain         # daily replay frames to the end of the tape
+    assert past["end"] == 70

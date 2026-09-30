@@ -170,7 +170,12 @@ async function renderClasses(message) {
                                                + "New lessons are on the way."));
     return;
   }
-  body.replaceChildren(_unlockBox(message), ...classes.map(_classCard));
+  // The classes are free (2026-09-30), so there is normally no pass to offer: the unlock
+  // box only appears when the catalogue really has a lesson that needs one (or a locked
+  // lesson was just tapped and its message has to be shown somewhere).
+  const needsPass = classes.some((c) => c.lessons.some((l) => !l.free));
+  const cards = classes.map(_classCard);
+  body.replaceChildren(...(needsPass || message ? [_unlockBox(message), ...cards] : cards));
 }
 
 /* The server said 402 (or a locked row was tapped): show why and how to unlock. */

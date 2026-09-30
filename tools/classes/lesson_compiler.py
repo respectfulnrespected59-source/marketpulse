@@ -57,8 +57,12 @@ TOOLS = frozenset({"search", "timeframes", "indicators", "prepost", "mark", "tre
 VOICE_VERSION = "kokoro-v1"           # default voice key; build.py passes the real one
 STEP_GAP_MS = 450                     # the player's breath between steps (lesson-player.js LESSON_GAP_MS)
 # A class we charge for is a full class: every lesson in it, the free one that
-# sells it included, runs at least this long or the build stops.
+# sells it included, runs at least this long or the build stops. A free class
+# declares its own floor in classes.json ("min_minutes"); see _class_floors.
 MIN_PAID_CLASS_LESSON_S = 480
+# The player fetches one narration clip per step before a lesson starts, and the
+# hourly request budgets in app.py (CLASSES_PER_*_PER_HOUR) are sized for this.
+MAX_LESSON_STEPS = 70
 
 HONESTY = (
     (re.compile(r"\bguarantee", re.I), "a guarantee"),
@@ -599,6 +603,9 @@ def _check_header(src: object) -> None:
         raise LessonError("free must be true or false")
     if not isinstance(src.get("steps"), list) or not src["steps"]:
         raise LessonError("a lesson needs steps")
+    if len(src["steps"]) > MAX_LESSON_STEPS:
+        raise LessonError(f"{len(src['steps'])} steps is more than {MAX_LESSON_STEPS}: a lesson load is one request "
+                          "per step, so raise MAX_LESSON_STEPS and the request budgets in app.py together")
 
 
 def compile_lesson(src: dict, tape: dict) -> dict:
@@ -707,12 +714,29 @@ def _clock(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
-def _check_lengths(built: list, floor_s: float) -> None:
+MAX_DECLARED_MINUTES = 120
+
+
+def _class_floors(built: list, class_meta: dict) -> dict:
+    """Seconds every lesson of each class must run: what classes.json declares for
+    it ("min_minutes": a class rebuilt at full length stays full length, sold or
+    free), and never less than the floor of a class that has paid lessons."""
     sold = {lsn["class"] for lsn in built if not lsn["free"]}
-    short = [lsn for lsn in built if lsn["class"] in sold and lesson_seconds(lsn) < floor_s]
+    floors = {}
+    for cid, meta in class_meta.items():
+        want = meta.get("min_minutes", 0) if isinstance(meta, dict) else 0
+        if (not isinstance(want, (int, float)) or isinstance(want, bool) or not math.isfinite(want)
+                or not 0 <= want <= MAX_DECLARED_MINUTES):
+            raise LessonError(f"class {cid}: min_minutes must be a number from 0 to {MAX_DECLARED_MINUTES}")
+        floors[cid] = max(want * 60, MIN_PAID_CLASS_LESSON_S if cid in sold else 0)
+    return floors
+
+
+def _check_lengths(built: list, floors: dict) -> None:
+    short = [lsn for lsn in built if lesson_seconds(lsn) < floors.get(lsn["class"], 0)]
     if short:
-        raise LessonError(", ".join(f"{lsn['id']} runs {_clock(lesson_seconds(lsn))}" for lsn in short)
-                          + f": every lesson in a class with paid lessons must run at least {_clock(floor_s)}")
+        raise LessonError(", ".join(f"{lsn['id']} runs {_clock(lesson_seconds(lsn))} and its class needs "
+                                    f"{_clock(floors[lsn['class']])} a lesson" for lsn in short))
 
 
 def _catalog(built: list, class_meta: dict) -> dict:
@@ -728,13 +752,14 @@ def _catalog(built: list, class_meta: dict) -> dict:
 def build_all(sources: list, tapes: dict, class_meta: dict, out, bake: Bake,
               voice_key: str = VOICE_VERSION) -> list:
     """Compile EVERY lesson (nothing is written if any fails), bake new narration,
-    refuse a class for sale whose lessons are too short, then write lesson files,
-    the catalogue LAST, and prune unused audio."""
+    refuse a full-length class whose lessons are too short, then write lesson
+    files, the catalogue LAST, and prune unused audio."""
     built = compile_all(sources, tapes, class_meta)
+    floors = _class_floors(built, class_meta)          # a bad declaration stops it before any bake
     out = Path(out)
     (out / "audio").mkdir(parents=True, exist_ok=True)
     keep = _bake_all(built, out, bake, voice_key)
-    _check_lengths(built, MIN_PAID_CLASS_LESSON_S)     # after the bake: only then is the length known
+    _check_lengths(built, floors)                      # after the bake: only then is the length known
     for lesson in built:
         _write_atomic(out / f"{lesson['id']}.json", json.dumps(lesson))
     _write_atomic(out / "catalog.json", json.dumps(_catalog(built, class_meta), indent=1))
