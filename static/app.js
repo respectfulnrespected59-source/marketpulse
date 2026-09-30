@@ -265,7 +265,7 @@ function renderExistingAlerts(k) {
   const box = $("#alertExisting");
   const list = state.alerts[k] || [];
   box.innerHTML = list.map((a, i) =>
-    `<div class="alert-chip">${a.dir === "above" ? "▲ above" : "▼ below"} ${fmtPrice(a.price)}
+    `<div class="alert-chip">${esc(alertText(a))}
      <button data-i="${i}">✕</button></div>`).join("");
   box.querySelectorAll("button").forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -297,9 +297,7 @@ function checkAlerts(rows) {
     if (!list || r.price == null) continue;
     const remaining = [];
     for (const a of list) {
-      const hit = (a.dir === "above" && r.price >= a.price) ||
-                  (a.dir === "below" && r.price <= a.price);
-      if (hit) fireAlert(r, a); else remaining.push(a);
+      if (alertHit(a, r.price)) fireAlert(r, a); else remaining.push(a);   // above / below / Para-Sail zone
     }
     if (remaining.length) state.alerts[k] = remaining; else delete state.alerts[k];
   }
@@ -307,8 +305,8 @@ function checkAlerts(rows) {
 }
 
 function fireAlert(r, a) {
-  const msg = `${r.symbol} ${a.dir === "above" ? "rose above" : "dropped below"} ${fmtPrice(a.price)}`;
-  toast(a.dir === "above" ? "buy" : "sell", `${r.symbol} alert`, msg + ` · now ${fmtPrice(r.price)}`);
+  const msg = alertFiredMsg(r.symbol, a);
+  toast(a.dir === "below" ? "sell" : "buy", `${r.symbol} alert`, msg + ` · now ${fmtPrice(r.price)}`);
   if ("Notification" in window && Notification.permission === "granted") {
     new Notification("MarketPulse alert", { body: msg });
   }

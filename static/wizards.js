@@ -58,6 +58,7 @@ async function loadDca() {
   const monthly = dcaMonthlyQf ? dcaMonthlyQf.getAmount() : 200;
   const cadence = $("#dcaCadence").value;
   const years = parseFloat($("#dcaYears").value) || 10;
+  if (typeof loadParasail === "function") loadParasail(symbol, kind);   // the Para-Sail card: same symbol, not awaited
   $("#dcaCards").innerHTML = `<div class="proof-empty">Backtesting ${esc(symbol)} DCA over ~2 years, after costs…</div>`;
   ["dcaNudge", "dcaPlan", "dcaVerdict", "dcaProj"].forEach((id) => { $("#" + id).innerHTML = ""; });
   $("#dcaChart").innerHTML = "";
