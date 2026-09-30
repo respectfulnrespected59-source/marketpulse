@@ -394,3 +394,119 @@ class TestOverlayIgnoresExtendedBars:
         monkeypatch.setattr(app, "fetch_intraday", lambda *a, **k: payload)
         # The chart needs the flags to style overnight candles differently.
         assert any(payload["regular"]) and not all(payload["regular"])
+
+
+# ------------------------------------------------------------------ the monthly chart (owner 2026-09-30)
+class TestMonthlyChart:
+    """A monthly chart for the Para-Sail monthly low. Its key is "1Mo": the route lowercases every query
+    parameter, so a "1M" key would collide with "1m" and serve a one-minute tape under a monthly label."""
+
+    def test_monthly_has_its_own_key_and_1m_still_means_one_minute(self):
+        for asked in ("1Mo", "1mo", "1MO", " 1mo "):
+            assert app.canonical_tf(asked) == "1Mo", asked
+        assert app.canonical_tf("1M") == "1m"
+        assert "1Mo" in app.TIMEFRAMES and "1Mo" in app.SLOW_TF
+
+    def test_stock_monthly_is_yahoos_own_monthly_bars_over_ten_years(self, monkeypatch):
+        import datetime as dt
+        seen = []
+        payload = _yahoo_payload(24)
+        # real monthly bars sit a month apart (the shared helper spaces bars 5 minutes apart, which the
+        # monthly fold would rightly merge into one month)
+        payload["chart"]["result"][0]["timestamp"] = [
+            int(dt.datetime(2024 + m // 12, m % 12 + 1, 1, 4, tzinfo=dt.timezone.utc).timestamp()) for m in range(24)]
+
+        def spy(url, *a, **k):
+            seen.append(url)
+            return payload
+
+        monkeypatch.setattr(app, "_get_json", spy)
+        out = app.fetch_intraday("stock", "AAPL", "1Mo")
+        assert out["tf"] == "1Mo" and len(out["ohlc"]) == 24
+        assert "interval=1mo" in seen[0] and "range=10y" in seen[0], seen[0]
+
+    def test_crypto_monthly_pages_five_years_of_days_and_folds_them_by_calendar_month(self, monkeypatch):
+        import datetime as dt
+        day = 86_400
+        now = int(app.time.time())
+        pages, days = [], {}
+
+        def fake(url, *a, **k):
+            # /candles?granularity=86400&start=...&end=... -> every day in the window, newest first
+            q = dict(part.split("=", 1) for part in url.split("?", 1)[1].split("&"))
+            start = int(dt.datetime.strptime(q["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp())
+            end = int(dt.datetime.strptime(q["end"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp())
+            pages.append((start, end))
+            rows = []
+            for t in range(start, end + 1, day):
+                i = t // day
+                o, c = 100 + i % 50, 100 + (i * 7) % 50
+                row = [t, min(o, c) - 1.0, max(o, c) + 1.0, float(o), float(c), 2.0]  # [time, low, high, open, close, vol]
+                days[t] = row
+                rows.append(row)
+            return list(reversed(rows))
+
+        monkeypatch.setattr(app, "_get_json", fake)
+        monkeypatch.setattr(app, "coinbase_product", lambda s: "BTC-USD")
+        monkeypatch.setattr(app, "_coinbase_last_trade", lambda p: None)
+        monkeypatch.setattr(app, "COINBASE_PAGE_PAUSE_S", 0)
+        out = app.fetch_intraday("crypto", "bitcoin", "1Mo")
+
+        assert out["tf"] == "1Mo"
+        assert len(pages) >= 6                                      # ~5 years at 300 days a page
+        assert min(s for s, _ in pages) <= now - (5 * 365 - 2) * day
+        # the expected fold, computed from the days the fake handed back
+        months = {}
+        for t in sorted(days):
+            d = dt.datetime.fromtimestamp(t, dt.timezone.utc)
+            months.setdefault((d.year, d.month), []).append(days[t])
+        want = [[g[0][3], max(r[2] for r in g), min(r[1] for r in g), g[-1][4]] for g in months.values()]
+        assert out["ohlc"] == [[app._px(v) for v in bar] for bar in want]
+        assert out["ts"] == [g[0][0] for g in months.values()]
+        assert out["volume"] == [round(sum(r[5] for r in g), 2) for g in months.values()]
+        this_month = dt.datetime.fromtimestamp(now, dt.timezone.utc)
+        last = dt.datetime.fromtimestamp(out["ts"][-1], dt.timezone.utc)
+        assert (last.year, last.month) == (this_month.year, this_month.month)   # the forming month is kept
+
+    def test_yahoos_extra_today_bar_is_folded_into_its_month(self, monkeypatch):
+        # Seen on the real TSLA monthly chart (09-30): Yahoo ends September's bar at the prior close and
+        # appends TODAY as its own bar, so the last "monthly" candle was just 9/30's day.
+        ts = [1782878400, 1785556800, 1788235200, 1790798400]      # Jul 1, Aug 1, Sep 1 04:00Z; Sep 30 20:00Z
+        rows = [(421.46, 432.86, 297.38, 311.21), (310.96, 368.92, 310.43, 367.95),
+                (360.90, 386.83, 349.92, 352.84), (351.79, 355.22, 345.88, 354.81)]
+        payload = {"chart": {"result": [{"timestamp": ts, "meta": {"gmtoffset": -14400},
+                                         "indicators": {"quote": [{
+                                             "open": [r[0] for r in rows], "high": [r[1] for r in rows],
+                                             "low": [r[2] for r in rows], "close": [r[3] for r in rows],
+                                             "volume": [100, 200, 300, 40]}]}}]}}
+        monkeypatch.setattr(app, "_get_json", lambda *a, **k: payload)
+        out = app.fetch_intraday("stock", "TSLA", "1Mo")
+        assert out["ts"] == ts[:3]
+        assert out["ohlc"][-1] == [app._px(360.90), app._px(386.83), app._px(345.88), app._px(354.81)]
+        assert out["volume"][-1] == 340
+        assert out["last"] == app._px(354.81)
+
+    def test_monthly_caches_long(self):
+        assert app._intraday_ttl("crypto", "1Mo") >= 1800
+        assert app._intraday_ttl("stock", "1Mo") >= 1800
+
+
+class TestChartButtonsMatchTheServer:
+    """static/chart.js keeps its own timeframe lists (buttons, labels, grain, poll pace, default zoom). A
+    timeframe the server has but one of those lists lacks draws an unlabelled or never-refreshing button."""
+
+    @staticmethod
+    def _keys(js, name):
+        import re
+        block = re.search(rf"const {name} = \{{(.*?)\}};", js, re.S).group(1)
+        return set(re.findall(r'"([0-9]+[A-Za-z]+)":', block))
+
+    def test_every_list_in_chart_js_covers_every_server_timeframe(self):
+        import os
+        import re
+        js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "chart.js"),
+                  encoding="utf-8").read()
+        order = re.findall(r'"([^"]+)"', re.search(r"const TF_ORDER = \[(.*?)\];", js, re.S).group(1))
+        assert order == list(app.TIMEFRAMES)
+        for name in ("TF_LABELS", "TF_GRAIN", "TF_POLL_MS", "DEFAULT_VISIBLE"):
+            assert set(app.TIMEFRAMES) <= self._keys(js, name), name

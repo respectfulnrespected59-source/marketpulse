@@ -17,24 +17,26 @@
 /* ---- Live trading chart: real intraday candlesticks that refresh live ---- */
 let liveChartTimer = null;
 let liveTf = "5m";
-const TF_ORDER = ["1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W"];
+// "1Mo" is the monthly chart (owner 2026-09-30) — never "1M", which the server's lowercased query would
+// read as "1m", one minute.
+const TF_ORDER = ["1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W", "1Mo"];
 const TF_LABELS = {
   stock: { "1m": "1m", "5m": "5m", "10m": "10m", "15m": "15m",
-           "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W" },
+           "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W", "1Mo": "1Mo" },
   crypto: { "1m": "1m", "5m": "5m", "10m": "10m", "15m": "15m",
-            "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W" },
+            "30m": "30m", "1h": "1h", "1D": "1D", "1W": "1W", "1Mo": "1Mo" },
 };
 // How much history each button actually covers, so the header can say it.
 const TF_GRAIN = {
   stock: { "1m": "1m · 5D", "5m": "5m · 5D", "10m": "10m · 5D", "15m": "15m · 1M",
-           "30m": "30m · 1M", "1h": "1h · 3M", "1D": "1D · 1Y", "1W": "1W · 5Y" },
+           "30m": "30m · 1M", "1h": "1h · 3M", "1D": "1D · 1Y", "1W": "1W · 5Y", "1Mo": "1Mo · 10Y" },
   crypto: { "1m": "1m · ~5h", "5m": "5m · ~1D", "10m": "10m · ~1D", "15m": "15m · ~3D",
-            "30m": "30m · ~3D", "1h": "1h · ~12D", "1D": "1D · ~10M", "1W": "1W · ~10M" },
+            "30m": "30m · ~3D", "1h": "1h · ~12D", "1D": "1D · ~10M", "1W": "1W · ~10M", "1Mo": "1Mo · ~5Y" },
 };
 // 1m tape needs a much faster poll to feel alive; daily and weekly bars only
 // change once a session, so polling them hard just burns upstream quota.
 const TF_POLL_MS = { "1m": 8000, "5m": 20000, "10m": 30000, "15m": 45000,
-                     "30m": 60000, "1h": 60000, "1D": 300000, "1W": 600000 };
+                     "30m": 60000, "1h": 60000, "1D": 300000, "1W": 600000, "1Mo": 900000 };
 
 /* Indicator settings — the trader's, not ours.
  *
@@ -91,7 +93,7 @@ let lastRenderSym = null, lastRenderTf = null;
 // opens showing recent context at a comfortable candle width, not the whole
 // loaded array crammed into one screen. Wheel/pinch zooms out to the full history.
 const DEFAULT_VISIBLE = { "1m": 90, "5m": 78, "10m": 78, "15m": 78,
-                          "30m": 70, "1h": 60, "1D": 90, "1W": 60 };
+                          "30m": 70, "1h": 60, "1D": 90, "1W": 60, "1Mo": 60 };
 /* Ask the next render to re-frame the default window (new symbol, GO LIVE,
  * double-click). The engine owns the viewport itself: pan, zoom, and holding a
  * view still on a rolling tape are all in chart-engine.js now. */
@@ -728,6 +730,8 @@ function _fmtAxisTime(dt, tf) {
   }
   const tape = lessonView ? lessonView.lesson.tape : liveLast.data;
   const exchange = (Number(tape && tape.gmtoffset) || 0) * 1000;
-  return new Date(dt.getTime() + exchange)
-    .toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" });
+  // A monthly candle is a month: "Sep 2026", not "Sep 1".
+  const fmt = tf === "1Mo" ? { month: "short", year: "numeric", timeZone: "UTC" }
+                           : { month: "short", day: "numeric", timeZone: "UTC" };
+  return new Date(dt.getTime() + exchange).toLocaleDateString([], fmt);
 }

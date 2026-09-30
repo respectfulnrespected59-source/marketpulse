@@ -842,7 +842,9 @@ def _coinbase_ohlc(product: str, granularity: int) -> list[list[float]]:
 # either Yahoo or Coinbase, so the fetch pulls 5m bars and pair-aggregates
 # them into synthesized 10m candles server-side (see _pair_agg_ohlc).
 # Timeframes offered on the chart, in the order the buttons appear.
-TIMEFRAMES = ("1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W")
+TIMEFRAMES = ("1m", "5m", "10m", "15m", "30m", "1h", "1D", "1W", "1Mo")
+# "1Mo", never "1M": the route lowercases every query parameter, and "1M" would collide with "1m" — a
+# one-minute tape served under a monthly label. (Owner 2026-09-30: a monthly chart for the monthly low.)
 
 # How each timeframe is fetched, per venue.
 #   stock  -> (yahoo_range, yahoo_interval, aggregate_factor)
@@ -866,6 +868,7 @@ INTRADAY_TF = {
         "1h":  ("3mo", "60m", 1),
         "1D":  ("1y",  "1d",  1),
         "1W":  ("5y",  "1wk", 1),
+        "1Mo": ("10y", "1mo", 1),   # Yahoo's own monthly bars, the forming month included
         # Legacy presets — older clients and saved links still send these.
         "day":  ("5d", "5m",  1),
         "wide": ("5d", "15m", 1),
@@ -879,6 +882,7 @@ INTRADAY_TF = {
         "1h":  (3600,  1),
         "1D":  (86400, 1),
         "1W":  (86400, 7),          # Coinbase has no weekly
+        "1Mo": (86400, 1),          # no monthly either: ~5 years of days, paged, folded by calendar month
         "day":  (300,  1),
         "wide": (3600, 1),
     },
@@ -886,7 +890,11 @@ INTRADAY_TF = {
 
 # Daily and weekly bars change once a session, so they can sit in cache far
 # longer than a live 1m tape.
-SLOW_TF = ("1D", "1W")
+SLOW_TF = ("1D", "1W", "1Mo")
+MONTHLY_TTL = 1800                 # a monthly candle barely moves in half an hour; crypto costs ~7 requests
+MONTHLY_CRYPTO_DAYS = 5 * 365      # history behind a crypto monthly chart
+COINBASE_PAGE = 300                # the most candles one Coinbase request returns
+COINBASE_PAGE_PAUSE_S = 0.15       # between pages: a public API, asked politely
 
 # Timeframe names are matched case-insensitively. The route handler lowercases
 # every query parameter, which silently turned "1D" into "1d" and "1W" into
@@ -969,6 +977,8 @@ def _intraday_ttl(kind: str, tf: str) -> int:
     makes a live chart visibly MOVE, and one fetch serves every viewer. Stock
     tapes keep Yahoo's pace, snappier only on the 1-minute chart.
     """
+    if tf == "1Mo":
+        return MONTHLY_TTL
     if tf in SLOW_TF:
         return 300
     if kind == "crypto":
@@ -1005,7 +1015,8 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
             try:
                 gran, _agg = INTRADAY_TF["crypto"][tf]
                 url = f"{COINBASE_API}/products/{prod}/candles?granularity={gran}"
-                raw = _get_json(url) or []
+                raw = (_coinbase_daily_history(prod, MONTHLY_CRYPTO_DAYS) if tf == "1Mo"
+                       else _get_json(url) or [])
                 rows = sorted((r for r in raw if r and None not in r[1:5]), key=lambda r: r[0])
                 for r in rows:
                     # Coinbase row: [time, low, high, open, close, volume]
@@ -1046,6 +1057,11 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
     factor = spec[-1]
     if factor > 1 and ohlc:
         ohlc, ts_arr, vol_arr = _agg_ohlc(ohlc, ts_arr, vol_arr, factor)
+    # Monthly, both venues: crypto folds its days into months; for stocks this merges the extra bar Yahoo
+    # appends for TODAY into its month (seen on TSLA 09-30: September ended at the prior close and the last
+    # "monthly" candle was just 9/30's day). A month already whole passes through unchanged.
+    if tf == "1Mo" and ohlc:
+        ohlc, ts_arr, vol_arr = _fold_months(ohlc, ts_arr, vol_arr)
     # Keep the most recent slice. Five days of 1m bars is ~1,950 candles — far
     # more than the chart shows and a heavy payload — so send the recent tape
     # and let the wider timeframes cover the longer view.
@@ -1067,6 +1083,49 @@ def fetch_intraday(kind: str, symbol: str, tf: str = "wide",
            "last": ohlc[-1][3] if ohlc else None, "server_ts": int(time.time())}
     _cache[key] = (time.time(), out)
     return out
+
+
+def _coinbase_daily_history(product: str, days: int) -> list:
+    """Raw Coinbase daily rows for the last `days` days, today's forming candle included, oldest first.
+
+    One request returns at most COINBASE_PAGE candles, so a monthly chart pages back through the history
+    (~7 requests for 5 years). Pages may overlap at the edges; rows are kept once per timestamp."""
+    today = int(time.time()) // 86400 * 86400
+    first, end = today - (days - 1) * 86400, today
+    rows: dict[int, list] = {}
+    iso = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    while end >= first:
+        start = max(first, end - (COINBASE_PAGE - 1) * 86400)
+        url = (f"{COINBASE_API}/products/{product}/candles?granularity=86400"
+               f"&start={iso(start)}&end={iso(end)}")
+        for r in _get_json(url) or []:
+            if r and first <= r[0] <= today:
+                rows[int(r[0])] = r
+        end = start - 86400
+        if end >= first and COINBASE_PAGE_PAUSE_S:
+            time.sleep(COINBASE_PAGE_PAUSE_S)
+    return [rows[t] for t in sorted(rows)]
+
+
+def _fold_months(ohlc: list, ts: list, vol: list) -> tuple[list, list, list]:
+    """Fold daily bars into calendar months (UTC): open = the month's first open, close = its last close,
+    high/low span it, volume sums, timestamp = its first day. Unlike _agg_ohlc the FORMING month is kept:
+    on a monthly chart the current month is the one you're watching for its low — and it's what Yahoo's
+    own monthly bars show for stocks."""
+    o2, t2, v2 = [], [], []
+    key = None
+    for bar, t, v in zip(ohlc, ts, vol):
+        d = datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+        if (d.year, d.month) != key:
+            key = (d.year, d.month)
+            o2.append(list(bar))
+            t2.append(t)
+            v2.append(v)
+        else:
+            last = o2[-1]
+            o2[-1] = [last[0], max(last[1], bar[1]), min(last[2], bar[2]), bar[3]]
+            v2[-1] = round(v2[-1] + v, 2)
+    return o2, t2, v2
 
 
 def _agg_ohlc(ohlc: list, ts: list, vol: list, factor: int) -> tuple[list, list, list]:
