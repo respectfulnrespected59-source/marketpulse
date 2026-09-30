@@ -11,6 +11,9 @@
  */
 
 const PD_GOLD = "#e8c25a";
+// Each mark draws a faint guide across the chart at its price: right for the few levels a trader places,
+// a wall of lines for a lesson plan's fills (the Para-Sail lesson draws 103). Past this, rings only.
+const PD_GUIDE_MAX = 12;
 
 class PcDrawings {
   constructor() {
@@ -102,7 +105,8 @@ function _pdUserLayer(ctx, size) {
   if (!src) return;
   ctx.setLineDash([]);
   for (const l of src.lines) _pdTrendLine(ctx, l);
-  for (const m of src.marks) _pdMark(ctx, size, m);
+  const guides = src.marks.length <= PD_GUIDE_MAX;
+  for (const m of src.marks) _pdMark(ctx, size, m, guides);
   if (src.anchor) {
     const p = _pdPoint(src.anchor);
     if (p) {
@@ -129,11 +133,11 @@ function _pdTrendLine(ctx, l) {
   }
 }
 
-function _pdMark(ctx, size, m) {
+function _pdMark(ctx, size, m, guide) {
   const p = _pdPoint(m);
   if (!p) return;
   const color = _pdColorForDir(m.dir);
-  _pdHLine(ctx, p.y, size.width, color, [2, 5], 0.35);
+  if (guide) _pdHLine(ctx, p.y, size.width, color, [2, 5], 0.35);
   _pdRing(ctx, p.x, p.y, m.editing ? 7 : 5.5, color, m.editing);
 }
 
