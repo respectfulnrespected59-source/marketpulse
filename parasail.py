@@ -50,7 +50,7 @@ class Rules:
     zone: float = 0.08          # within 8 % of it
     gap_days: int = 7           # one fill a week at most
     fill: float = 100.0
-    cap: float = 2_000.0        # 10 % of a $20k pile
+    cap: float | None = 2_000.0  # 10 % of a $20k pile; None = uncapped (BTC, held as money — owner 09-30)
     sail_at: float = 0.40       # the icing: up 40 % on what the position cost
     sell: float = 0.5           # take half
     hold: bool = False          # BTC: held, never para-sailed
@@ -64,8 +64,8 @@ class Rules:
             raise ParaSailError("gap_days must be a whole number of days, 1 or more")
         if not (_num(v["fill"]) and v["fill"] > 0):
             raise ParaSailError("fill must be a positive amount")
-        if not (_num(v["cap"]) and v["cap"] >= v["fill"]):
-            raise ParaSailError("cap must be at least one fill")
+        if v["cap"] is not None and not (_num(v["cap"]) and v["cap"] >= v["fill"]):
+            raise ParaSailError("cap must be at least one fill (or null for no cap)")
         if not (_num(v["sail_at"]) and v["sail_at"] > 0):
             raise ParaSailError("sail_at must be a positive fraction (0.40 = up 40 %)")
         if not (_num(v["sell"]) and 0 < v["sell"] <= 1):
@@ -73,7 +73,8 @@ class Rules:
         if not isinstance(v["hold"], bool):
             raise ParaSailError("hold must be true or false")
         return cls(low_days=v["low_days"], zone=float(v["zone"]), gap_days=v["gap_days"], fill=float(v["fill"]),
-                   cap=float(v["cap"]), sail_at=float(v["sail_at"]), sell=float(v["sell"]), hold=v["hold"])
+                   cap=None if v["cap"] is None else float(v["cap"]), sail_at=float(v["sail_at"]),
+                   sell=float(v["sell"]), hold=v["hold"])
 
 
 def trade_cost(kind: str) -> float:
@@ -116,7 +117,7 @@ def simulate(ts: list[int], closes: list[float], kind: str, rules: Rules,
         low, _ = trailing_low(ts, closes, i, rules.low_days)
         if price > low * (1 + rules.zone) or (last_fill is not None and t - last_fill < rules.gap_days * DAY):
             continue
-        if net + rules.fill > rules.cap + 1e-9:
+        if rules.cap is not None and net + rules.fill > rules.cap + 1e-9:
             cap_bar = i if cap_bar is None else cap_bar
             continue
         units += rules.fill * (1 - side) / price

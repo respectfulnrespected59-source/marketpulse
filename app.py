@@ -99,7 +99,8 @@ def _parasail_report(symbol: str, kind: str, dates: list, closes: list, hold: bo
     price sits against its monthly low right now, every buy and sale, and the same buys held."""
     ts = [int(datetime.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp())
           for d in dates]
-    rules = parasail.Rules(hold=hold)
+    # Held as money (BTC) = uncapped (owner 09-30: "leave BTC uncapped"); every para-sailed name keeps its cap.
+    rules = parasail.Rules(hold=hold, cap=None if hold else parasail.Rules().cap)
     r = parasail.simulate(ts, closes, kind, rules)
     last = len(closes) - 1
     low, low_bar = parasail.trailing_low(ts, closes, last, rules.low_days)

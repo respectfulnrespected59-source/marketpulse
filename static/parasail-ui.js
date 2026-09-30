@@ -40,6 +40,7 @@ function parasailCard(p) {
   // Every interpolated number is forced to a Number: text goes through esc(), so nothing reaches
   // innerHTML unescaped even if the payload were ever not what the server sends.
   const z = p.zone;
+  const capped = p.rules.cap != null;     // read BEFORE coercing: Number(null) is 0, and uncapped BTC is not "cap $0"
   const r = Object.fromEntries(Object.entries(p.rules).map(([k, v]) => [k, Number(v)]));
   p = { ...p, n: Number(p.n), n_sails: Number(p.n_sails) };
   const money = (v) => `${v >= 0 ? "+" : "−"}${potMoney(Math.abs(v))}`;
@@ -76,7 +77,7 @@ function parasailCard(p) {
     <div class="dv-note">${result}</div>
     ${verdict}
     <div class="dv-truth sub">Rules: ${r.low_days}-day low · buy within ${r.zone_pct}% of it · one ${potMoney(r.fill)} fill a week at most
-      · cap ${potMoney(r.cap)} per name${sellRule}. <b>News cord:</b> withdrawals halted, bankruptcy, delisting,
+      · ${capped ? `cap ${potMoney(r.cap)} per name` : "no cap — held as money"}${sellRule}. <b>News cord:</b> withdrawals halted, bankruptcy, delisting,
       fraud charges or the team gone → sell all and stop buying. A price crash alone is not a death.</div>
     <div class="dca-form-actions"><button class="add-btn ghost" id="psWatch" type="button">Watch the zone</button></div>
     <div class="dv-truth sub">Backtested on this history after fees. Educational — not advice. Past prices don’t tell you the next move.</div>

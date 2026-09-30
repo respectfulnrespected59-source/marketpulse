@@ -97,6 +97,13 @@ def test_btc_is_shown_as_held_not_para_sailed():
     assert "para-sails" not in html
 
 
+def test_uncapped_btc_says_so_and_never_shows_a_zero_cap():
+    # Number(null) is 0: the card must read the cap BEFORE coercing, or uncapped BTC shows "cap $0".
+    html = card(symbol="BITCOIN", hold=True, n_sails=0, rules={**BASE["rules"], "cap": None})
+    assert "no cap — held as money" in html and "cap $0" not in html
+    assert "cap $2,000 per name" in card()
+
+
 def test_the_card_judges_per_dollar_at_risk_and_shows_the_money_each_needed():
     # NVDA on the real app (09-30): para-sail +$1,755 on $2,000 in (+87.8 %); holding the same 54 buys
     # made more dollars (+$2,308) but needed $5,400 in (+42.7 %). "Holding did better by $553" was unfair.
