@@ -83,6 +83,14 @@ def test_btc_is_held_never_para_sailed(server, history, symbol):
     assert out["profit"] == pytest.approx(out["hold_profit"])
 
 
+def test_btc_held_as_money_is_uncapped_and_everything_else_keeps_its_cap(server, history):
+    # Owner 09-30: "leave BTC uncapped".
+    _, btc = get(server, "symbol=bitcoin&kind=crypto")
+    _, eth = get(server, "symbol=ethereum&kind=crypto")
+    assert btc["rules"]["cap"] is None
+    assert eth["rules"]["cap"] == 2000.0
+
+
 def test_hold_can_be_switched_off_or_on_by_the_caller(server, history):
     _, btc = get(server, "symbol=bitcoin&kind=crypto&hold=0")
     _, eth = get(server, "symbol=ethereum&kind=crypto&hold=1")

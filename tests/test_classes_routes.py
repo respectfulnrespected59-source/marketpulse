@@ -339,6 +339,16 @@ def test_the_audit_lets_an_all_free_class_be_short():
     assert _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, free)})) == []
 
 
+def test_the_audit_holds_the_para_sail_class_to_its_five_minutes():
+    # The owner asked for ~5-minute Para-Sail lessons (09-30); the old DCA class they replace is gone.
+    def cat(secs):
+        return json.dumps({"classes": [{"id": "parasail", "lessons": [
+            {"id": "parasail-01", "free": True, "seconds": secs}]}]})
+    short = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, cat(250))}))
+    assert any("parasail-01" in p and "4:10" in p and "5:00" in p for p in short)
+    assert _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, cat(355))})) == []
+
+
 def test_the_audit_and_the_build_agree_on_the_minimum_length():
     import sys
     from pathlib import Path
@@ -382,9 +392,9 @@ def test_the_real_plan_goes_red_when_a_lesson_is_still_locked():
 
 
 def test_the_real_plan_still_wants_full_length_lessons_in_a_free_class():
-    # Free is not a licence to be short: the DCA class is held to 8:00 whether or not it is sold.
+    # Free is not a licence to be short: the Para-Sail class is held to 5:00 whether or not it is sold.
     short = json.loads(ALL_FREE)
-    short["classes"][1]["lessons"][0]["seconds"] = 88
+    short["classes"].append({"id": "parasail", "lessons": [{"id": "parasail-01", "free": True, "seconds": 88}]})
     problems = _audit().audit_classes_gate("h", get=fake_host({"/api/classes": (200, json.dumps(short))}))
-    assert any("dca-01" in p and "1:28" in p for p in problems)
+    assert any("parasail-01" in p and "1:28" in p for p in problems)
     assert not any("setup-01" in p for p in problems)                  # not yet rebuilt: not yet held to it

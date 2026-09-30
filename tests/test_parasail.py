@@ -77,6 +77,14 @@ def test_a_month_is_calendar_days_so_weekends_do_not_stretch_a_stock_window():
     assert (low, bar) == (95.0, 5)
 
 
+def test_no_cap_means_no_cap():
+    # Owner 09-30: "leave BTC uncapped" — the coin held as money is not limited to 10 % of the pile.
+    assert parasail.Rules.from_spec({"cap": None}).cap is None
+    out = parasail.simulate(days(10), [100.0] * 10, "crypto", rules(cap=None))
+    assert [b["bar"] for b in out["buys"]] == list(range(10))
+    assert "cap_bar" not in out and out["peak"] == 1000
+
+
 def test_the_cap_names_the_first_day_it_refused_a_buy():
     out = parasail.simulate(days(10), [100.0] * 10, "crypto", rules(cap=300))
     assert [b["bar"] for b in out["buys"]] == [0, 1, 2]
