@@ -22,7 +22,8 @@ Authored ops (in a step's "do" list):
   mark  {bar, at|price|var, dir}
   line  {a: {bar, at|price|var}, b: {...}}
   level {price|var, title}   horizontal line
-  buys  {var}                every buy of a DCA plan revealed so far and not yet drawn
+  buys  {var}                every buy of a DCA or Para-Sail plan revealed so far and not yet drawn
+  sails {var}                every para-sail sale of a Para-Sail plan revealed so far and not yet drawn
   clear                      remove the lesson's drawings
   spot  {tool, label}        spotlight a real app control while this step plays
                              (teaches the app itself; tool must be in TOOLS)
@@ -379,8 +380,71 @@ def _shift(spec: dict, tape: dict) -> SimpleNamespace:
                            price_spread_pct=(max(closes) / min(closes) - 1) * 100)
 
 
+# ------------------------------------------------------------------ the Para-Sail strategy (owner 2026-09-30)
+# The rules live in parasail.py (repo root), the ONE engine the app runs too, so a number a lesson says
+# out loud is the number the app shows for the same prices. These wrappers only add the narration's words.
+def _engine():
+    import sys
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import parasail
+    return parasail
+
+
+def _closes(tape: dict) -> list:
+    return [float(row[3]) for row in tape["ohlc"]]
+
+
+def _zone(spec: dict, tape: dict) -> SimpleNamespace:
+    """Where one bar sits against its trailing low: the low, the top of the buy zone, and "inside"
+    or "above" as a word, so the narration can never say inside while the chart shows above."""
+    ps = _engine()
+    i = _bar(tape, spec.get("bar"), " in a zone var")
+    low_days, zone = spec.get("low_days", 30), spec.get("zone", 0.08)
+    try:
+        ps.check_zone(low_days, zone)
+    except ps.ParaSailError as exc:
+        raise LessonError(f"a zone var: {exc}") from None
+    low, low_bar = ps.trailing_low(tape["ts"], _closes(tape), i, low_days)
+    top, close = low * (1 + zone), _close(tape, i)
+    out = {"bar": i, "date": _date(tape["ts"][i]), "close": close, "low": low, "low_bar": low_bar,
+           "low_date": _date(tape["ts"][low_bar]), "top": top, "zone_pct": zone * 100, "low_days": low_days}
+    if close <= top:
+        out.update(where="inside", over_low_pct=(close / low - 1) * 100)
+    else:
+        out.update(where="above", above_pct=(close / top - 1) * 100)
+    return SimpleNamespace(**out)
+
+
+def _parasail(spec: dict, tape: dict) -> SimpleNamespace:
+    """Rob's Para-Sail strategy over the window, and the same buys held without ever selling, so every
+    lesson can show both sides. Scored against `peak`, the most of your own money ever in at once."""
+    ps = _engine()
+    try:
+        rules = ps.Rules.from_spec(spec)
+    except ps.ParaSailError as exc:
+        raise LessonError(f"a parasail plan: {exc}") from None
+    start, end = _window(spec, tape, "a parasail plan")
+    r = ps.simulate(tape["ts"], _closes(tape), tape.get("kind", ""), rules, start, end)
+    if not r["buys"]:
+        raise LessonError("a parasail plan made no buys in its window: nothing to teach")
+    out = {**r, "profit_abs": abs(r["profit"]), "profit_word": "profit" if r["profit"] >= 0 else "loss",
+           "roi_say": _pct_say(r["roi"]), "hold_roi_say": _pct_say(r["hold_roi"]),
+           "first_date": _date(tape["ts"][start]), "last_date": _date(tape["ts"][end]),
+           "zone_pct": rules.zone * 100, "sail_pct": rules.sail_at * 100, "low_days": rules.low_days,
+           "cap": rules.cap, "fill": rules.fill}
+    if r["sails"]:
+        first = r["sails"][0]
+        out.update(first_sail_bar=first["bar"], first_sail_date=_date(first["ts"]), first_sail_price=first["price"])
+    if "cap_bar" in r:
+        out["cap_date"] = _date(tape["ts"][r["cap_bar"]])
+    return SimpleNamespace(**out)
+
+
 VAR_FNS = {"dca": _dca, "breakeven": _breakeven, "dca_at": _dca_at, "wizard": _wizard,
-           "bar": _bar_var, "underwater": _underwater, "rolling": _rolling, "shift": _shift}
+           "bar": _bar_var, "underwater": _underwater, "rolling": _rolling, "shift": _shift,
+           "parasail": _parasail, "zone": _zone}
 
 
 def _date(ts: int) -> str:
@@ -556,14 +620,15 @@ def _op_drawing(op: dict, ctx: _Ctx) -> list:
             raise LessonError("a level needs a price or var")
         ctx.on_chart(float(price), "a level")
         return [{"op": "level", "price": round(float(price), 4), "title": _label(op.get("title"), "a level title")}]
-    if kind == "buys":
-        name = op.get("var")
+    if kind in ("buys", "sails"):             # a plan's buys (dca or parasail), or a parasail plan's sales
+        name, field, dir_ = op.get("var"), kind, "buy" if kind == "buys" else "sell"
         plan = ctx.vars.get(name)
-        if not isinstance(plan, SimpleNamespace) or not hasattr(plan, "buys"):
-            raise LessonError(f"buys needs a dca var, got {name!r}")
-        fresh = [b for b in plan.buys if b["bar"] <= ctx.end and (name, b["bar"]) not in ctx.drawn_buys]
-        ctx.drawn_buys.update((name, b["bar"]) for b in fresh)
-        return [{"op": "mark", "ts": b["ts"], "price": b["price"], "dir": "buy"} for b in fresh]
+        if not isinstance(plan, SimpleNamespace) or not hasattr(plan, field):
+            raise LessonError(f"buys needs a dca var, got {name!r}" if kind == "buys"
+                              else f"sails needs a parasail var, got {name!r}")
+        fresh = [b for b in getattr(plan, field) if b["bar"] <= ctx.end and (name, dir_, b["bar"]) not in ctx.drawn_buys]
+        ctx.drawn_buys.update((name, dir_, b["bar"]) for b in fresh)
+        return [{"op": "mark", "ts": b["ts"], "price": b["price"], "dir": dir_} for b in fresh]
     raise LessonError(f"unknown op {kind!r}")
 
 

@@ -855,3 +855,136 @@ def test_a_nonsense_declared_length_stops_the_build(tmp_path, bad):
     with pytest.raises(lc.LessonError, match="min_minutes"):
         lc.build_all([lesson([step()])], {"t": FLAT}, {"dca": {"title": "DCA", "min_minutes": bad}}, tmp_path,
                      bake=fake_bake())
+
+
+# ------------------------------------------------------------------ the Para-Sail strategy (owner 2026-09-30)
+# Shop the low: buy one fill when the close sits within `zone` of the lowest close of the last `low_days`
+# calendar days, at most once every `gap_days`. Para-sail: once the open position is up `sail_at` on what it
+# cost, sell `sell` of it — once per wave; the next buy re-arms it. Cap: never more than `cap` of your own
+# money in (money in minus money taken out). hold: never sell (BTC is held, not para-sailed).
+def _side():
+    sys.path.insert(0, str(ROOT))
+    import backtest
+    return sum(backtest.cost_model("crypto"))
+
+
+ZONE_TAPE = tape([100.0, 110.0, 120.0, 104.0, 130.0, 99.0, 106.0])
+SAIL_TAPE = tape([100.0, 120.0, 150.0, 160.0, 170.0, 90.0, 95.0, 200.0])
+PS = {"fn": "parasail", "low_days": 3, "zone": 0.08, "gap_days": 1, "fill": 100, "cap": 10_000}
+
+
+def test_parasail_buys_only_inside_the_zone_of_the_trailing_low():
+    p = lc.compute_vars({"p": PS}, ZONE_TAPE)["p"]
+    # bar 3: low of the last 3 days is 104, the close IS the low -> buy; bar 4's 130 sits far above it.
+    assert [b["bar"] for b in p.buys] == [0, 3, 5, 6]
+    assert all(b["price"] == ZONE_TAPE["ohlc"][b["bar"]][3] for b in p.buys)
+
+
+def test_parasail_fills_at_most_once_every_gap_days():
+    flat = tape([100.0] * 20)
+    p = lc.compute_vars({"p": {**PS, "gap_days": 7}}, flat)["p"]
+    assert [b["bar"] for b in p.buys] == [0, 7, 14]
+
+
+def test_parasail_sells_half_at_plus_40_once_per_wave_and_the_next_buy_rearms_it():
+    p = lc.compute_vars({"p": PS}, SAIL_TAPE)["p"]
+    assert [b["bar"] for b in p.buys] == [0, 5, 6]
+    # bar 2 (150) is the first +40 %; 160 and 170 are higher but the wave already sailed; 200 comes after re-arming.
+    assert [s["bar"] for s in p.sails] == [2, 7]
+    assert p.n_sails == 2 and p.first_sail_bar == 2 and p.first_sail_price == 150.0
+
+
+def test_parasail_counts_profit_after_costs_against_the_most_money_ever_in():
+    s = _side()
+    p = lc.compute_vars({"p": PS}, SAIL_TAPE)["p"]
+    units = 100 * (1 - s) / 100                          # bar 0 buy
+    sold1 = units / 2 * 150 * (1 - s)                    # bar 2 sail: half out
+    units /= 2
+    units += 100 * (1 - s) / 90 + 100 * (1 - s) / 95     # bars 5 and 6
+    sold2 = units / 2 * 200 * (1 - s)                    # bar 7 sail
+    units /= 2
+    net_path = [100, 100 - sold1, 200 - sold1, 300 - sold1, 300 - sold1 - sold2]
+    assert p.invested == 300
+    assert p.peak == pytest.approx(max(net_path))
+    assert p.proceeds == pytest.approx(sold1 + sold2)
+    assert p.value == pytest.approx(units * 200)
+    assert p.profit == pytest.approx(units * 200 - (300 - sold1 - sold2))
+    assert p.roi == pytest.approx(p.profit / p.peak * 100)
+    assert p.profit_word == "profit" and p.profit_abs == pytest.approx(p.profit)
+
+
+def test_parasail_reports_the_same_buys_held_without_selling():
+    s = _side()
+    p = lc.compute_vars({"p": PS}, SAIL_TAPE)["p"]
+    held = sum(100 * (1 - s) / px for px in (100, 90, 95)) * 200
+    assert p.hold_value == pytest.approx(held)
+    assert p.hold_profit == pytest.approx(held - 300)
+    assert p.hold_roi == pytest.approx((held - 300) / 300 * 100)
+
+
+def test_hold_mode_never_sells_btc_is_held():
+    p = lc.compute_vars({"p": {**PS, "hold": True}}, SAIL_TAPE)["p"]
+    assert p.sails == [] and p.n_sails == 0
+    assert p.profit == pytest.approx(p.hold_profit)
+    assert not hasattr(p, "first_sail_bar")   # a sale that never happened has no value to narrate
+
+
+def test_the_cap_stops_new_buys_and_names_the_day_it_bit():
+    flat = tape([100.0] * 10)
+    p = lc.compute_vars({"p": {**PS, "cap": 300}}, flat)["p"]
+    assert [b["bar"] for b in p.buys] == [0, 1, 2]
+    assert p.cap_bar == 3 and p.cap_date == lc._date(flat["ts"][3])
+
+
+def test_a_para_sail_frees_room_under_the_cap():
+    # cap 150: the bar-2 sale takes ~$75 back out, so bar 5's fill fits (~$125 in); bar 6's would make ~$225.
+    p = lc.compute_vars({"p": {**PS, "cap": 150}}, SAIL_TAPE)["p"]
+    assert [b["bar"] for b in p.buys] == [0, 5]
+    assert p.cap_bar == 6
+    # Held, nothing comes back out: bar 5 would make $200, so the cap bites there instead.
+    held = lc.compute_vars({"p": {**PS, "cap": 150, "hold": True}}, SAIL_TAPE)["p"]
+    assert [b["bar"] for b in held.buys] == [0]
+    assert held.cap_bar == 5
+
+
+@pytest.mark.parametrize("bad", [
+    {"zone": 0}, {"zone": 1.5}, {"zone": True}, {"low_days": 0}, {"gap_days": 0}, {"fill": 0},
+    {"cap": 50}, {"sail_at": 0}, {"sell": 0}, {"sell": 1.5}, {"hold": "yes"}, {"low_days": 2.5},
+])
+def test_a_nonsense_parasail_plan_stops_the_build(bad):
+    with pytest.raises(lc.LessonError, match="parasail"):
+        lc.compute_vars({"p": {**PS, **bad}}, SAIL_TAPE)
+
+
+def test_sails_op_draws_each_sale_revealed_so_far_once_as_a_sell_mark():
+    src = lesson([step(do=[{"op": "seek", "bar": 3}, {"op": "buys", "var": "p"}, {"op": "sails", "var": "p"}]),
+                  step(do=[{"op": "play", "to": 7}, {"op": "sails", "var": "p"}])],
+                 vars={"p": PS})
+    out = lc.compile_lesson(src, SAIL_TAPE)
+    first, second = out["steps"][0]["do"], out["steps"][1]["do"]
+    assert [m for m in first if m.get("dir") == "buy"] == [
+        {"op": "mark", "ts": SAIL_TAPE["ts"][0], "price": 100.0, "dir": "buy"}]
+    assert [m for m in first if m.get("dir") == "sell"] == [
+        {"op": "mark", "ts": SAIL_TAPE["ts"][2], "price": 150.0, "dir": "sell"}]
+    assert [m for m in second if m.get("op") == "mark"] == [
+        {"op": "mark", "ts": SAIL_TAPE["ts"][7], "price": 200.0, "dir": "sell"}]
+
+
+def test_sails_needs_a_parasail_plan():
+    src = lesson([step(do=[{"op": "sails", "var": "p"}])], vars={"p": {"fn": "dca", "every": 1}})
+    with pytest.raises(lc.LessonError, match="sails needs a parasail var"):
+        lc.compile_lesson(src, FLAT)
+
+
+def test_zone_var_names_the_trailing_low_and_the_top_of_the_zone():
+    z = lc.compute_vars({"z": {"fn": "zone", "bar": 3, "low_days": 3, "zone": 0.08}}, ZONE_TAPE)["z"]
+    assert z.low == 104.0 and z.low_bar == 3 and z.top == pytest.approx(112.32)
+    assert z.close == 104.0 and z.where == "inside"
+    up = lc.compute_vars({"z": {"fn": "zone", "bar": 4, "low_days": 3, "zone": 0.08}}, ZONE_TAPE)["z"]
+    assert up.where == "above" and up.above_pct == pytest.approx((130 / 112.32 - 1) * 100)
+
+
+def test_a_para_sail_narration_reads_its_numbers_from_the_tape():
+    src = lesson([step(say="{p.n} buys, {p.n_sails} para-sails, first at {p.first_sail_price:,.0f}.")],
+                 vars={"p": PS})
+    assert lc.compile_lesson(src, SAIL_TAPE)["steps"][0]["say"] == "3 buys, 2 para-sails, first at 150."

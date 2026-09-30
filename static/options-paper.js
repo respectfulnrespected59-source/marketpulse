@@ -100,8 +100,15 @@ async function optBookLoadSuggestion() {
   out.innerHTML = `<div class="proof-empty">Reading the chain for ${esc(sym)}…</div>`;
   optBookDraft = null;
   try {
-    const r = await fetch(`/api/options?symbol=${encodeURIComponent(sym)}`);
+    // The chain and the stock's 30-day read in parallel: the Para-Sail rules need to know whether the
+    // stock is at its low (static/options-parasail.js). A failed read is "unknown", never a guess.
+    const [r, zr] = await Promise.all([
+      fetch(`/api/options?symbol=${encodeURIComponent(sym)}`),
+      fetch(`/api/parasail?symbol=${encodeURIComponent(sym)}&kind=stock`).catch(() => null),
+    ]);
     const d = await r.json();
+    let zone = null;
+    try { zone = zr && zr.ok ? (await zr.json()).zone || null : null; } catch (e) { zone = null; }
     if (d.error || !d.spread) {
       out.innerHTML = `<div class="paper-validation bad">${
         esc(d.error || "No directional spread right now — the signal is neutral.")
@@ -109,13 +116,19 @@ async function optBookLoadSuggestion() {
       return;
     }
     const s = d.spread;
+    const plan = typeof optSetup === "function" ? optSetup(s.direction, zone) : null;
     optBookDraft = {
-      symbol: d.symbol, expiry: d.expiry,
+      symbol: d.symbol, expiry: d.expiry, perContract: Number(s.per_contract), plan,
       legs: [
         { right: s.direction, strike: s.long.strike, side: "long" },
         { right: s.direction, strike: s.short.strike, side: "short" },
       ],
     };
+    const planLine = plan
+      ? `<div class="paper-validation ${plan.onPlan ? "good" : "bad"}"><b>${plan.onPlan
+          ? `Para-Sail: ON PLAN · ${esc(plan.setup.toUpperCase())}` : `Para-Sail: ${esc(plan.setup.toUpperCase())}`}</b>
+          — ${esc(plan.why)}. Take the icing at +${optNum(OPT_PS.sailAt * 100)}%; on expiry day, take it or cut it by noon New York time.</div>`
+      : "";
     out.innerHTML =
       `<div class="paper-row">
          <b>${esc(d.symbol)} ${esc(s.type)}</b>
@@ -129,7 +142,7 @@ async function optBookLoadSuggestion() {
          <span class="muted">breakeven ${fmtPrice(s.breakeven)} · R:R ${optNum(s.risk_reward, 2)}</span>
        </div>
        <div class="muted small">Signal ${esc((d.lean && d.lean.label) || "")}. A read from
-         the data, not a directive — and ${optNum(d.dte)} days is not much time to be right.</div>`;
+         the data, not a directive — and ${optNum(d.dte)} days is not much time to be right.</div>` + planLine;
   } catch (err) {
     out.innerHTML = `<div class="paper-validation bad">Couldn't reach the chain.</div>`;
   }
@@ -142,11 +155,22 @@ async function optBookOpen() {
     return;
   }
   const contracts = Math.max(1, parseInt($("#optBookContracts")?.value, 10) || 1);
+  // Para-Sail cap: a spread costing over 10 % of equity may still open, but it is logged OFF PLAN.
+  let plan = optBookDraft.plan ? { ...optBookDraft.plan } : null;
+  if (plan && typeof optCapCheck === "function" && isFinite(optBookDraft.perContract)) {
+    const cap = optCapCheck(optBookDraft.perContract * contracts, optBookStats(getOptBook()).equity);
+    if (!cap.ok) {
+      if (!confirm(`That's ${optNum(cap.pct, 1)}% of your equity — over the Para-Sail 10% cap. `
+                   + "Open it anyway? It will be logged OFF PLAN.")) return;
+      plan = { ...plan, setup: "off plan", onPlan: false, why: `${plan.why}; over the 10% cap (${optNum(cap.pct, 1)}%)` };
+    }
+  }
   try {
+    const { plan: _p, perContract: _pc, ...spec } = optBookDraft;   // the server gets the legs, not our notes
     const r = await fetch("/api/options/open", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...optBookDraft, contracts }),
+      body: JSON.stringify({ ...spec, contracts }),
     });
     const d = await r.json();
     if (d.error || !d.position) {
@@ -154,7 +178,9 @@ async function optBookOpen() {
       return;
     }
     const b = getOptBook();
-    const pos = { ...d.position, id: optBookId() };
+    const id = optBookId();
+    const pos = { ...d.position, id, trade: id };
+    if (plan) Object.assign(pos, { setup: plan.setup, onPlan: plan.onPlan, why: plan.why });   // scored by the forward test
     b.open.push(pos);
     saveOptBook(b);
     optBookDraft = null;
@@ -210,7 +236,7 @@ async function optBookTick() {
           id: pos.id, symbol: pos.symbol, label: optBookLabel(pos),
           contracts: pos.contracts, entry_debit: pos.entry_debit,
           exit: m.mark, pnl: m.net_usd, why: "expired",
-          opened: pos.opened, closed: Date.now(),
+          opened: pos.opened, closed: Date.now(), ...optBookPlanFields(pos),
         });
         if (typeof toast === "function") {
           toast(m.net_usd >= 0 ? "buy" : "sell", `Expired · ${pos.symbol}`,
@@ -222,6 +248,7 @@ async function optBookTick() {
     }
     b.open = stillOpen;
     b.lastMark = Date.now();
+    optBookParaSailCalls(b);
     saveOptBook(b);
     renderOptBook();
     // The live chart's strip reads the same book; show the new mark there now.
@@ -249,7 +276,7 @@ function optBookClose(id) {
     id, symbol: pos.symbol, label: optBookLabel(pos),
     contracts: pos.contracts, entry_debit: pos.entry_debit,
     exit: m.mark, pnl: m.net_usd, why: "closed manually",
-    opened: pos.opened, closed: Date.now(),
+    opened: pos.opened, closed: Date.now(), ...optBookPlanFields(pos),
   });
   b.open = b.open.filter((p) => p.id !== id);
   delete b.marks[id];
@@ -258,6 +285,65 @@ function optBookClose(id) {
   // A closed position must leave the snapshot too, or the journal keeps
   // marking something you no longer hold.
   optBookExport();
+}
+
+/* ------------------------------------------------------ the Para-Sail rules (static/options-parasail.js) */
+
+/* What the forward test scores on a closed record: the trade it belongs to and whether it was on plan.
+ * A position opened before the rules has no setup and stays out of the scorecard. */
+function optBookPlanFields(pos) {
+  if (!pos.setup) return {};
+  return { trade: pos.trade || pos.id, setup: pos.setup, onPlan: pos.onPlan === true, sailed: pos.sailed === true };
+}
+
+/* Each tick: call the icing once per trade, and the time parachute once per position. */
+function optBookParaSailCalls(b) {
+  if (typeof optSailDue !== "function") return;
+  for (const pos of b.open || []) {
+    if (!pos.setup) continue;
+    const m = (b.marks || {})[pos.id];
+    if (!pos.sailCalled && optSailDue(pos, m)) {
+      pos.sailCalled = true;
+      const n = Number(pos.contracts);
+      if (typeof toast === "function") {
+        toast("buy", `PARA-SAIL · ${pos.symbol}`, n > 1
+          ? `Up ${optNum((m.net_usd / pos.cost_usd) * 100, 0)}% — take the icing: close ${optHalf(n)} of ${n}.`
+          : `Up ${optNum((m.net_usd / pos.cost_usd) * 100, 0)}% — one contract: the icing is the whole thing.`);
+      }
+    }
+    if (!pos.chuteCalled && optTimeParachute(pos.expiry, Date.now())) {
+      pos.chuteCalled = true;
+      if (typeof toast === "function") {
+        toast("sell", `TIME PARACHUTE · ${pos.symbol}`, "Expiry-day afternoon — take it or cut it.");
+      }
+    }
+  }
+}
+
+/* Para-sail: close half at the current mark (one contract = all of it). The rest keeps its id, so the
+ * live mark follows it; the closed half keeps the trade id, so the scorecard counts one trade. */
+function optBookSail(id) {
+  const b = getOptBook();
+  const pos = (b.open || []).find((p) => p.id === id);
+  const m = (b.marks || {})[id];
+  if (!pos) return;
+  if (!m || m.net_usd == null) {
+    alert("No live mark for this position yet — it can't be closed at a price nobody quoted.");
+    return;
+  }
+  const n = Number(pos.contracts);
+  const half = optHalf(n);
+  const { closed, rest } = optSplitClose(pos, m, half);
+  if (!confirm(`Para-sail ${optBookLabel(pos)}: close ${half} of ${n} at ${optBookMoney(m.mark)} for `
+               + `${optBookMoney(closed.pnl)}?`)) return;
+  b.realized += closed.pnl;
+  b.closed.unshift({ ...closed, label: optBookLabel(pos), why: rest ? "para-sail (half)" : "para-sail (1 contract: all)" });
+  b.open = rest ? b.open.map((p) => (p.id === id ? rest : p)) : b.open.filter((p) => p.id !== id);
+  delete b.marks[id];          // the old mark priced the old contract count; the next tick re-marks the rest
+  saveOptBook(b);
+  renderOptBook();
+  optBookExport();
+  if (rest) optBookTick();
 }
 
 /* Park the book on disk so the scheduled Obsidian journal can see it.
@@ -381,12 +467,20 @@ function renderOptBook() {
         const theta = (m.greeks && m.greeks.theta != null)
           ? ` <span class="muted">θ ${optNum(m.greeks.theta, 2)}/day</span>` : "";
         const dte = m.dte != null ? ` <span class="muted">${optNum(m.dte)}d left</span>` : "";
+        // Para-Sail: the plan tag, the icing button once it's due, and the time parachute on expiry day.
+        const planTag = p.setup
+          ? ` <span class="${p.onPlan ? "up" : "down"}" title="${esc(p.why || "")}">${p.onPlan ? "on plan" : "off plan"} · ${esc(p.setup)}</span>` : "";
+        const sail = (p.setup && typeof optSailDue === "function" && optSailDue(p, m))
+          ? `<button type="button" class="ltc-tool" data-optsail="${esc(p.id)}">PARA-SAIL · close ${optNum(optHalf(p.contracts))} of ${optNum(p.contracts)}</button>` : "";
+        const chute = (typeof optTimeParachute === "function" && optTimeParachute(p.expiry, Date.now()))
+          ? ` <span class="down"><b>TIME PARACHUTE</b> — expiry-day afternoon: take it or cut it</span>` : "";
         return `<div class="paper-row ${cls}">
             <b>${esc(optBookLabel(p))}</b>
             <span>${optNum(p.contracts)}x · in ${optBookMoney(p.cost_usd)}</span>
             <span>mark ${m.mark != null ? fmtPrice(m.mark) : "—"}</span>
-            ${pnl}${pct}${theta}${dte}
+            ${pnl}${pct}${theta}${dte}${planTag}${chute}
             <span class="muted">risk ${optBookMoney(p.max_loss_usd)} · BE ${fmtPrice(p.breakeven)}</span>
+            ${sail}
             <button type="button" class="ltc-tool ghost" data-optchart="${esc(p.symbol)}">Chart</button>
             <button type="button" class="ltc-tool ghost" data-optclose="${esc(p.id)}">Close</button>
           </div>`;
@@ -396,6 +490,10 @@ function renderOptBook() {
   for (const btn of host.querySelectorAll("[data-optclose]")) {
     btn.addEventListener("click", () => optBookClose(btn.dataset.optclose));
   }
+  for (const btn of host.querySelectorAll("[data-optsail]")) {
+    btn.addEventListener("click", () => optBookSail(btn.dataset.optsail));
+  }
+  renderOptScore(b);
   for (const btn of host.querySelectorAll("[data-optchart]")) {
     btn.addEventListener("click", () => {
       if (typeof openLiveFor === "function") openLiveFor("stock", btn.dataset.optchart);
@@ -416,6 +514,27 @@ function renderOptBook() {
       : `<div class="proof-empty">No closed options trades yet. Log the losers too — a book that
            only keeps winners is worth less than no book.</div>`;
   }
+}
+
+/* The pre-registered forward test (docs/PARASAIL_OPTIONS_PREREG.md): n of 25, losers counted, and a verdict
+ * decided in advance — expectancy after every cost above $0 — only once 25 trades are in. */
+function renderOptScore(b) {
+  const box = $("#optBookScore");
+  if (!box || typeof optScorecard !== "function") return;
+  const riding = (b.open || []).filter((p) => p.setup).map((p) => p.trade || p.id);
+  const s = optScorecard(b.closed || [], riding);
+  const money = (v) => (v == null ? "—" : optBookMoney(v));
+  const verdict = s.verdict === "pass"
+    ? `<b class="up">PASS</b> — expectancy ${money(s.expectancy)} a trade after every cost.`
+    : s.verdict === "fail"
+      ? `<b class="down">FAIL</b> — expectancy ${money(s.expectancy)} a trade after every cost. Said out loud, same as a pass.`
+      : `No verdict until ${optNum(s.target)} trades — losers count, nothing gets deleted.`;
+  box.innerHTML = `<div class="paper-row"><b>Para-Sail forward test</b>
+      <span>${optNum(s.n)} / ${optNum(s.target)} trades${s.open ? ` · ${optNum(s.open)} still riding (scored when closed)` : ""}</span>
+      <span>on plan ${optNum(s.onPlan.n)} (${money(s.onPlan.total)}) · off plan ${optNum(s.offPlan.n)} (${money(s.offPlan.total)})</span>
+      <span>win rate ${s.winRate == null ? "—" : optNum(s.winRate) + "%"} · avg win ${money(s.avgWin)} · avg loss ${money(s.avgLoss)}</span>
+      <span>expectancy ${s.n ? money(s.expectancy) : "—"} a trade</span></div>
+    <div class="muted small">${verdict} Rules registered 2026-09-30, before the first trade.</div>`;
 }
 
 function initOptBook() {

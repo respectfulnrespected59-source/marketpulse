@@ -77,12 +77,14 @@ BASE = [
     "static/home.js",
     "static/license.js",
     "static/desk.js",       # Trade desk UI; hides itself unless the local desk API answers
+    "static/parasail-ui.js",  # Para-Sail card + zone watcher; shows the Pro lock in the free edition
     "static/wizards.js",
     "static/paper.js",
     # Ships in BOTH editions even though the options engine is Pro: index.html
     # loads it unconditionally, so a Pro-only placement would 404 the free
     # build. The feature gate is server-side — /api/options/* returns 402.
     "static/options-paper.js",
+    "static/options-parasail.js",  # Para-Sail rules on the options book (on plan, icing, time parachute, scorecard)
     "static/chart-options.js",
     # Classes UI and player (no lesson content: that streams from the web app).
     "static/lesson-engine.js",
@@ -123,6 +125,7 @@ PRO_ONLY = [
     "options_paper.py",   # position model + live mark for the options paper book
     "backtest.py",
     "dca.py",
+    "parasail.py",        # the Para-Sail strategy engine (prices trades with backtest.cost_model)
     # tests that exercise the Pro modules (they would fail to import in FREE)
     "tests/test_options.py",
     "tests/test_options_paper.py",
