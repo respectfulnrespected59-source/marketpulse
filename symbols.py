@@ -119,19 +119,23 @@ def search_listed_crypto(
 
     Yahoo's crypto results are its own internal identifiers (PEPE24478 and
     friends), which are not tradable anywhere here, so crypto search reads the
-    Coinbase catalogue directly. Exact ticker first, then prefix, then any
-    substring — so typing "pep" surfaces PEPE rather than burying it.
+    Coinbase catalogue directly. Exact ticker first, then a curated coin whose
+    name starts with the query ("bitcoin" means BTC, not the ETFs named after
+    it), then ticker prefix, then any substring — so typing "pep" surfaces PEPE
+    rather than burying it.
     """
     q = (query or "").strip().upper()
     if not q or not listed:
         return []
 
     exact = [t for t in listed if t == q]
+    named = sorted(str(v[1]).upper() for v in curated.values()
+                   if len(v) > 2 and str(v[2]).upper().startswith(q) and str(v[1]).upper() in listed)
     prefix = sorted(t for t in listed if t.startswith(q) and t != q)
     contains = sorted(t for t in listed if q in t and not t.startswith(q))
 
     rows: list[dict] = []
-    for ticker in exact + prefix + contains:
+    for ticker in dict.fromkeys(exact + named + prefix + contains):
         rows.append({
             "symbol": ticker,
             "kind": "crypto",

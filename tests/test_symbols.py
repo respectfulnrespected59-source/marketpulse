@@ -182,6 +182,18 @@ class TestSearchListedCrypto:
     def test_uses_the_curated_name_when_there_is_one(self):
         assert search_listed_crypto("BTC", LISTED, CURATED)[0]["name"] == "Bitcoin"
 
+    @pytest.mark.parametrize("query", ["bitcoin", "Bitcoin", "BITCOIN", "bitc"])
+    def test_finds_a_curated_coin_by_its_name(self, query):
+        # The search box promises "a ticker, a company name, or a coin": typing
+        # the coin's name must find the coin, not only the ETFs named after it.
+        assert search_listed_crypto(query, LISTED, CURATED)[0]["symbol"] == "BTC"
+
+    def test_lists_a_coin_once_when_its_ticker_and_name_both_match(self):
+        assert [r["symbol"] for r in search_listed_crypto("ETH", LISTED, CURATED)] == ["ETH"]
+
+    def test_a_name_match_still_needs_the_coin_to_be_listed(self):
+        assert search_listed_crypto("ethereum", {"BTC": "BTC-USD"}, CURATED) == []
+
     def test_falls_back_to_the_ticker_for_an_uncurated_coin(self):
         assert search_listed_crypto("WIF", LISTED, CURATED)[0]["name"] == "WIF"
 
